@@ -237,7 +237,8 @@ This approach is necessary because arrows are polylines with bends — a rigid `
 
 ## Server Auth (`server/ArrowThing.Server/Auth/`)
 
-- **`AuthService`** — all auth operations. Returns `(Response?, StatusCode, Error?)` tuples. Endpoints mapped in `Program.cs`. Methods: `RegisterAsync`, `LoginAsync`, `GetMeAsync`, `UpdateDisplayNameAsync`, `VerifyCodeAsync`, `ResendVerificationAsync`, `ForgotPasswordAsync`, `ResetPasswordAsync`, `ChangePasswordAsync`, `ChangeEmailAsync`, `ConfirmEmailChangeAsync`, `LockAccountAsync`, `UnlockAccountAsync`. All email flows use 6-digit codes entered in-app (no browser pages).
+- **`AuthService`** — all auth operations. Returns `(Response?, StatusCode, Error?)` tuples. Endpoints mapped in `Program.cs`. Methods: `RegisterAsync`, `LoginAsync`, `GetMeAsync`, `UpdateDisplayNameAsync`, `VerifyCodeAsync`, `ResendVerificationAsync`, `ForgotPasswordAsync`, `ResetPasswordAsync`, `ChangePasswordAsync`, `ChangeEmailAsync`, `ConfirmEmailChangeAsync`, `LockAccountAsync`, `UnlockAccountAsync`. All email flows use 6-digit codes entered in-app (no browser pages). All mutating methods accept an optional `ip` parameter for audit logging.
+- **`AuditLogService`** — scoped service that writes `AuditLog` entries to the database. Called from `AuthService` methods and the security stamp middleware. Each log records timestamp, event type, user ID, email, client IP, and optional detail string.
 - **`JwtHelper`** — HMAC-SHA256 JWT generation (30-day expiry) with `sub` (user ID), `display_name`, and `security_stamp` claims. Validation parameters exposed for middleware.
 - **`PasswordHasher`** — static BCrypt hash/verify wrapper.
 - **`IEmailService` / `EmailService`** — transactional email via Resend HTTP API. Five methods: verification code, already-registered notification, password reset code, email change code, email change notification. API key stored in user secrets (`Resend:ApiKey`).
@@ -250,6 +251,22 @@ Registered in `Program.cs` after JWT authentication. On every authenticated requ
 ### Admin Endpoints
 
 Protected by `X-Admin-Key` header (compared against `Admin:ApiKey` configuration). Not JWT-authenticated — admin operations are server-to-server. Lock/unlock operate by email address.
+
+### Audit Log
+
+`AuditLog` entity (table `AuditLogs`) records all auth-related events for traceability. Fields: `Id` (bigint PK), `Timestamp`, `Event` (string, max 64), `UserId` (nullable), `Email` (nullable), `IpAddress` (nullable, max 45), `Detail` (nullable, max 512). Indexed on `Timestamp`, `Event`, and `UserId`. Event types are string constants in `AuditEvent` static class: `register`, `login`, `login_failed`, `verify_email`, `resend_verification`, `forgot_password`, `reset_password`, `change_password`, `change_email`, `confirm_email_change`, `lock_account`, `unlock_account`, `update_display_name`, `session_invalidated`.
+
+### Admin Dashboard
+
+Self-contained HTML page served at `GET /api/admin/dashboard` (no server-side auth on the page itself). The page prompts for the admin API key on load; all subsequent data fetches include the key via `X-Admin-Key` header. Three tabs: Overview (stats cards + recent activity), Users (searchable/paginated list with click-through detail + per-user audit log), Audit Log (filterable by event type and email, paginated).
+
+Admin JSON API endpoints (all require `X-Admin-Key`):
+- `GET /api/admin/stats` — aggregate counts (total/verified/locked users, registrations, logins, failed logins).
+- `GET /api/admin/users?search=&page=` — paginated user list (50 per page), searchable by email or display name.
+- `GET /api/admin/users/{id}` — user detail with last 50 audit log entries.
+- `GET /api/admin/audit-log?eventType=&search=&page=` — paginated audit log (100 per page), filterable by event type and email.
+
+The dashboard is accessible via SSH tunnel to port 8443 on the VPS (`ssh -L 8443:localhost:8443 vps`), served by a dedicated nginx server block bound to `127.0.0.1:8443` that bypasses Cloudflare origin pulls.
 
 ## Known Limitations
 

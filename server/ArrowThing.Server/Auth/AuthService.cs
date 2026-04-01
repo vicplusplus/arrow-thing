@@ -13,16 +13,19 @@ public class AuthService
     private readonly AppDbContext _db;
     private readonly JwtHelper _jwt;
     private readonly IEmailService _email;
+    private readonly AuditLogService _audit;
 
-    public AuthService(AppDbContext db, JwtHelper jwt, IEmailService email)
+    public AuthService(AppDbContext db, JwtHelper jwt, IEmailService email, AuditLogService audit)
     {
         _db = db;
         _jwt = jwt;
         _email = email;
+        _audit = audit;
     }
 
     public async Task<(MessageResponse? Response, int StatusCode, string? Error)> RegisterAsync(
-        RegisterRequest request
+        RegisterRequest request,
+        string? ip = null
     )
     {
         // Validate email
@@ -78,6 +81,8 @@ public class AuthService
         _db.Users.Add(user);
         await _db.SaveChangesAsync();
 
+        await _audit.LogAsync(AuditEvent.Register, user.Id, user.Email, ip);
+
         try
         {
             await _email.SendVerificationCodeAsync(user.Email, code);
@@ -100,7 +105,8 @@ public class AuthService
     }
 
     public async Task<(AuthResponse? Response, int StatusCode, string? Error)> LoginAsync(
-        LoginRequest request
+        LoginRequest request,
+        string? ip = null
     )
     {
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
@@ -114,11 +120,24 @@ public class AuthService
             || !PasswordHasher.Verify(request.Password, user.PasswordHash)
             || !user.IsEmailVerified
         )
+        {
+            await _audit.LogAsync(AuditEvent.LoginFailed, user?.Id, normalizedEmail, ip);
             return (null, 401, "Invalid email or password.");
+        }
 
         if (user.IsLocked)
+        {
+            await _audit.LogAsync(
+                AuditEvent.LoginFailed,
+                user.Id,
+                normalizedEmail,
+                ip,
+                "Account locked"
+            );
             return (null, 403, "Account is locked. Please contact support on Discord.");
+        }
 
+        await _audit.LogAsync(AuditEvent.Login, user.Id, user.Email, ip);
         var token = _jwt.GenerateToken(user);
         return (new AuthResponse(token, user.DisplayName), 200, null);
     }
@@ -127,7 +146,7 @@ public class AuthService
         DisplayNameResponse? Response,
         int StatusCode,
         string? Error
-    )> UpdateDisplayNameAsync(Guid userId, UpdateDisplayNameRequest request)
+    )> UpdateDisplayNameAsync(Guid userId, UpdateDisplayNameRequest request, string? ip = null)
     {
         if (
             request.DisplayName == null
@@ -140,9 +159,17 @@ public class AuthService
         if (user == null)
             return (null, 401, "User not found.");
 
+        var oldName = user.DisplayName;
         user.DisplayName = request.DisplayName;
         await _db.SaveChangesAsync();
 
+        await _audit.LogAsync(
+            AuditEvent.UpdateDisplayName,
+            user.Id,
+            user.Email,
+            ip,
+            $"'{oldName}' -> '{user.DisplayName}'"
+        );
         return (new DisplayNameResponse(user.DisplayName), 200, null);
     }
 
@@ -150,7 +177,7 @@ public class AuthService
         MessageResponse? Response,
         int StatusCode,
         string? Error
-    )> ChangePasswordAsync(Guid userId, ChangePasswordRequest request)
+    )> ChangePasswordAsync(Guid userId, ChangePasswordRequest request, string? ip = null)
     {
         if (string.IsNullOrWhiteSpace(request.CurrentPassword))
             return (null, 400, "Current password is required.");
@@ -172,11 +199,13 @@ public class AuthService
         user.SecurityStamp = Guid.NewGuid().ToString();
         await _db.SaveChangesAsync();
 
+        await _audit.LogAsync(AuditEvent.ChangePassword, user.Id, user.Email, ip);
         return (new MessageResponse("Password changed successfully."), 200, null);
     }
 
     public async Task<(AuthResponse? Response, int StatusCode, string? Error)> VerifyCodeAsync(
-        VerifyCodeRequest request
+        VerifyCodeRequest request,
+        string? ip = null
     )
     {
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Code))
@@ -204,6 +233,7 @@ public class AuthService
         user.VerificationCodeExpiresAt = null;
         await _db.SaveChangesAsync();
 
+        await _audit.LogAsync(AuditEvent.VerifyEmail, user.Id, user.Email, ip);
         var jwt = _jwt.GenerateToken(user);
         return (new AuthResponse(jwt, user.DisplayName), 200, null);
     }
@@ -212,7 +242,7 @@ public class AuthService
         MessageResponse? Response,
         int StatusCode,
         string? Error
-    )> ResendVerificationAsync(ResendVerificationRequest request)
+    )> ResendVerificationAsync(ResendVerificationRequest request, string? ip = null)
     {
         if (string.IsNullOrWhiteSpace(request.Email))
             return (null, 400, "Email is required.");
@@ -240,6 +270,8 @@ public class AuthService
         user.LastVerificationEmailAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
+        await _audit.LogAsync(AuditEvent.ResendVerification, user.Id, user.Email, ip);
+
         try
         {
             await _email.SendVerificationCodeAsync(user.Email, code);
@@ -256,7 +288,7 @@ public class AuthService
         MessageResponse? Response,
         int StatusCode,
         string? Error
-    )> ForgotPasswordAsync(ForgotPasswordRequest request)
+    )> ForgotPasswordAsync(ForgotPasswordRequest request, string? ip = null)
     {
         if (string.IsNullOrWhiteSpace(request.Email))
             return (null, 400, "Email is required.");
@@ -284,6 +316,8 @@ public class AuthService
         user.LastPasswordResetEmailAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
+        await _audit.LogAsync(AuditEvent.ForgotPassword, user.Id, user.Email, ip);
+
         try
         {
             await _email.SendPasswordResetCodeAsync(user.Email, code);
@@ -300,7 +334,7 @@ public class AuthService
         MessageResponse? Response,
         int StatusCode,
         string? Error
-    )> ResetPasswordAsync(ResetPasswordRequest request)
+    )> ResetPasswordAsync(ResetPasswordRequest request, string? ip = null)
     {
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Code))
             return (null, 400, "Email and reset code are required.");
@@ -330,12 +364,14 @@ public class AuthService
         user.PasswordResetCodeExpiresAt = null;
         await _db.SaveChangesAsync();
 
+        await _audit.LogAsync(AuditEvent.ResetPassword, user.Id, user.Email, ip);
         return (new MessageResponse("Password has been reset. You can now log in."), 200, null);
     }
 
     public async Task<(MessageResponse? Response, int StatusCode, string? Error)> ChangeEmailAsync(
         Guid userId,
-        ChangeEmailRequest request
+        ChangeEmailRequest request,
+        string? ip = null
     )
     {
         if (string.IsNullOrWhiteSpace(request.NewEmail) || !IsValidEmail(request.NewEmail))
@@ -365,6 +401,14 @@ public class AuthService
         user.PendingEmailCode = code;
         user.PendingEmailCodeExpiresAt = DateTime.UtcNow.Add(VerificationCodeLifetime);
         await _db.SaveChangesAsync();
+
+        await _audit.LogAsync(
+            AuditEvent.ChangeEmail,
+            user.Id,
+            user.Email,
+            ip,
+            $"Requested change to {normalizedNewEmail}"
+        );
 
         // Send verification code to new email
         try
@@ -397,7 +441,7 @@ public class AuthService
         MessageResponse? Response,
         int StatusCode,
         string? Error
-    )> ConfirmEmailChangeAsync(Guid userId, ConfirmEmailChangeRequest request)
+    )> ConfirmEmailChangeAsync(Guid userId, ConfirmEmailChangeRequest request, string? ip = null)
     {
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Code))
             return (null, 400, "Email and confirmation code are required.");
@@ -435,6 +479,7 @@ public class AuthService
             return (null, 409, "An account with this email already exists.");
         }
 
+        var oldEmail = user.Email;
         user.Email = user.PendingEmail;
         user.EmailVerifiedAt = DateTime.UtcNow;
         user.PendingEmail = null;
@@ -442,11 +487,19 @@ public class AuthService
         user.PendingEmailCodeExpiresAt = null;
         await _db.SaveChangesAsync();
 
+        await _audit.LogAsync(
+            AuditEvent.ConfirmEmailChange,
+            user.Id,
+            user.Email,
+            ip,
+            $"Changed from {oldEmail}"
+        );
         return (new MessageResponse("Email changed successfully."), 200, null);
     }
 
     public async Task<(MessageResponse? Response, int StatusCode, string? Error)> LockAccountAsync(
-        LockAccountRequest request
+        LockAccountRequest request,
+        string? ip = null
     )
     {
         if (string.IsNullOrWhiteSpace(request.Email))
@@ -477,6 +530,7 @@ public class AuthService
 
         await _db.SaveChangesAsync();
 
+        await _audit.LogAsync(AuditEvent.LockAccount, user.Id, user.Email, ip);
         return (
             new MessageResponse(
                 $"Account '{user.Email}' locked. All sessions invalidated. Use unlock-account to restore access."
@@ -490,7 +544,7 @@ public class AuthService
         MessageResponse? Response,
         int StatusCode,
         string? Error
-    )> UnlockAccountAsync(LockAccountRequest request)
+    )> UnlockAccountAsync(LockAccountRequest request, string? ip = null)
     {
         if (string.IsNullOrWhiteSpace(request.Email))
             return (null, 400, "Email is required.");
@@ -512,6 +566,8 @@ public class AuthService
         user.PasswordResetCodeExpiresAt = DateTime.UtcNow.Add(PasswordResetCodeLifetime);
 
         await _db.SaveChangesAsync();
+
+        await _audit.LogAsync(AuditEvent.UnlockAccount, user.Id, user.Email, ip);
 
         // Send password reset email
         try
