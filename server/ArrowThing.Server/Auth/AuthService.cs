@@ -43,12 +43,9 @@ public class AuthService
             return (null, 400, "A valid email address is required.");
 
         // Validate display name
-        if (
-            request.DisplayName == null
-            || request.DisplayName.Length < 1
-            || request.DisplayName.Length > 24
-        )
-            return (null, 400, "Display name must be 1-24 characters.");
+        var (dnOk, dnError, dnNormalized) = DisplayNameValidator.Validate(request.DisplayName);
+        if (!dnOk)
+            return (null, 400, dnError);
 
         // Validate password
         if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < 8)
@@ -80,7 +77,7 @@ public class AuthService
         {
             Id = Guid.NewGuid(),
             Email = normalizedEmail,
-            DisplayName = request.DisplayName,
+            DisplayName = dnNormalized,
             PasswordHash = PasswordHasher.Hash(request.Password),
             CreatedAt = DateTime.UtcNow,
             VerificationCode = PasswordHasher.HashOtp(code),
@@ -176,19 +173,16 @@ public class AuthService
         string? Error
     )> UpdateDisplayNameAsync(Guid userId, UpdateDisplayNameRequest request, string? ip = null)
     {
-        if (
-            request.DisplayName == null
-            || request.DisplayName.Length < 1
-            || request.DisplayName.Length > 24
-        )
-            return (null, 400, "Display name must be 1-24 characters.");
+        var (dnOk, dnError, dnNormalized) = DisplayNameValidator.Validate(request.DisplayName);
+        if (!dnOk)
+            return (null, 400, dnError);
 
         var user = await _db.Users.FindAsync(userId);
         if (user == null)
             return (null, 401, "User not found.");
 
         var oldName = user.DisplayName;
-        user.DisplayName = request.DisplayName;
+        user.DisplayName = dnNormalized;
         await _db.SaveChangesAsync();
 
         await _audit.LogAsync(

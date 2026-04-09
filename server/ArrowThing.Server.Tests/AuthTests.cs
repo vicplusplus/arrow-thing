@@ -938,6 +938,115 @@ public class AuthTests : IClassFixture<TestFactory>, IDisposable
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    // -- Register: profanity filter --
+
+    [Theory]
+    [InlineData("FuckFace")] // plain profanity
+    [InlineData("sh1tlord")] // leetspeak
+    [InlineData("@sshole")] // leetspeak with symbol
+    [InlineData("N1gger")] // slur with leet
+    public async Task Register_NameWithProfanity_Returns400(string displayName)
+    {
+        var response = await _client.PostAsJsonAsync(
+            "/api/auth/register",
+            new
+            {
+                email = $"profane-{Guid.NewGuid():N}@example.com",
+                password = "password123",
+                displayName,
+            }
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Register_NameWithControlChars_Returns400()
+    {
+        var response = await _client.PostAsJsonAsync(
+            "/api/auth/register",
+            new
+            {
+                email = "ctrl@example.com",
+                password = "password123",
+                displayName = "Ali\u200bce", // zero-width space
+            }
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Register_NameOnlyWhitespace_Returns400()
+    {
+        var response = await _client.PostAsJsonAsync(
+            "/api/auth/register",
+            new
+            {
+                email = "whitespace@example.com",
+                password = "password123",
+                displayName = "    ",
+            }
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Register_NameWithLeadingWhitespace_TrimsAndSucceeds()
+    {
+        var auth = await RegisterAndVerifyAsync("trim@example.com", "password123", "  Trimmy  ");
+        Assert.Equal("Trimmy", auth.DisplayName);
+    }
+
+    [Fact]
+    public async Task UpdateDisplayName_Profanity_Returns400()
+    {
+        var auth = await RegisterAndVerifyAsync("upd-prof@example.com", "password123", "Clean");
+
+        var request = new HttpRequestMessage(HttpMethod.Patch, "/api/auth/me")
+        {
+            Content = JsonContent.Create(new { displayName = "FuckFace" }),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", auth.Token);
+
+        var response = await _client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateDisplayName_NameWithControlChars_Returns400()
+    {
+        var auth = await RegisterAndVerifyAsync("upd-ctrl@example.com", "password123", "Clean");
+
+        var request = new HttpRequestMessage(HttpMethod.Patch, "/api/auth/me")
+        {
+            Content = JsonContent.Create(new { displayName = "Bo\u200cb" }),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", auth.Token);
+
+        var response = await _client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateDisplayName_Trimmed_PersistsTrimmedValue()
+    {
+        var auth = await RegisterAndVerifyAsync("upd-trim@example.com", "password123", "Before");
+
+        var request = new HttpRequestMessage(HttpMethod.Patch, "/api/auth/me")
+        {
+            Content = JsonContent.Create(new { displayName = "  After  " }),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", auth.Token);
+
+        var response = await _client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<DisplayNameResponse>();
+        Assert.Equal("After", body!.DisplayName);
+    }
+
     // -- Login lockout resets on successful login --
 
     [Fact]
