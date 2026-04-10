@@ -50,6 +50,11 @@ public class GameService
         if (preVerifyReason != null)
             return (null, 400, preVerifyReason);
 
+        // Reject submissions from accounts with flagged scores
+        var hasFlagged = await _db.Scores.AnyAsync(s => s.UserId == userId && s.Flagged);
+        if (hasFlagged)
+            return (null, 403, "Account has flagged scores. Contact support.");
+
         // Idempotency check
         var existing = await _db.Scores.FirstOrDefaultAsync(s =>
             s.UserId == userId

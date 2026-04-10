@@ -166,12 +166,12 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             token
         );
 
-        // First game (seed 42)
-        var replay1 = MakeValidReplayJson(seed: 42);
+        // First game (unique seed to avoid cross-test seed dedup)
+        var replay1 = MakeValidReplayJson(seed: 3001);
         await _client.PostAsJsonAsync("/api/scores", new { replayJson = replay1 });
 
         // Second game with different seed (will likely have different time)
-        var replay2 = MakeValidReplayJson(seed: 99);
+        var replay2 = MakeValidReplayJson(seed: 3002);
         var response = await _client.PostAsJsonAsync("/api/scores", new { replayJson = replay2 });
 
         var result = await response.Content.ReadFromJsonAsync<SubmitResultResponse>();
@@ -767,6 +767,50 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         Assert.DoesNotContain(flaggedScores2!, s => s.Id == flaggedScore.Id);
 
         _client.DefaultRequestHeaders.Remove("X-Admin-Key");
+    }
+
+    [Fact]
+    public async Task FlaggedAccount_RejectsNewSubmissions()
+    {
+        // User 1 submits a score
+        var token1 = await RegisterAndGetTokenAsync("flagblock1@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token1
+        );
+        await _client.PostAsJsonAsync(
+            "/api/scores",
+            new
+            {
+                replayJson = MakeValidReplayJson(seed: 777, width: 7, height: 7, maxArrowLength: 3),
+            }
+        );
+
+        // User 2 submits with the same seed — gets flagged
+        _client.DefaultRequestHeaders.Authorization = null;
+        var token2 = await RegisterAndGetTokenAsync("flagblock2@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token2
+        );
+        var flagResp = await _client.PostAsJsonAsync(
+            "/api/scores",
+            new
+            {
+                replayJson = MakeValidReplayJson(seed: 777, width: 7, height: 7, maxArrowLength: 3),
+            }
+        );
+        Assert.Equal(HttpStatusCode.OK, flagResp.StatusCode);
+
+        // User 2 tries to submit a different score — should be rejected
+        var blockedResp = await _client.PostAsJsonAsync(
+            "/api/scores",
+            new
+            {
+                replayJson = MakeValidReplayJson(seed: 778, width: 7, height: 7, maxArrowLength: 3),
+            }
+        );
+        Assert.Equal(HttpStatusCode.Forbidden, blockedResp.StatusCode);
     }
 
     [Fact(Skip = "Rate limit counts stored rows, not submission attempts — needs separate counter")]
