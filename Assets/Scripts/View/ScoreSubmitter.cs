@@ -10,6 +10,7 @@ public class SubmitResult
 {
     public SubmitResultResponse Response { get; private set; }
     public string Error { get; private set; }
+    public bool IsPending { get; private set; }
 
     public bool IsSuccess => Response != null && Response.verified;
 
@@ -17,6 +18,8 @@ public class SubmitResult
         new SubmitResult { Response = response };
 
     public static SubmitResult Fail(string error) => new SubmitResult { Error = error };
+
+    public static SubmitResult Pending() => new SubmitResult { IsPending = true };
 
     /// <summary>Returns a user-friendly error message based on the failure type.</summary>
     public static string DescribeError(long statusCode, string serverError)
@@ -56,6 +59,9 @@ public class SubmitResult
 /// </summary>
 public static class ScoreSubmitter
 {
+    private const int PollAttempts = 3;
+    private const float PollIntervalSeconds = 2f;
+
     /// <summary>
     /// Attempts to submit a completed replay to the server.
     /// Returns a <see cref="SubmitResult"/> with either success data or a descriptive error.
@@ -78,6 +84,54 @@ public static class ScoreSubmitter
             return SubmitResult.Fail(message);
         }
 
+        // 202 Accepted — poll for verification result
+        if (result.IsAccepted)
+        {
+            var gameId = result.AcceptedGameId;
+            Debug.Log(
+                $"[ScoreSubmitter] Score accepted for verification (gameId={gameId}), polling..."
+            );
+
+            for (int i = 0; i < PollAttempts; i++)
+            {
+                await Task.Delay((int)(PollIntervalSeconds * 1000));
+
+                var statusResult = await api.GetScoreStatusAsync(gameId);
+                if (!statusResult.Success)
+                    continue;
+
+                var status = statusResult.Data;
+                if (status.status == "verified")
+                {
+                    return SubmitResult.Success(
+                        new SubmitResultResponse
+                        {
+                            verified = true,
+                            rank = status.rank,
+                            isPersonalBest = status.isPersonalBest,
+                        }
+                    );
+                }
+
+                if (status.status == "rejected")
+                {
+                    Debug.LogWarning($"[ScoreSubmitter] Verification rejected: {status.reason}");
+                    return SubmitResult.Fail(
+                        !string.IsNullOrEmpty(status.reason)
+                            ? $"Verification failed: {status.reason}"
+                            : "Score could not be verified."
+                    );
+                }
+
+                // Still pending, keep polling
+            }
+
+            // Exhausted poll attempts — still pending
+            Debug.Log("[ScoreSubmitter] Verification still pending after polling");
+            return SubmitResult.Pending();
+        }
+
+        // Synchronous response (idempotency hit returns 200 directly)
         if (!result.Data.verified)
         {
             string message = SubmitResult.DescribeVerificationFailure(result.Data);

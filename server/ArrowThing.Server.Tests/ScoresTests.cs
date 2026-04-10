@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using ArrowThing.Server.Games;
 using ArrowThing.Server.Leaderboards;
 
@@ -46,6 +47,51 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
 
         var auth = await verifyResponse.Content.ReadFromJsonAsync<AuthResponse>();
         return auth!.Token;
+    }
+
+    /// <summary>
+    /// Submits a replay and waits for the worker to process it.
+    /// Returns the HTTP response from the initial submission (for status code checks)
+    /// and the verification result from polling (null if submission was rejected pre-verification).
+    /// </summary>
+    private async Task<(
+        HttpResponseMessage Response,
+        ScoreStatusResult? Status
+    )> SubmitAndWaitAsync(string replayJson)
+    {
+        var response = await _client.PostAsJsonAsync("/api/scores", new { replayJson });
+
+        // Pre-verification failures return non-202
+        if (response.StatusCode != HttpStatusCode.Accepted)
+            return (response, null);
+
+        var accepted = await response.Content.ReadFromJsonAsync<AcceptedResponse>();
+        var gameId = accepted!.GameId;
+
+        // Poll for result (worker is running in-process)
+        for (int i = 0; i < 20; i++)
+        {
+            await Task.Delay(250);
+            var statusResp = await _client.GetAsync($"/api/scores/{gameId}/status");
+            var status = await statusResp.Content.ReadFromJsonAsync<ScoreStatusResult>();
+            if (status!.Status != "pending")
+                return (response, status);
+        }
+
+        throw new TimeoutException($"Verification for game {gameId} did not complete in time");
+    }
+
+    /// <summary>
+    /// Submits a valid replay and asserts it was accepted and verified.
+    /// Returns the verification result.
+    /// </summary>
+    private async Task<ScoreStatusResult> SubmitAndExpectVerifiedAsync(string replayJson)
+    {
+        var (response, status) = await SubmitAndWaitAsync(replayJson);
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.NotNull(status);
+        Assert.Equal("verified", status!.Status);
+        return status;
     }
 
     private static string MakeValidReplayJson(
@@ -232,13 +278,9 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         );
 
         var replayJson = MakeValidReplayJson(seed: 100);
-        var response = await _client.PostAsJsonAsync("/api/scores", new { replayJson });
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var result = await response.Content.ReadFromJsonAsync<SubmitResultResponse>();
-        Assert.True(result!.Verified);
-        Assert.True(result.Rank > 0);
-        Assert.True(result.IsPersonalBest);
+        var status = await SubmitAndExpectVerifiedAsync(replayJson);
+        Assert.True(status.Rank > 0);
+        Assert.True(status.IsPersonalBest == true);
     }
 
     [Fact]
@@ -251,16 +293,11 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         );
 
         // First game (unique seed to avoid cross-test seed dedup)
-        var replay1 = MakeValidReplayJson(seed: 3001);
-        await _client.PostAsJsonAsync("/api/scores", new { replayJson = replay1 });
+        await SubmitAndExpectVerifiedAsync(MakeValidReplayJson(seed: 3001));
 
         // Second game with different seed (will likely have different time)
-        var replay2 = MakeValidReplayJson(seed: 3002);
-        var response = await _client.PostAsJsonAsync("/api/scores", new { replayJson = replay2 });
-
-        var result = await response.Content.ReadFromJsonAsync<SubmitResultResponse>();
-        Assert.True(result!.Verified);
-        // Either isPersonalBest true or false depending on times; both are valid.
+        var status = await SubmitAndExpectVerifiedAsync(MakeValidReplayJson(seed: 3002));
+        Assert.Equal("verified", status.Status);
     }
 
     [Fact]
@@ -274,15 +311,15 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
 
         var replayJson = MakeValidReplayJson(seed: 101);
 
-        var response1 = await _client.PostAsJsonAsync("/api/scores", new { replayJson });
-        var result1 = await response1.Content.ReadFromJsonAsync<SubmitResultResponse>();
+        // First submission goes through the worker
+        await SubmitAndExpectVerifiedAsync(replayJson);
 
+        // Second submission with same replayJson (same gameId) — idempotency returns 200 directly
         var response2 = await _client.PostAsJsonAsync("/api/scores", new { replayJson });
+        Assert.Equal(HttpStatusCode.OK, response2.StatusCode);
         var result2 = await response2.Content.ReadFromJsonAsync<SubmitResultResponse>();
-
         Assert.True(result2!.Verified);
         Assert.False(result2.IsPersonalBest); // Same gameId = not a new PB
-        Assert.Equal(result1!.Rank, result2.Rank);
     }
 
     [Fact]
@@ -319,12 +356,8 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             "Bearer",
             token1
         );
-        await _client.PostAsJsonAsync(
-            "/api/scores",
-            new
-            {
-                replayJson = MakeValidReplayJson(seed: 200, width: 5, height: 5, maxArrowLength: 3),
-            }
+        await SubmitAndExpectVerifiedAsync(
+            MakeValidReplayJson(seed: 200, width: 5, height: 5, maxArrowLength: 3)
         );
 
         _client.DefaultRequestHeaders.Authorization = null;
@@ -333,12 +366,8 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             "Bearer",
             token2
         );
-        await _client.PostAsJsonAsync(
-            "/api/scores",
-            new
-            {
-                replayJson = MakeValidReplayJson(seed: 201, width: 5, height: 5, maxArrowLength: 3),
-            }
+        await SubmitAndExpectVerifiedAsync(
+            MakeValidReplayJson(seed: 201, width: 5, height: 5, maxArrowLength: 3)
         );
 
         // Fetch leaderboard (no auth required)
@@ -364,10 +393,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             token
         );
 
-        await _client.PostAsJsonAsync(
-            "/api/scores",
-            new { replayJson = MakeValidReplayJson(seed: 103) }
-        );
+        await SubmitAndExpectVerifiedAsync(MakeValidReplayJson(seed: 103));
 
         var response = await _client.GetAsync("/api/leaderboards/10x10/me");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -399,8 +425,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             token
         );
 
-        var replayJson = MakeValidReplayJson(seed: 104);
-        await _client.PostAsJsonAsync("/api/scores", new { replayJson });
+        await SubmitAndExpectVerifiedAsync(MakeValidReplayJson(seed: 104));
 
         // Get leaderboard to find gameId
         _client.DefaultRequestHeaders.Authorization = null;
@@ -428,10 +453,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             token
         );
 
-        await _client.PostAsJsonAsync(
-            "/api/scores",
-            new { replayJson = MakeValidReplayJson(seed: 555, width: 9, height: 9) }
-        );
+        await SubmitAndExpectVerifiedAsync(MakeValidReplayJson(seed: 555, width: 9, height: 9));
 
         // Rename
         var renameRequest = new HttpRequestMessage(HttpMethod.Patch, "/api/auth/me");
@@ -448,7 +470,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
     }
 
     [Fact]
-    public async Task SubmitTamperedEvents_ReturnsNotVerified()
+    public async Task SubmitTamperedEvents_ReturnsRejected()
     {
         var token = await RegisterAndGetTokenAsync("tamper1@test.com");
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
@@ -508,17 +530,15 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             finalTime = 1.0,
         };
 
-        var response = await _client.PostAsJsonAsync(
-            "/api/scores",
-            new { replayJson = replay.ToJson() }
-        );
-        var result = await response.Content.ReadFromJsonAsync<SubmitResultResponse>();
-        Assert.False(result!.Verified);
-        Assert.NotNull(result.Reason);
+        var (response, status) = await SubmitAndWaitAsync(replay.ToJson());
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.NotNull(status);
+        Assert.Equal("rejected", status!.Status);
+        Assert.NotNull(status.Reason);
     }
 
     [Fact]
-    public async Task SubmitTamperedSnapshot_ReturnsNotVerified()
+    public async Task SubmitTamperedSnapshot_ReturnsRejected()
     {
         var token = await RegisterAndGetTokenAsync("tamper2@test.com");
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
@@ -532,13 +552,11 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         // Tamper: remove an arrow from the snapshot
         replay.boardSnapshot.RemoveAt(0);
 
-        var response = await _client.PostAsJsonAsync(
-            "/api/scores",
-            new { replayJson = replay.ToJson() }
-        );
-        var result = await response.Content.ReadFromJsonAsync<SubmitResultResponse>();
-        Assert.False(result!.Verified);
-        Assert.Contains("mismatch", result.Reason, StringComparison.OrdinalIgnoreCase);
+        var (response, status) = await SubmitAndWaitAsync(replay.ToJson());
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.NotNull(status);
+        Assert.Equal("rejected", status!.Status);
+        Assert.Contains("mismatch", status.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -605,8 +623,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             token1
         );
         var replay1 = MakeValidReplayJson(seed: 777, width: 7, height: 7, maxArrowLength: 3);
-        var response1 = await _client.PostAsJsonAsync("/api/scores", new { replayJson = replay1 });
-        Assert.Equal(HttpStatusCode.OK, response1.StatusCode);
+        await SubmitAndExpectVerifiedAsync(replay1);
 
         // Second user submits with same seed — rejected and account flagged
         _client.DefaultRequestHeaders.Authorization = null;
@@ -696,7 +713,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         );
         Assert.Equal(HttpStatusCode.OK, unflagResp.StatusCode);
 
-        // User can now submit again
+        // User can now submit again — should get 202 (async verification)
         _client.DefaultRequestHeaders.Remove("X-Admin-Key");
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
             "Bearer",
@@ -714,7 +731,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
                 ),
             }
         );
-        Assert.Equal(HttpStatusCode.OK, okResp.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, okResp.StatusCode);
     }
 
     [Fact]
@@ -725,17 +742,8 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             "Bearer",
             token
         );
-        await _client.PostAsJsonAsync(
-            "/api/scores",
-            new
-            {
-                replayJson = MakeValidReplayJson(
-                    seed: 5002,
-                    width: 3,
-                    height: 3,
-                    maxArrowLength: 3
-                ),
-            }
+        await SubmitAndExpectVerifiedAsync(
+            MakeValidReplayJson(seed: 5002, width: 3, height: 3, maxArrowLength: 3)
         );
 
         // Confirm it's on the leaderboard
@@ -746,33 +754,15 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         Assert.True(lb1!.TotalEntries >= 1);
         var gameId = lb1.Entries[0].GameId;
 
-        // Admin: find and remove the score via the replay endpoint to get the gameId
-        _client.DefaultRequestHeaders.Add("X-Admin-Key", "test-admin-key");
-        var flaggedResp = await _client.GetAsync("/api/admin/flagged-scores");
-        _client.DefaultRequestHeaders.Remove("X-Admin-Key");
-
-        // Use leaderboard entry to verify score exists, then remove by looking up the score
-        // We need the Score ID — query the leaderboard entry's GameId through the DB
-        // For now, verify the remove endpoint works with a known score
         // Submit from a second user, then remove their score
         var token2 = await RegisterAndGetTokenAsync("remove2@test.com");
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
             "Bearer",
             token2
         );
-        var resp2 = await _client.PostAsJsonAsync(
-            "/api/scores",
-            new
-            {
-                replayJson = MakeValidReplayJson(
-                    seed: 5003,
-                    width: 3,
-                    height: 3,
-                    maxArrowLength: 3
-                ),
-            }
+        await SubmitAndExpectVerifiedAsync(
+            MakeValidReplayJson(seed: 5003, width: 3, height: 3, maxArrowLength: 3)
         );
-        Assert.Equal(HttpStatusCode.OK, resp2.StatusCode);
 
         // Get the leaderboard entry with gameId for user2
         _client.DefaultRequestHeaders.Authorization = null;
@@ -781,7 +771,6 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         ).Content.ReadFromJsonAsync<LeaderboardResponse>();
         Assert.Equal(2, lb2!.TotalEntries);
 
-        // Get score ID from the leaderboard response — need the replay endpoint
         var entry2 = lb2.Entries.Find(e => e.GameId != gameId);
         Assert.NotNull(entry2);
 
@@ -807,17 +796,8 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             "Bearer",
             token1
         );
-        await _client.PostAsJsonAsync(
-            "/api/scores",
-            new
-            {
-                replayJson = MakeValidReplayJson(
-                    seed: 6001,
-                    width: 7,
-                    height: 7,
-                    maxArrowLength: 3
-                ),
-            }
+        await SubmitAndExpectVerifiedAsync(
+            MakeValidReplayJson(seed: 6001, width: 7, height: 7, maxArrowLength: 3)
         );
 
         // User 2 submits with the same seed — gets flagged
@@ -902,8 +882,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         for (int i = 0; i < 10; i++)
         {
             var replay = MakeValidReplayJson(seed: 1000 + i);
-            var resp = await _client.PostAsJsonAsync("/api/scores", new { replayJson = replay });
-            Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+            await SubmitAndExpectVerifiedAsync(replay);
         }
 
         // 11th should be rate limited
@@ -912,20 +891,20 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             "/api/scores",
             new { replayJson = finalReplay }
         );
-        // Could be 429 or 200 with verified=false depending on implementation
-        if (finalResp.StatusCode == HttpStatusCode.TooManyRequests)
-        {
-            Assert.Equal(HttpStatusCode.TooManyRequests, finalResp.StatusCode);
-        }
-        else
-        {
-            // If it returns 200, check that it was rejected
-            var result = await finalResp.Content.ReadFromJsonAsync<SubmitResultResponse>();
-            Assert.False(result!.Verified);
-        }
+        Assert.Equal(HttpStatusCode.TooManyRequests, finalResp.StatusCode);
     }
 }
 
 file record AuthResponse(string Token, string DisplayName);
 
 file record FlaggedUserDto(Guid Id, string Email, string DisplayName, string FlagReason);
+
+record AcceptedResponse(string GameId, string Status);
+
+class ScoreStatusResult
+{
+    public string Status { get; set; } = "";
+    public int? Rank { get; set; }
+    public bool? IsPersonalBest { get; set; }
+    public string? Reason { get; set; }
+}

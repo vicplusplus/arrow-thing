@@ -106,14 +106,17 @@ builder
 var connectionString = builder.Configuration.GetConnectionString("Default");
 builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
 
-// Redis
-var redisConnectionString = builder.Configuration["Redis:ConnectionString"];
-if (!string.IsNullOrEmpty(redisConnectionString))
+// Redis — always register so DI validation passes; connect lazily at first resolve
+builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
 {
-    builder.Services.AddSingleton<IConnectionMultiplexer>(
-        ConnectionMultiplexer.Connect(redisConnectionString)
-    );
-}
+    var config = sp.GetRequiredService<IConfiguration>();
+    var connStr = config["Redis:ConnectionString"];
+    if (string.IsNullOrEmpty(connStr))
+        throw new InvalidOperationException(
+            "Redis:ConnectionString is not configured but IConnectionMultiplexer was resolved."
+        );
+    return ConnectionMultiplexer.Connect(connStr);
+});
 
 // HTTP client for Resend
 builder.Services.AddHttpClient();
@@ -474,9 +477,29 @@ app.MapPost(
                 userId,
                 request.ReplayJson
             );
-            return response != null
-                ? Results.Ok(response)
-                : Results.Json(new { error }, statusCode: status);
+            if (response == null)
+                return Results.Json(new { error }, statusCode: status);
+            return status == 202 ? Results.Json(response, statusCode: 202) : Results.Ok(response);
+        }
+    )
+    .RequireAuthorization();
+
+// Score verification status
+app.MapGet(
+        "/api/scores/{gameId}/status",
+        async (string gameId, HttpContext ctx) =>
+        {
+            var redis = ctx.RequestServices.GetService<IConnectionMultiplexer>();
+            if (redis == null)
+                return Results.Json(new { status = "pending" }, statusCode: 200);
+
+            var db = redis.GetDatabase();
+            var result = await db.StringGetAsync($"verify:result:{gameId}");
+            if (result.IsNullOrEmpty)
+                return Results.Json(new { status = "pending" }, statusCode: 200);
+
+            var payload = System.Text.Json.JsonSerializer.Deserialize<object>((string)result!);
+            return Results.Ok(payload);
         }
     )
     .RequireAuthorization();
