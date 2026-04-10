@@ -383,70 +383,44 @@ app.MapPost(
 
 // Admin: score moderation
 app.MapGet(
-    "/api/admin/flagged-scores",
+    "/api/admin/flagged-users",
     async (AppDbContext db, IConfiguration config, HttpContext ctx) =>
     {
         if (!VerifyAdminKey(config, ctx))
             return Results.Json(new { error = "Unauthorized." }, statusCode: 401);
 
-        var scores = await db
-            .Scores.Where(s => s.Flagged)
-            .OrderByDescending(s => s.UpdatedAt)
-            .Select(s => new
+        var users = await db
+            .Users.Where(u => u.Flagged)
+            .OrderByDescending(u => u.CreatedAt)
+            .Select(u => new
             {
-                s.Id,
-                s.UserId,
-                s.GameId,
-                s.Seed,
-                s.BoardWidth,
-                s.BoardHeight,
-                s.Time,
-                s.FlagReason,
-                s.UpdatedAt,
+                u.Id,
+                u.Email,
+                u.DisplayName,
+                u.FlagReason,
+                u.CreatedAt,
             })
             .ToListAsync();
 
-        return Results.Ok(scores);
+        return Results.Ok(users);
     }
 );
 
 app.MapPost(
-    "/api/admin/scores/{id:guid}/unflag",
-    async (
-        Guid id,
-        AppDbContext db,
-        LeaderboardCache cache,
-        IConfiguration config,
-        HttpContext ctx
-    ) =>
+    "/api/admin/users/{id:guid}/unflag",
+    async (Guid id, AppDbContext db, IConfiguration config, HttpContext ctx) =>
     {
         if (!VerifyAdminKey(config, ctx))
             return Results.Json(new { error = "Unauthorized." }, statusCode: 401);
 
-        var score = await db.Scores.FindAsync(id);
-        if (score == null)
+        var user = await db.Users.FindAsync(id);
+        if (user == null)
             return Results.NotFound();
 
-        score.Flagged = false;
-        score.FlagReason = null;
-
-        // Clear user flag if no other flagged scores remain
-        var hasOtherFlagged = await db.Scores.AnyAsync(s =>
-            s.UserId == score.UserId && s.Id != id && s.Flagged
-        );
-        if (!hasOtherFlagged)
-        {
-            var user = await db.Users.FindAsync(score.UserId);
-            if (user != null)
-            {
-                user.Flagged = false;
-                user.FlagReason = null;
-            }
-        }
-
+        user.Flagged = false;
+        user.FlagReason = null;
         await db.SaveChangesAsync();
-        cache.Invalidate(score.BoardWidth, score.BoardHeight);
-        return Results.Ok(new { message = "Score unflagged." });
+        return Results.Ok(new { message = "User unflagged." });
     }
 );
 

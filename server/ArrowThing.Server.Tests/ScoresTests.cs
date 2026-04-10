@@ -231,7 +231,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             token
         );
 
-        var replayJson = MakeValidReplayJson();
+        var replayJson = MakeValidReplayJson(seed: 100);
         var response = await _client.PostAsJsonAsync("/api/scores", new { replayJson });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -272,7 +272,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             token
         );
 
-        var replayJson = MakeValidReplayJson();
+        var replayJson = MakeValidReplayJson(seed: 101);
 
         var response1 = await _client.PostAsJsonAsync("/api/scores", new { replayJson });
         var result1 = await response1.Content.ReadFromJsonAsync<SubmitResultResponse>();
@@ -305,7 +305,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
     [Fact]
     public async Task SubmitWithoutAuth_Returns401()
     {
-        var replayJson = MakeValidReplayJson();
+        var replayJson = MakeValidReplayJson(seed: 102);
         var response = await _client.PostAsJsonAsync("/api/scores", new { replayJson });
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -323,7 +323,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             "/api/scores",
             new
             {
-                replayJson = MakeValidReplayJson(seed: 42, width: 5, height: 5, maxArrowLength: 3),
+                replayJson = MakeValidReplayJson(seed: 200, width: 5, height: 5, maxArrowLength: 3),
             }
         );
 
@@ -337,7 +337,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             "/api/scores",
             new
             {
-                replayJson = MakeValidReplayJson(seed: 99, width: 5, height: 5, maxArrowLength: 3),
+                replayJson = MakeValidReplayJson(seed: 201, width: 5, height: 5, maxArrowLength: 3),
             }
         );
 
@@ -364,7 +364,10 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             token
         );
 
-        await _client.PostAsJsonAsync("/api/scores", new { replayJson = MakeValidReplayJson() });
+        await _client.PostAsJsonAsync(
+            "/api/scores",
+            new { replayJson = MakeValidReplayJson(seed: 103) }
+        );
 
         var response = await _client.GetAsync("/api/leaderboards/10x10/me");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -396,7 +399,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             token
         );
 
-        var replayJson = MakeValidReplayJson();
+        var replayJson = MakeValidReplayJson(seed: 104);
         await _client.PostAsJsonAsync("/api/scores", new { replayJson });
 
         // Get leaderboard to find gameId
@@ -455,7 +458,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
 
         // Build a valid replay, then tamper with a clear event position
         var board = new Board(10, 10);
-        TestBoardHelper.FillBoard(board, 5, new Random(42));
+        TestBoardHelper.FillBoard(board, 5, new Random(105));
 
         var snapshot = new List<List<Cell>>();
         foreach (var arrow in board.Arrows)
@@ -496,7 +499,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         {
             version = 3,
             gameId = Guid.NewGuid().ToString(),
-            seed = 42,
+            seed = 105,
             boardWidth = 10,
             boardHeight = 10,
             maxArrowLength = 5,
@@ -524,7 +527,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         );
 
         // Build a valid replay but modify the snapshot
-        var replayJson = MakeValidReplayJson(seed: 42);
+        var replayJson = MakeValidReplayJson(seed: 106);
         var replay = Newtonsoft.Json.JsonConvert.DeserializeObject<ReplayData>(replayJson)!;
         // Tamper: remove an arrow from the snapshot
         replay.boardSnapshot.RemoveAt(0);
@@ -593,7 +596,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
     }
 
     [Fact]
-    public async Task SubmitDuplicateSeed_FlagsNewScore()
+    public async Task SubmitDuplicateSeed_RejectsAndFlagsAccount()
     {
         // First user submits with seed 777
         var token1 = await RegisterAndGetTokenAsync("dedup1@test.com");
@@ -605,7 +608,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         var response1 = await _client.PostAsJsonAsync("/api/scores", new { replayJson = replay1 });
         Assert.Equal(HttpStatusCode.OK, response1.StatusCode);
 
-        // Second user submits with same seed
+        // Second user submits with same seed — rejected and account flagged
         _client.DefaultRequestHeaders.Authorization = null;
         var token2 = await RegisterAndGetTokenAsync("dedup2@test.com");
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
@@ -614,114 +617,104 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         );
         var replay2 = MakeValidReplayJson(seed: 777, width: 7, height: 7, maxArrowLength: 3);
         var response2 = await _client.PostAsJsonAsync("/api/scores", new { replayJson = replay2 });
-        var result2 = await response2.Content.ReadFromJsonAsync<SubmitResultResponse>();
-        Assert.True(result2!.Verified);
+        Assert.Equal(HttpStatusCode.Forbidden, response2.StatusCode);
 
-        // The flagged score should not appear on the leaderboard
+        // No score was created for user 2 — leaderboard only has user 1
         _client.DefaultRequestHeaders.Authorization = null;
         var lbResponse = await _client.GetAsync("/api/leaderboards/7x7");
         var lb = await lbResponse.Content.ReadFromJsonAsync<LeaderboardResponse>();
-        // Only the original (unflagged) score should be on the leaderboard
         Assert.Equal(1, lb!.TotalEntries);
     }
 
     [Fact]
-    public async Task AdminFlaggedScores_ListsFlaggedScores()
+    public async Task AdminFlaggedUsers_ListsFlaggedUsers()
     {
-        // Submit a duplicate-seed score to create a flagged entry
-        var token1 = await RegisterAndGetTokenAsync("admflag1@test.com");
+        // Trigger a pre-verification failure to flag the account
+        var token = await RegisterAndGetTokenAsync("admflag1@test.com");
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
             "Bearer",
-            token1
+            token
         );
         await _client.PostAsJsonAsync(
             "/api/scores",
-            new
-            {
-                replayJson = MakeValidReplayJson(seed: 888, width: 6, height: 6, maxArrowLength: 3),
-            }
+            new { replayJson = MakeImplausiblyFastReplayJson(seed: 888, width: 6, height: 6) }
         );
 
-        _client.DefaultRequestHeaders.Authorization = null;
-        var token2 = await RegisterAndGetTokenAsync("admflag2@test.com");
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
-            "Bearer",
-            token2
-        );
-        await _client.PostAsJsonAsync(
-            "/api/scores",
-            new
-            {
-                replayJson = MakeValidReplayJson(seed: 888, width: 6, height: 6, maxArrowLength: 3),
-            }
-        );
-
-        // Admin: list flagged scores
+        // Admin: list flagged users
         _client.DefaultRequestHeaders.Authorization = null;
         _client.DefaultRequestHeaders.Add("X-Admin-Key", "test-admin-key");
-        var response = await _client.GetAsync("/api/admin/flagged-scores");
+        var response = await _client.GetAsync("/api/admin/flagged-users");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        var flagged = await response.Content.ReadFromJsonAsync<List<FlaggedScoreDto>>();
+        var flagged = await response.Content.ReadFromJsonAsync<List<FlaggedUserDto>>();
         Assert.True(flagged!.Count >= 1);
-        Assert.True(flagged.Exists(s => s.FlagReason == "duplicate_seed"));
+        Assert.True(flagged.Exists(u => u.Email == "admflag1@test.com"));
+
+        _client.DefaultRequestHeaders.Remove("X-Admin-Key");
     }
 
     [Fact]
-    public async Task AdminUnflag_RestoresScoreToLeaderboard()
+    public async Task AdminUnflagUser_AllowsNewSubmissions()
     {
-        // Create a flagged score via duplicate seed
-        var token1 = await RegisterAndGetTokenAsync("unflag1@test.com");
+        // Flag user via pre-verification failure
+        var token = await RegisterAndGetTokenAsync("unflag1@test.com");
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
             "Bearer",
-            token1
+            token
         );
         await _client.PostAsJsonAsync(
             "/api/scores",
-            new
-            {
-                replayJson = MakeValidReplayJson(seed: 999, width: 8, height: 8, maxArrowLength: 3),
-            }
+            new { replayJson = MakeImplausiblyFastReplayJson(seed: 999, width: 8, height: 8) }
         );
 
-        _client.DefaultRequestHeaders.Authorization = null;
-        var token2 = await RegisterAndGetTokenAsync("unflag2@test.com");
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
-            "Bearer",
-            token2
-        );
-        await _client.PostAsJsonAsync(
+        // Confirm blocked
+        var blockedResp = await _client.PostAsJsonAsync(
             "/api/scores",
             new
             {
-                replayJson = MakeValidReplayJson(seed: 999, width: 8, height: 8, maxArrowLength: 3),
+                replayJson = MakeValidReplayJson(
+                    seed: 5001,
+                    width: 8,
+                    height: 8,
+                    maxArrowLength: 3
+                ),
             }
         );
+        Assert.Equal(HttpStatusCode.Forbidden, blockedResp.StatusCode);
 
-        // Leaderboard should only have 1 entry (unflagged)
+        // Admin: unflag the user
         _client.DefaultRequestHeaders.Authorization = null;
-        var lb1 = await (
-            await _client.GetAsync("/api/leaderboards/8x8")
-        ).Content.ReadFromJsonAsync<LeaderboardResponse>();
-        Assert.Equal(1, lb1!.TotalEntries);
-
-        // Admin: get flagged, then unflag
         _client.DefaultRequestHeaders.Add("X-Admin-Key", "test-admin-key");
-        var flaggedResponse = await _client.GetAsync("/api/admin/flagged-scores");
-        var flagged = await flaggedResponse.Content.ReadFromJsonAsync<List<FlaggedScoreDto>>();
-        var flaggedScore = flagged!.Find(s =>
-            s.FlagReason == "duplicate_seed" && s.BoardWidth == 8 && s.BoardHeight == 8
+        var flaggedResp = await _client.GetAsync("/api/admin/flagged-users");
+        var flagged = await flaggedResp.Content.ReadFromJsonAsync<List<FlaggedUserDto>>();
+        var flaggedUser = flagged!.Find(u => u.Email == "unflag1@test.com");
+        Assert.NotNull(flaggedUser);
+
+        var unflagResp = await _client.PostAsync(
+            $"/api/admin/users/{flaggedUser!.Id}/unflag",
+            null
         );
-        Assert.NotNull(flaggedScore);
+        Assert.Equal(HttpStatusCode.OK, unflagResp.StatusCode);
 
-        await _client.PostAsync($"/api/admin/scores/{flaggedScore!.Id}/unflag", null);
-
-        // Leaderboard should now have 2 entries
+        // User can now submit again
         _client.DefaultRequestHeaders.Remove("X-Admin-Key");
-        var lb2 = await (
-            await _client.GetAsync("/api/leaderboards/8x8")
-        ).Content.ReadFromJsonAsync<LeaderboardResponse>();
-        Assert.Equal(2, lb2!.TotalEntries);
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
+        var okResp = await _client.PostAsJsonAsync(
+            "/api/scores",
+            new
+            {
+                replayJson = MakeValidReplayJson(
+                    seed: 5001,
+                    width: 8,
+                    height: 8,
+                    maxArrowLength: 3
+                ),
+            }
+        );
+        Assert.Equal(HttpStatusCode.OK, okResp.StatusCode);
     }
 
     [Fact]
@@ -736,45 +729,73 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             "/api/scores",
             new
             {
-                replayJson = MakeValidReplayJson(seed: 42, width: 3, height: 3, maxArrowLength: 3),
+                replayJson = MakeValidReplayJson(
+                    seed: 5002,
+                    width: 3,
+                    height: 3,
+                    maxArrowLength: 3
+                ),
             }
         );
 
-        // Submit from a second user with the same seed to create a flagged score
+        // Confirm it's on the leaderboard
+        _client.DefaultRequestHeaders.Authorization = null;
+        var lb1 = await (
+            await _client.GetAsync("/api/leaderboards/3x3")
+        ).Content.ReadFromJsonAsync<LeaderboardResponse>();
+        Assert.True(lb1!.TotalEntries >= 1);
+        var gameId = lb1.Entries[0].GameId;
+
+        // Admin: find and remove the score via the replay endpoint to get the gameId
+        _client.DefaultRequestHeaders.Add("X-Admin-Key", "test-admin-key");
+        var flaggedResp = await _client.GetAsync("/api/admin/flagged-scores");
+        _client.DefaultRequestHeaders.Remove("X-Admin-Key");
+
+        // Use leaderboard entry to verify score exists, then remove by looking up the score
+        // We need the Score ID — query the leaderboard entry's GameId through the DB
+        // For now, verify the remove endpoint works with a known score
+        // Submit from a second user, then remove their score
         var token2 = await RegisterAndGetTokenAsync("remove2@test.com");
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
             "Bearer",
             token2
         );
-        await _client.PostAsJsonAsync(
+        var resp2 = await _client.PostAsJsonAsync(
             "/api/scores",
             new
             {
-                replayJson = MakeValidReplayJson(seed: 42, width: 3, height: 3, maxArrowLength: 3),
+                replayJson = MakeValidReplayJson(
+                    seed: 5003,
+                    width: 3,
+                    height: 3,
+                    maxArrowLength: 3
+                ),
             }
         );
+        Assert.Equal(HttpStatusCode.OK, resp2.StatusCode);
 
-        // Get the flagged score's ID via admin endpoint
+        // Get the leaderboard entry with gameId for user2
         _client.DefaultRequestHeaders.Authorization = null;
-        _client.DefaultRequestHeaders.Add("X-Admin-Key", "test-admin-key");
-        var flaggedResp = await _client.GetAsync("/api/admin/flagged-scores");
-        var flaggedScores = await flaggedResp.Content.ReadFromJsonAsync<List<FlaggedScoreDto>>();
-        Assert.NotNull(flaggedScores);
-        var flaggedScore = flaggedScores!.First(s => s.BoardWidth == 3 && s.BoardHeight == 3);
+        var lb2 = await (
+            await _client.GetAsync("/api/leaderboards/3x3")
+        ).Content.ReadFromJsonAsync<LeaderboardResponse>();
+        Assert.Equal(2, lb2!.TotalEntries);
 
-        // Remove the flagged score
-        var removeResp = await _client.PostAsync(
-            $"/api/admin/scores/{flaggedScore.Id}/remove",
-            null
-        );
+        // Get score ID from the leaderboard response — need the replay endpoint
+        var entry2 = lb2.Entries.Find(e => e.GameId != gameId);
+        Assert.NotNull(entry2);
+
+        // Remove using the score ID from the entry
+        _client.DefaultRequestHeaders.Add("X-Admin-Key", "test-admin-key");
+        var removeResp = await _client.PostAsync($"/api/admin/scores/{entry2!.Id}/remove", null);
         Assert.Equal(HttpStatusCode.OK, removeResp.StatusCode);
 
-        // Verify it's gone from flagged list
-        var flaggedResp2 = await _client.GetAsync("/api/admin/flagged-scores");
-        var flaggedScores2 = await flaggedResp2.Content.ReadFromJsonAsync<List<FlaggedScoreDto>>();
-        Assert.DoesNotContain(flaggedScores2!, s => s.Id == flaggedScore.Id);
-
+        // Leaderboard should now have 1 entry
         _client.DefaultRequestHeaders.Remove("X-Admin-Key");
+        var lb3 = await (
+            await _client.GetAsync("/api/leaderboards/3x3")
+        ).Content.ReadFromJsonAsync<LeaderboardResponse>();
+        Assert.Equal(1, lb3!.TotalEntries);
     }
 
     [Fact]
@@ -790,7 +811,12 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             "/api/scores",
             new
             {
-                replayJson = MakeValidReplayJson(seed: 777, width: 7, height: 7, maxArrowLength: 3),
+                replayJson = MakeValidReplayJson(
+                    seed: 6001,
+                    width: 7,
+                    height: 7,
+                    maxArrowLength: 3
+                ),
             }
         );
 
@@ -805,17 +831,27 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             "/api/scores",
             new
             {
-                replayJson = MakeValidReplayJson(seed: 777, width: 7, height: 7, maxArrowLength: 3),
+                replayJson = MakeValidReplayJson(
+                    seed: 6001,
+                    width: 7,
+                    height: 7,
+                    maxArrowLength: 3
+                ),
             }
         );
-        Assert.Equal(HttpStatusCode.OK, flagResp.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, flagResp.StatusCode);
 
         // User 2 tries to submit a different score — should be rejected
         var blockedResp = await _client.PostAsJsonAsync(
             "/api/scores",
             new
             {
-                replayJson = MakeValidReplayJson(seed: 778, width: 7, height: 7, maxArrowLength: 3),
+                replayJson = MakeValidReplayJson(
+                    seed: 6002,
+                    width: 7,
+                    height: 7,
+                    maxArrowLength: 3
+                ),
             }
         );
         Assert.Equal(HttpStatusCode.Forbidden, blockedResp.StatusCode);
@@ -892,14 +928,4 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
 
 file record AuthResponse(string Token, string DisplayName);
 
-file record FlaggedScoreDto(
-    Guid Id,
-    Guid UserId,
-    Guid GameId,
-    int Seed,
-    int BoardWidth,
-    int BoardHeight,
-    double Time,
-    string FlagReason,
-    DateTime UpdatedAt
-);
+file record FlaggedUserDto(Guid Id, string Email, string DisplayName, string FlagReason);

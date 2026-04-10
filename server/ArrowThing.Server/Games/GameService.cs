@@ -88,18 +88,19 @@ public class GameService
             );
         }
 
-        // Seed duplicate detection: flag if another user has the same seed + board size
-        var duplicate = await _db.Scores.FirstOrDefaultAsync(s =>
+        // Seed duplicate detection: flag user and reject
+        var duplicate = await _db.Scores.AnyAsync(s =>
             s.Seed == replay.seed
             && s.BoardWidth == replay.boardWidth
             && s.BoardHeight == replay.boardHeight
             && s.UserId != userId
         );
-        bool flagged = duplicate != null;
-        if (flagged)
+        if (duplicate)
         {
             user.Flagged = true;
             user.FlagReason = "duplicate_seed";
+            await _db.SaveChangesAsync();
+            return (null, 403, "Account is flagged. Contact support.");
         }
 
         // Rate limit: count verified score updates in the past hour
@@ -152,8 +153,6 @@ public class GameService
             existing.Time = result.VerifiedTime;
             existing.ReplayJson = storedReplayJson;
             existing.UpdatedAt = now;
-            existing.Flagged = flagged;
-            existing.FlagReason = flagged ? "duplicate_seed" : null;
         }
         else
         {
@@ -170,8 +169,6 @@ public class GameService
                 ReplayJson = storedReplayJson,
                 CreatedAt = now,
                 UpdatedAt = now,
-                Flagged = flagged,
-                FlagReason = flagged ? "duplicate_seed" : null,
             };
             _db.Scores.Add(score);
         }
@@ -200,7 +197,7 @@ public class GameService
     private async Task<int> ComputeRank(int width, int height, double time)
     {
         var betterCount = await _db.Scores.CountAsync(s =>
-            s.BoardWidth == width && s.BoardHeight == height && !s.Flagged && s.Time < time
+            s.BoardWidth == width && s.BoardHeight == height && !s.User.Flagged && s.Time < time
         );
         return betterCount + 1;
     }
