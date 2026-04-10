@@ -9,6 +9,7 @@ using Microsoft.EntityFrameworkCore;
 using OpenTelemetry.Metrics;
 using Serilog;
 using Serilog.Sinks.Grafana.Loki;
+using StackExchange.Redis;
 
 static bool VerifyAdminKey(IConfiguration config, HttpContext ctx)
 {
@@ -60,6 +61,8 @@ if (builder.Environment.IsDevelopment())
             mapped["Admin:ApiKey"] = adminKey;
         if (envVars.TryGetValue("RESEND_API_KEY", out var resendKey))
             mapped["Resend:ApiKey"] = resendKey;
+        if (envVars.TryGetValue("REDIS_CONNECTION_STRING", out var redisConn))
+            mapped["Redis:ConnectionString"] = redisConn;
 
         if (mapped.Count > 0)
             builder.Configuration.AddInMemoryCollection(mapped);
@@ -103,6 +106,15 @@ builder
 var connectionString = builder.Configuration.GetConnectionString("Default");
 builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
 
+// Redis
+var redisConnectionString = builder.Configuration["Redis:ConnectionString"];
+if (!string.IsNullOrEmpty(redisConnectionString))
+{
+    builder.Services.AddSingleton<IConnectionMultiplexer>(
+        ConnectionMultiplexer.Connect(redisConnectionString)
+    );
+}
+
 // HTTP client for Resend
 builder.Services.AddHttpClient();
 
@@ -113,7 +125,9 @@ builder.Services.AddScoped<AuditLogService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<GameService>();
 builder.Services.AddScoped<LeaderboardService>();
-builder.Services.AddSingleton<LeaderboardCache>();
+builder.Services.AddSingleton<LeaderboardCache>(sp => new LeaderboardCache(
+    sp.GetService<IConnectionMultiplexer>()
+));
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
 builder.Services.AddAuthorization();

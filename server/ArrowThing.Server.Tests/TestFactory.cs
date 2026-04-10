@@ -7,27 +7,34 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using StackExchange.Redis;
 using Testcontainers.PostgreSql;
+using Testcontainers.Redis;
 
 namespace ArrowThing.Server.Tests;
 
 public class TestFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder()
-        .WithImage("postgres:16-alpine")
-        .Build();
+    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder(
+        "postgres:16-alpine"
+    ).Build();
+
+    private readonly RedisContainer _redis = new RedisBuilder("redis:7-alpine").Build();
 
     /// <summary>
     /// Emails captured by the fake EmailService during tests.
     /// </summary>
     public FakeEmailService FakeEmail { get; } = new();
 
-    public async Task InitializeAsync() => await _postgres.StartAsync();
+    public async Task InitializeAsync()
+    {
+        await Task.WhenAll(_postgres.StartAsync(), _redis.StartAsync());
+    }
 
     public new async Task DisposeAsync()
     {
         await base.DisposeAsync();
-        await _postgres.DisposeAsync();
+        await Task.WhenAll(_postgres.DisposeAsync().AsTask(), _redis.DisposeAsync().AsTask());
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -39,6 +46,7 @@ public class TestFactory : WebApplicationFactory<Program>, IAsyncLifetime
                     new Dictionary<string, string?>
                     {
                         ["ConnectionStrings:Default"] = _postgres.GetConnectionString(),
+                        ["Redis:ConnectionString"] = _redis.GetConnectionString(),
                         ["Jwt:Secret"] = "test-secret-that-is-at-least-32-bytes-long-for-hmac256!",
                         ["Resend:ApiKey"] = "re_test_fake_key",
                         ["Resend:FromAddress"] = "test@arrow-thing.com",
