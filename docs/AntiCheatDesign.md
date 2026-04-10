@@ -85,25 +85,7 @@ POST /api/admin/scores/{id}/remove       → hard delete a score
 - Player entry endpoints (`/me`) include `flagged` and `flagReason` fields.
 - Client player panel shows "Account flagged: {reason}" when the user is flagged, with no play button.
 
-### New replay event type: `miss`
-
-Add a `miss` event type for clicks that don't hit any arrow. Same shape as `reject` (has `posX`/`posY` + `timestamp`), but recorded when the tap lands on an empty cell. This doesn't affect verification or scoring — misses are ignored like rejects. The value is observability: a replay full of rapid miss events makes autoclicker/spam patterns obvious at a glance during manual review.
-
-- `ReplayEventType` — add `Miss` constant
-- `InputHandler` — record `miss` event when a tap doesn't hit any arrow
-- `ReplayVerifier` — ignore `miss` events (same as `reject`)
-- Replay viewer — show red tap indicator for misses (same as rejects)
-
-### Changes
-
-- `ReplayVerifier.cs` — new static `PreVerify(ReplayData)` method for timing/size checks
-- `ReplayEventType` / `InputHandler` — add `miss` event type
-- `User.cs` — add `Flagged` + `FlagReason` columns + migration
-- `GameService.cs` — user flag check, pre-verification gate with user flagging, seed dedup with user flagging
-- `LeaderboardService.cs` — filter `!s.User.Flagged`, include flag status in player entry
-- `Program.cs` — admin endpoints (flagged-users, unflag-user, remove-score)
-- `ApiClient.cs` / `LeaderboardScreenController.cs` — show flag status in player panel
-- Tests: 9 EditMode tests for PreVerify, 8 server integration tests (oversized board, implausibly fast, seed dedup, admin flagged/unflag/remove, flagged account blocking, pre-verify flags then blocks)
+Also added `miss` replay event type (taps on empty cells) for observability in manual review. Rendered as red tap indicators in the replay viewer, ignored by verification.
 
 ---
 
