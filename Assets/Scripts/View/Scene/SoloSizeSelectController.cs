@@ -24,7 +24,6 @@ public sealed class SoloSizeSelectController : NavigableScene
 
     private int _selectedWidth = 10;
     private int _selectedHeight = 10;
-    private bool _selectionInitialized;
 
     // Nav graph indices (set in BuildNavGraph, used in LinkPresetGrid)
     private int _startIdx;
@@ -82,49 +81,29 @@ public sealed class SoloSizeSelectController : NavigableScene
             trophyBtn.clicked += OnLeaderboard;
     }
 
-    protected override void RestoreState(VisualElement root)
+    protected override void BuildNavGraph(FocusNavigator nav)
     {
-        // Re-enable from scene stack — restore from instance fields.
-        if (_isCustomSelected)
+        // Restore selection from GameSettings if a previous game was played.
+        if (GameSettings.IsSet)
         {
-            _customWidthSnap.SetValueWithoutNotify(_selectedWidth);
-            _customHeightSnap.SetValueWithoutNotify(_selectedHeight);
-            SelectCustom();
+            bool matchesPreset =
+                (GameSettings.Width == 10 && GameSettings.Height == 10)
+                || (GameSettings.Width == 20 && GameSettings.Height == 20)
+                || (GameSettings.Width == 40 && GameSettings.Height == 40)
+                || (GameSettings.Width == 100 && GameSettings.Height == 100);
+
+            if (matchesPreset)
+                SelectPreset(GameSettings.Width, GameSettings.Height);
+            else
+            {
+                _customWidthSnap.SetValueWithoutNotify(GameSettings.Width);
+                _customHeightSnap.SetValueWithoutNotify(GameSettings.Height);
+                SelectCustom();
+            }
         }
         else
         {
-            SelectPreset(_selectedWidth, _selectedHeight);
-        }
-    }
-
-    protected override void BuildNavGraph(FocusNavigator nav)
-    {
-        // First enable: restore from GameSettings (or default to Small).
-        // RestoreState handles re-enables from the scene stack.
-        if (!_selectionInitialized)
-        {
-            _selectionInitialized = true;
-            if (GameSettings.IsSet)
-            {
-                bool matchesPreset =
-                    (GameSettings.Width == 10 && GameSettings.Height == 10)
-                    || (GameSettings.Width == 20 && GameSettings.Height == 20)
-                    || (GameSettings.Width == 40 && GameSettings.Height == 40)
-                    || (GameSettings.Width == 100 && GameSettings.Height == 100);
-
-                if (matchesPreset)
-                    SelectPreset(GameSettings.Width, GameSettings.Height);
-                else
-                {
-                    _customWidthSnap.SetValueWithoutNotify(GameSettings.Width);
-                    _customHeightSnap.SetValueWithoutNotify(GameSettings.Height);
-                    SelectCustom();
-                }
-            }
-            else
-            {
-                SelectPreset(10, 10);
-            }
+            SelectPreset(10, 10);
         }
 
         var items = new List<FocusNavigator.FocusItem>();
