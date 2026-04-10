@@ -105,26 +105,10 @@ public sealed class LeaderboardScreenController : NavigableScene
     private int _focusEntryPositionAfterRebuild = -1;
     private readonly PopupKeyboardNav _contextMenuNav = new PopupKeyboardNav();
 
-    // Scene stack state (saved in SaveState, restored in RestoreState/BuildNavGraph).
-    private int _savedTabIndex;
-    private SortCriterion _savedSortCriterion;
-    private bool _savedIsGlobal;
-    private float _savedScrollPos;
-
     protected override KeybindManager.Context NavContext => KeybindManager.Context.Leaderboard;
-
-    protected override void SaveState()
-    {
-        _savedTabIndex = _activeTabIndex;
-        _savedSortCriterion = _activeSortCriterion;
-        _savedIsGlobal = _isGlobalView;
-        _savedScrollPos = _scroll != null ? _scroll.verticalScroller.value : 0;
-    }
 
     protected override void BuildUI(VisualElement root)
     {
-        // Reset transient state derived from the (now-recreated) visual tree.
-        // _isCompact is read from the live class list, so it doesn't need a reset.
         _usingShortLabels = null;
 
         _dragThreshold = PlayerPrefs.GetFloat(
@@ -216,15 +200,6 @@ public sealed class LeaderboardScreenController : NavigableScene
         root.RegisterCallback<GeometryChangedEvent>(OnRootGeometryChanged);
     }
 
-    protected override void RestoreState(VisualElement root)
-    {
-        var localBtn = root.Q<Button>("lb-local-btn");
-        var globalBtn = root.Q<Button>("lb-global-btn");
-        if (_savedIsGlobal != _isGlobalView)
-            SetScope(_savedIsGlobal, localBtn, globalBtn);
-        _activeSortCriterion = _savedSortCriterion;
-    }
-
     protected override void BuildNavGraph(FocusNavigator nav)
     {
         // Handle auto-scroll from victory.
@@ -233,13 +208,6 @@ public sealed class LeaderboardScreenController : NavigableScene
 
         if (_focusGameId != null)
             AutoScrollToFocusEntry();
-        else if (_savedTabIndex > 0)
-        {
-            // Restored from SaveState — use saved tab and scroll.
-            SelectTab(_savedTabIndex);
-            float scroll = _savedScrollPos;
-            _scroll.schedule.Execute(() => _scroll.verticalScroller.value = scroll);
-        }
         else
             SelectTab(0);
 

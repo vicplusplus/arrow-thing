@@ -345,7 +345,7 @@ Each phase is a self-contained PR. Phases are intentionally ordered so every mer
 
 **Work.**
 - `Assets/UI/MainMenu/MainMenuScreen.uxml` — add three menu states (`menu-root`, `menu-singleplayer`, `menu-multiplayer`). Each state is a `VisualElement` container; CSS toggles visibility. Keep the existing buttons reachable from the new states.
-- `MainMenuController.cs` — introduce a simple state enum (`Root / Singleplayer / Multiplayer`). Update `BuildUI`, `BuildNavGraph`, `SaveState`, `RestoreState` hooks from `NavigableScene` to switch between states without leaving the scene. Back button (Escape / Backspace) pops back one state.
+- `MainMenuController.cs` — introduce a simple state enum (`Root / Singleplayer / Multiplayer`). Update `BuildUI`, `BuildNavGraph` hooks from `NavigableScene` to switch between states without leaving the scene. Back button (Escape / Backspace) pops back one state.
 - Multiplayer → Co-op button routes to a stub screen that reads "Co-op: coming soon" with a back button. Removed in Phase 5.
 - Update `Assets/Tests/PlayMode/UILayout/MainMenuLayoutTests.cs` to assert the new UI states and their buttons.
 - Update `NavigationCoverageTests` to declare the new UI states (`root`, `singleplayer`, `multiplayer`, `coop-stub`) with their expected navigable buttons.
