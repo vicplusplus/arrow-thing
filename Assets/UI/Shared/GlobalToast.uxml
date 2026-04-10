@@ -4,6 +4,7 @@
 
     <ui:VisualElement name="global-toast" class="toast global-toast global-toast--hidden" picking-mode="Ignore">
         <ui:Label name="global-toast-text" class="toast__text" />
-        <ui:Button name="global-toast-dismiss" class="toast__action-btn" text="Dismiss" />
+        <ui:Button name="global-toast-retry" class="toast__action-btn global-toast--hidden" text="Retry" />
+        <ui:Button name="global-toast-dismiss" class="global-toast__close-btn" text="✕" />
     </ui:VisualElement>
 </ui:UXML>

@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -5,6 +6,7 @@ using UnityEngine.UIElements;
 /// Singleton toast overlay that persists across scene transitions.
 /// Shows messages with a dismiss button. Error toasts persist until
 /// manually dismissed; success/info toasts auto-hide after a delay.
+/// Retryable errors show an additional Retry button.
 ///
 /// Bootstrap: place a prefab at Resources/GlobalToast with a UIDocument
 /// (pointing to GlobalToast.uxml), a UIThemeApplier, and this component.
@@ -17,11 +19,14 @@ public sealed class GlobalToast : MonoBehaviour
 
     private VisualElement _toast;
     private Label _text;
+    private Button _retryBtn;
     private Button _dismissBtn;
     private float _autoHideTime;
     private bool _autoHidePending;
+    private Action _retryAction;
 
     private const float AutoHideDuration = 4f;
+    private const string HiddenClass = "global-toast--hidden";
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Bootstrap()
@@ -53,8 +58,11 @@ public sealed class GlobalToast : MonoBehaviour
         var root = GetComponent<UIDocument>().rootVisualElement;
         _toast = root.Q("global-toast");
         _text = root.Q<Label>("global-toast-text");
+        _retryBtn = root.Q<Button>("global-toast-retry");
         _dismissBtn = root.Q<Button>("global-toast-dismiss");
 
+        if (_retryBtn != null)
+            _retryBtn.clicked += OnRetry;
         if (_dismissBtn != null)
             _dismissBtn.clicked += Dismiss;
     }
@@ -70,11 +78,20 @@ public sealed class GlobalToast : MonoBehaviour
 
     /// <summary>
     /// Shows an error toast that persists until the user dismisses it.
-    /// Survives scene transitions.
+    /// No retry option. Survives scene transitions.
     /// </summary>
     public void ShowError(string message)
     {
-        Show(message, persistent: true);
+        Show(message, persistent: true, retryAction: null);
+    }
+
+    /// <summary>
+    /// Shows an error toast with a Retry button. Persists until the user
+    /// dismisses or retries. Survives scene transitions.
+    /// </summary>
+    public void ShowRetryableError(string message, Action retryAction)
+    {
+        Show(message, persistent: true, retryAction: retryAction);
     }
 
     /// <summary>
@@ -82,31 +99,49 @@ public sealed class GlobalToast : MonoBehaviour
     /// </summary>
     public void ShowInfo(string message)
     {
-        Show(message, persistent: false);
+        Show(message, persistent: false, retryAction: null);
     }
 
     /// <summary>Hides the toast immediately.</summary>
     public void Dismiss()
     {
         _autoHidePending = false;
+        _retryAction = null;
         Hide();
     }
 
-    private void Show(string message, bool persistent)
+    private void OnRetry()
+    {
+        var action = _retryAction;
+        Dismiss();
+        action?.Invoke();
+    }
+
+    private void Show(string message, bool persistent, Action retryAction)
     {
         if (_toast == null)
             return;
 
         _text.text = message;
-        _toast.RemoveFromClassList("global-toast--hidden");
+        _retryAction = retryAction;
+        _toast.RemoveFromClassList(HiddenClass);
 
-        // Show dismiss button for persistent toasts, hide for auto-dismiss
+        // Retry button: visible only when a retry action is provided
+        if (_retryBtn != null)
+        {
+            if (retryAction != null)
+                _retryBtn.RemoveFromClassList(HiddenClass);
+            else
+                _retryBtn.AddToClassList(HiddenClass);
+        }
+
+        // Dismiss button: always visible for persistent toasts, hidden for auto-dismiss
         if (_dismissBtn != null)
         {
             if (persistent)
-                _dismissBtn.RemoveFromClassList("global-toast--hidden");
+                _dismissBtn.RemoveFromClassList(HiddenClass);
             else
-                _dismissBtn.AddToClassList("global-toast--hidden");
+                _dismissBtn.AddToClassList(HiddenClass);
         }
 
         if (persistent)
@@ -123,6 +158,6 @@ public sealed class GlobalToast : MonoBehaviour
     private void Hide()
     {
         if (_toast != null)
-            _toast.AddToClassList("global-toast--hidden");
+            _toast.AddToClassList(HiddenClass);
     }
 }

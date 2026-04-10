@@ -9,3 +9,17 @@
     top: 12px;
     right: 12px;
 }
+
+.global-toast__close-btn {
+    font-size: 14px;
+    color: var(--text-secondary);
+    background-color: rgba(0, 0, 0, 0);
+    border-width: 0;
+    padding: 2px 6px;
+    margin: 0;
+    -unity-text-align: middle-center;
+}
+
+.global-toast__close-btn:hover {
+    color: var(--text-primary);
+}

@@ -6,6 +6,8 @@ using UnityEngine;
 /// Static helper for submitting scores to the global leaderboard.
 /// Fire-and-forget: runs entirely in the background, shows results
 /// via <see cref="GlobalToast"/>. No caller needs to await the result.
+/// Retryable failures (network, server errors, timeouts) show a Retry
+/// button; permanent failures (rejected, unauthorized) show Dismiss only.
 /// </summary>
 public static class ScoreSubmitter
 {
@@ -39,7 +41,11 @@ public static class ScoreSubmitter
                 Debug.LogWarning(
                     $"[ScoreSubmitter] Submission failed ({result.StatusCode}): {message}"
                 );
-                ShowError(message);
+
+                if (IsRetryable(result.StatusCode))
+                    ShowRetryableError(message, api, replayJson);
+                else
+                    ShowError(message);
                 return;
             }
 
@@ -73,6 +79,7 @@ public static class ScoreSubmitter
                         Debug.LogWarning(
                             $"[ScoreSubmitter] Verification rejected: {status.reason}"
                         );
+                        // Rejection is permanent — no retry
                         ShowError(
                             !string.IsNullOrEmpty(status.reason)
                                 ? $"Verification failed: {status.reason}"
@@ -94,6 +101,7 @@ public static class ScoreSubmitter
             {
                 string message = DescribeVerificationFailure(result.Data);
                 Debug.LogWarning($"[ScoreSubmitter] Verification failed: {message}");
+                // Sync rejection is permanent
                 ShowError(message);
                 return;
             }
@@ -103,8 +111,33 @@ public static class ScoreSubmitter
         catch (System.Exception ex)
         {
             Debug.LogException(ex);
-            ShowError("Could not submit score.");
+            ShowRetryableError("Could not submit score.", api, replayJson);
         }
+    }
+
+    /// <summary>
+    /// Returns true for error codes that are transient and worth retrying.
+    /// </summary>
+    private static bool IsRetryable(long statusCode)
+    {
+        // Network failure (no connection)
+        if (statusCode == 0)
+            return true;
+
+        // Rate limited — transient
+        if (statusCode == 429)
+            return true;
+
+        // Server errors — transient
+        if (statusCode >= 500)
+            return true;
+
+        // 408 Request Timeout
+        if (statusCode == 408)
+            return true;
+
+        // Everything else (400, 401, 403, 413, etc.) is permanent
+        return false;
     }
 
     private static void ShowError(string message)
@@ -112,6 +145,13 @@ public static class ScoreSubmitter
         var toast = GlobalToast.Instance;
         if (toast != null)
             toast.ShowError(message);
+    }
+
+    private static void ShowRetryableError(string message, ApiClient api, string replayJson)
+    {
+        var toast = GlobalToast.Instance;
+        if (toast != null)
+            toast.ShowRetryableError(message, () => SubmitInBackground(api, replayJson));
     }
 
     /// <summary>Returns a user-friendly error message based on the failure type.</summary>
