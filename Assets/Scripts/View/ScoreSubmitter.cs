@@ -71,7 +71,8 @@ public static class ScoreSubmitter
                         Debug.Log(
                             $"[ScoreSubmitter] Verified: rank={status.rank}, pb={status.isPersonalBest}"
                         );
-                        return; // Success — no toast needed
+                        DismissToast();
+                        return;
                     }
 
                     if (status.status == "rejected")
@@ -93,6 +94,7 @@ public static class ScoreSubmitter
 
                 // Exhausted poll attempts — still pending, not an error
                 Debug.Log("[ScoreSubmitter] Verification still pending after polling");
+                DismissToast();
                 return;
             }
 
@@ -106,7 +108,8 @@ public static class ScoreSubmitter
                 return;
             }
 
-            // Success — no toast needed
+            // Success — dismiss any lingering retry toast
+            DismissToast();
         }
         catch (System.Exception ex)
         {
@@ -138,6 +141,13 @@ public static class ScoreSubmitter
 
         // Everything else (400, 401, 403, 413, etc.) is permanent
         return false;
+    }
+
+    private static void DismissToast()
+    {
+        var toast = GlobalToast.Instance;
+        if (toast != null)
+            toast.Dismiss();
     }
 
     private static void ShowError(string message)

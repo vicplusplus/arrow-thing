@@ -112,9 +112,9 @@ public sealed class GlobalToast : MonoBehaviour
 
     private void OnRetry()
     {
-        var action = _retryAction;
-        Dismiss();
-        action?.Invoke();
+        // Keep the toast visible during retry. The retry callback will
+        // either dismiss on success or update the message on failure.
+        _retryAction?.Invoke();
     }
 
     private void Show(string message, bool persistent, Action retryAction)
