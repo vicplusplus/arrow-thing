@@ -33,14 +33,6 @@
     -unity-text-align: middle-center;
 }
 
-/* ── Toast position override (top-right of victory overlay) ──────── */
-/* Base toast styles live in Shared.uss (.toast, .toast__text, .toast__action-btn) */
-
-.victory-toast {
-    top: 12px;
-    right: 12px;
-}
-
 .victory-time--gold {
     color: var(--text-gold);
 }

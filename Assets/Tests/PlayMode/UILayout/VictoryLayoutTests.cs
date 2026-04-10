@@ -113,47 +113,6 @@ public class VictoryLayoutTests : UILayoutTestBase
         );
     }
 
-    [UnityTest]
-    public IEnumerator Victory_Toast_Visible(
-        [ValueSource(typeof(UILayoutTestHelper), nameof(UILayoutTestHelper.StandardAspectRatios))]
-            UILayoutTestHelper.AspectRatio ratio
-    )
-    {
-        var root = SetUpDocument(VictoryUxmlPath, ratio);
-
-        var overlay = root.Q("victory-overlay");
-        overlay.RemoveFromClassList("victory--hidden");
-
-        // Simulate toast shown after failed score submission
-        var toast = root.Q("toast");
-        toast.RemoveFromClassList("victory--hidden");
-        root.Q<Label>("toast-text").text = "Could not submit score";
-
-        var actionBtn = root.Q<Button>("toast-action-btn");
-        actionBtn.RemoveFromClassList("victory--hidden");
-
-        var msgLabel = root.Q<Label>("victory-message");
-        msgLabel.text = ShortMessage;
-        msgLabel.style.fontSize = 40;
-
-        yield return UILayoutTestHelper.WaitForLayoutResolve();
-
-        var panelBounds = root.worldBound;
-        string ctx = $"Victory_Toast @ {ratio.Name}";
-        bool warn = IsKnownIssueRatio(ratio);
-
-        AssertElements(
-            overlay,
-            panelBounds,
-            ctx,
-            warn,
-            toast,
-            actionBtn,
-            root.Q<Button>("play-again-btn"),
-            root.Q<Button>("menu-btn")
-        );
-    }
-
     private IEnumerator RunVictoryTest(
         UILayoutTestHelper.AspectRatio ratio,
         string message,

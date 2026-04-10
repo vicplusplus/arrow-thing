@@ -381,21 +381,9 @@ public class NavigationCoverageTests : UILayoutTestBase
         navigable: VictoryButtons
     );
 
-    private static readonly UIState Victory_PopupWithToast = new UIState(
-        "Victory/Popup+Toast",
-        setup: root =>
-        {
-            root.Q("victory-overlay").RemoveFromClassList("victory--hidden");
-            root.Q("toast").RemoveFromClassList("victory--hidden");
-            root.Q<Button>("toast-action-btn").RemoveFromClassList("victory--hidden");
-        },
-        navigable: VictoryButtons.Concat(new[] { "toast-action-btn" }).ToArray()
-    );
-
     private static IEnumerable<UIState> VictoryStates()
     {
         yield return Victory_Popup;
-        yield return Victory_PopupWithToast;
     }
 
     [UnityTest]

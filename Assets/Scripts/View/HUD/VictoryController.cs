@@ -1,4 +1,3 @@
-using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -6,6 +5,7 @@ using UnityEngine.UIElements;
 /// Handles the board-cleared sequence: zoom-to-fit + arrow pull-out run in parallel,
 /// then grid fade-out, then victory popup with a randomized message and Play Again / Menu buttons.
 /// Records the result to the leaderboard; gold timer indicates personal best.
+/// Score submission is fire-and-forget via <see cref="ScoreSubmitter"/>.
 /// </summary>
 public sealed class VictoryController : MonoBehaviour
 {
@@ -54,14 +54,6 @@ public sealed class VictoryController : MonoBehaviour
     private Label _timeLabel;
     private System.Func<ReplayData> _buildReplayData;
     private string _recordedGameId;
-    private Task<SubmitResult> _submissionTask;
-    private bool _submissionAttempted;
-    private ReplayData _completedReplay;
-
-    // Toast notification (lives in the HUD UIDocument, not the victory popup)
-    private VisualElement _toast;
-    private Label _toastText;
-    private Button _toastActionBtn;
 
     [SerializeField]
     private float zoomOutDuration = 0.6f;
@@ -106,34 +98,26 @@ public sealed class VictoryController : MonoBehaviour
         var viewLbBtn = root.Q<Button>("view-leaderboard-btn");
         if (viewLbBtn != null)
             viewLbBtn.clicked += OnViewLeaderboard;
-
-        _toast = root.Q("toast");
-        _toastText = root.Q<Label>("toast-text");
-        _toastActionBtn = root.Q<Button>("toast-action-btn");
-        if (_toastActionBtn != null)
-            _toastActionBtn.clicked += OnRetry;
     }
 
     /// <summary>
     /// Call immediately when the last arrow starts clearing (before animation).
     /// Starts the camera zoom-to-fit in parallel with the pull-out animation.
+    /// Fires score submission in the background (fire-and-forget).
     /// </summary>
     public void OnLastArrowClearing()
     {
         _zoomDone = false;
         _pullOutDone = false;
 
-        // Fire score submission in the background while the animation plays.
-        var api = new ApiClient();
-        if (api.IsLoggedIn && _buildReplayData != null && _timer != null)
+        // Fire-and-forget score submission via GlobalToast for error reporting.
+        if (_buildReplayData != null && _timer != null)
         {
             var replay = _buildReplayData.Invoke();
             if (replay != null)
             {
                 replay.finalTime = _timer.SolveElapsed;
-                _completedReplay = replay;
-                _submissionAttempted = true;
-                _submissionTask = ScoreSubmitter.TrySubmitAsync(replay);
+                ScoreSubmitter.Submit(replay);
             }
         }
 
@@ -170,7 +154,7 @@ public sealed class VictoryController : MonoBehaviour
         _gridRenderer.FadeOut(gridFadeDuration, ShowPopup);
     }
 
-    private async void ShowPopup()
+    private void ShowPopup()
     {
         double elapsed = _timer != null ? _timer.SolveElapsed : -1.0;
         Debug.Log(
@@ -197,14 +181,6 @@ public sealed class VictoryController : MonoBehaviour
 
         RecordToLeaderboard();
 
-        // Check submission result and show toast if needed.
-        if (_submissionAttempted && _submissionTask != null)
-        {
-            var result = await _submissionTask;
-            _submissionTask = null;
-            HandleSubmissionResult(result);
-        }
-
         _overlay.RemoveFromClassList("victory--hidden");
 
         // Set up keyboard navigation for victory popup buttons.
@@ -213,36 +189,14 @@ public sealed class VictoryController : MonoBehaviour
 
     private FocusNavigator _victoryNavigator;
 
-    private void SetupVictoryNavigator(bool focusLeaderboard = false)
+    private void SetupVictoryNavigator()
     {
         var root = _uiDocument.rootVisualElement;
         _victoryNavigator = new FocusNavigator(root);
 
         var items = new System.Collections.Generic.List<FocusNavigator.FocusItem>();
 
-        // Toast retry (top-right, visible after failed submission).
-        int retryIdx = -1;
-        if (
-            _toastActionBtn != null
-            && _toast != null
-            && !_toast.ClassListContains("victory--hidden")
-        )
-        {
-            retryIdx = items.Count;
-            items.Add(
-                new FocusNavigator.FocusItem
-                {
-                    Element = _toastActionBtn,
-                    OnActivate = () =>
-                    {
-                        OnRetry();
-                        return true;
-                    },
-                }
-            );
-        }
-
-        // Vertical column: View Leaderboard → Play Again → Menu.
+        // Vertical column: View Leaderboard -> Play Again -> Menu.
         int lbIdx = -1;
         var viewLb = root.Q<Button>("view-leaderboard-btn");
         if (viewLb != null)
@@ -297,22 +251,15 @@ public sealed class VictoryController : MonoBehaviour
             );
         }
 
-        // Default focus on Play Again, or Leaderboard after successful retry.
-        int defaultFocus = focusLeaderboard && lbIdx >= 0 ? lbIdx : (playIdx >= 0 ? playIdx : 0);
+        // Default focus on Play Again.
+        int defaultFocus = playIdx >= 0 ? playIdx : 0;
         _victoryNavigator.SetItems(items, defaultFocus);
 
-        // Vertical chain: Leaderboard ↔ Play Again ↔ Menu.
+        // Vertical chain: Leaderboard <-> Play Again <-> Menu.
         if (lbIdx >= 0 && playIdx >= 0)
             _victoryNavigator.LinkBidi(lbIdx, FocusNavigator.NavDir.Down, playIdx);
         if (playIdx >= 0 && menuIdx >= 0)
             _victoryNavigator.LinkBidi(playIdx, FocusNavigator.NavDir.Down, menuIdx);
-
-        // Toast retry: Right from Leaderboard, Up from Leaderboard goes to retry.
-        if (retryIdx >= 0 && lbIdx >= 0)
-        {
-            _victoryNavigator.LinkBidi(lbIdx, FocusNavigator.NavDir.Right, retryIdx);
-            _victoryNavigator.LinkBidi(lbIdx, FocusNavigator.NavDir.Up, retryIdx);
-        }
     }
 
     private void Update()
@@ -363,66 +310,6 @@ public sealed class VictoryController : MonoBehaviour
 
         if (isNewBest && _timeLabel != null)
             _timeLabel.AddToClassList("victory-time--gold");
-    }
-
-    private void HandleSubmissionResult(SubmitResult result)
-    {
-        if (result.IsSuccess)
-        {
-            HideToast();
-        }
-        else if (result.IsPending)
-        {
-            ShowToast("Score submitted \u2014 verification in progress");
-            // Hide retry button since the score is being processed
-            if (_toastActionBtn != null)
-                _toastActionBtn.AddToClassList("victory--hidden");
-        }
-        else
-        {
-            ShowToast(result.Error ?? "Could not submit score");
-        }
-    }
-
-    private void ShowToast(string message)
-    {
-        if (_toast == null)
-            return;
-
-        if (_toastText != null)
-            _toastText.text = message;
-
-        if (_toastActionBtn != null)
-            _toastActionBtn.RemoveFromClassList("victory--hidden");
-
-        _toast.RemoveFromClassList("victory--hidden");
-    }
-
-    private void HideToast()
-    {
-        if (_toast != null)
-            _toast.AddToClassList("victory--hidden");
-    }
-
-    private async void OnRetry()
-    {
-        if (_completedReplay == null || _toastActionBtn == null)
-            return;
-
-        _toastActionBtn.SetEnabled(false);
-        var result = await ScoreSubmitter.TrySubmitAsync(_completedReplay);
-        _toastActionBtn.SetEnabled(true);
-
-        if (result.IsSuccess)
-        {
-            HideToast();
-            // Rebuild navigator without retry button; focus on leaderboard.
-            SetupVictoryNavigator(focusLeaderboard: true);
-        }
-        else
-        {
-            ShowToast(result.Error ?? "Retry failed");
-        }
     }
 
     private static string FormatTime(double seconds)

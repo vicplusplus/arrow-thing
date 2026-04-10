@@ -1,0 +1,9 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <Style src="Shared.uss" />
+    <Style src="GlobalToast.uss" />
+
+    <ui:VisualElement name="global-toast" class="toast global-toast global-toast--hidden" picking-mode="Ignore">
+        <ui:Label name="global-toast-text" class="toast__text" />
+        <ui:Button name="global-toast-dismiss" class="toast__action-btn" text="Dismiss" />
+    </ui:VisualElement>
+</ui:UXML>
