@@ -750,6 +750,8 @@ public class PlayerEntryResponse
     public string gameId;
     public int boardWidth;
     public int boardHeight;
+    public bool flagged;
+    public string flagReason;
 }
 
 [Serializable]

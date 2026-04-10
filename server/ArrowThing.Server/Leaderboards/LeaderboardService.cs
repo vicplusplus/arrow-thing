@@ -21,11 +21,11 @@ public class LeaderboardService
             return cached;
 
         var totalEntries = await _db.Scores.CountAsync(s =>
-            s.BoardWidth == width && s.BoardHeight == height && !s.Flagged
+            s.BoardWidth == width && s.BoardHeight == height && !s.User.Flagged
         );
 
         var entries = await _db
-            .Scores.Where(s => s.BoardWidth == width && s.BoardHeight == height && !s.Flagged)
+            .Scores.Where(s => s.BoardWidth == width && s.BoardHeight == height && !s.User.Flagged)
             .OrderBy(s => s.Time)
             .Take(limit)
             .Select(s => new LeaderboardEntryDto
@@ -33,6 +33,7 @@ public class LeaderboardService
                 DisplayName = s.User.DisplayName,
                 Time = s.Time,
                 GameId = s.GameId.ToString(),
+                Id = s.Id,
             })
             .ToListAsync();
 
@@ -53,7 +54,10 @@ public class LeaderboardService
 
         // For each user, find their score with the largest board area, then fastest time.
         // This uses a raw approach: get all scores grouped by user, pick representative.
-        var allScores = await _db.Scores.Where(s => !s.Flagged).Include(s => s.User).ToListAsync();
+        var allScores = await _db
+            .Scores.Where(s => !s.User.Flagged)
+            .Include(s => s.User)
+            .ToListAsync();
 
         var byUser = allScores
             .GroupBy(s => s.UserId)
@@ -82,6 +86,7 @@ public class LeaderboardService
                         GameId = s.GameId.ToString(),
                         BoardWidth = s.BoardWidth,
                         BoardHeight = s.BoardHeight,
+                        Id = s.Id,
                     }
             )
             .ToList();
@@ -93,9 +98,11 @@ public class LeaderboardService
 
     public async Task<PlayerEntryDto?> GetPlayerEntryAsync(Guid userId, int width, int height)
     {
-        var score = await _db.Scores.FirstOrDefaultAsync(s =>
-            s.UserId == userId && s.BoardWidth == width && s.BoardHeight == height
-        );
+        var score = await _db
+            .Scores.Include(s => s.User)
+            .FirstOrDefaultAsync(s =>
+                s.UserId == userId && s.BoardWidth == width && s.BoardHeight == height
+            );
 
         if (score == null)
             return null;
@@ -104,12 +111,12 @@ public class LeaderboardService
             await _db.Scores.CountAsync(s =>
                 s.BoardWidth == width
                 && s.BoardHeight == height
-                && !s.Flagged
+                && !s.User.Flagged
                 && s.Time < score.Time
             ) + 1;
 
         var totalEntries = await _db.Scores.CountAsync(s =>
-            s.BoardWidth == width && s.BoardHeight == height && !s.Flagged
+            s.BoardWidth == width && s.BoardHeight == height && !s.User.Flagged
         );
 
         return new PlayerEntryDto
@@ -118,12 +125,17 @@ public class LeaderboardService
             TotalEntries = totalEntries,
             Time = score.Time,
             GameId = score.GameId.ToString(),
+            Flagged = score.User.Flagged,
+            FlagReason = score.User.FlagReason,
         };
     }
 
     public async Task<PlayerEntryDto?> GetPlayerEntryAllAsync(Guid userId)
     {
-        var userScores = await _db.Scores.Where(s => s.UserId == userId).ToListAsync();
+        var userScores = await _db
+            .Scores.Include(s => s.User)
+            .Where(s => s.UserId == userId)
+            .ToListAsync();
 
         if (userScores.Count == 0)
             return null;
@@ -135,7 +147,7 @@ public class LeaderboardService
             .First();
 
         // Compute rank among all users' representative scores
-        var allScores = await _db.Scores.Where(s => !s.Flagged).ToListAsync();
+        var allScores = await _db.Scores.Where(s => !s.User.Flagged).ToListAsync();
         var allRepresentatives = allScores
             .GroupBy(s => s.UserId)
             .Select(g =>
@@ -159,6 +171,8 @@ public class LeaderboardService
             GameId = representative.GameId.ToString(),
             BoardWidth = representative.BoardWidth,
             BoardHeight = representative.BoardHeight,
+            Flagged = representative.User.Flagged,
+            FlagReason = representative.User.FlagReason,
         };
     }
 
@@ -184,6 +198,7 @@ public class LeaderboardEntryDto
     public string DisplayName { get; set; } = "";
     public double Time { get; set; }
     public string GameId { get; set; } = "";
+    public Guid Id { get; set; }
     public int? BoardWidth { get; set; }
     public int? BoardHeight { get; set; }
 }
@@ -196,4 +211,6 @@ public class PlayerEntryDto
     public string GameId { get; set; } = "";
     public int? BoardWidth { get; set; }
     public int? BoardHeight { get; set; }
+    public bool Flagged { get; set; }
+    public string? FlagReason { get; set; }
 }
