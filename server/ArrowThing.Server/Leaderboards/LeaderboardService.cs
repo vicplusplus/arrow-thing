@@ -98,9 +98,11 @@ public class LeaderboardService
 
     public async Task<PlayerEntryDto?> GetPlayerEntryAsync(Guid userId, int width, int height)
     {
-        var score = await _db.Scores.FirstOrDefaultAsync(s =>
-            s.UserId == userId && s.BoardWidth == width && s.BoardHeight == height
-        );
+        var score = await _db
+            .Scores.Include(s => s.User)
+            .FirstOrDefaultAsync(s =>
+                s.UserId == userId && s.BoardWidth == width && s.BoardHeight == height
+            );
 
         if (score == null)
             return null;
@@ -123,12 +125,17 @@ public class LeaderboardService
             TotalEntries = totalEntries,
             Time = score.Time,
             GameId = score.GameId.ToString(),
+            Flagged = score.User.Flagged,
+            FlagReason = score.User.FlagReason,
         };
     }
 
     public async Task<PlayerEntryDto?> GetPlayerEntryAllAsync(Guid userId)
     {
-        var userScores = await _db.Scores.Where(s => s.UserId == userId).ToListAsync();
+        var userScores = await _db
+            .Scores.Include(s => s.User)
+            .Where(s => s.UserId == userId)
+            .ToListAsync();
 
         if (userScores.Count == 0)
             return null;
@@ -164,6 +171,8 @@ public class LeaderboardService
             GameId = representative.GameId.ToString(),
             BoardWidth = representative.BoardWidth,
             BoardHeight = representative.BoardHeight,
+            Flagged = representative.User.Flagged,
+            FlagReason = representative.User.FlagReason,
         };
     }
 
@@ -202,4 +211,6 @@ public class PlayerEntryDto
     public string GameId { get; set; } = "";
     public int? BoardWidth { get; set; }
     public int? BoardHeight { get; set; }
+    public bool Flagged { get; set; }
+    public string? FlagReason { get; set; }
 }

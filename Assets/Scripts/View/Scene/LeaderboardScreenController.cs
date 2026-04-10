@@ -1108,6 +1108,16 @@ public sealed class LeaderboardScreenController : NavigableScene
             return;
         }
 
+        if (me.flagged)
+        {
+            var reason = string.IsNullOrEmpty(me.flagReason)
+                ? "flagged"
+                : me.flagReason.Replace("_", " ");
+            _playerPanelLabel.text = $"Account flagged: {reason}. Contact support.";
+            ShowElement(_playerPlayBtn, false);
+            return;
+        }
+
         _playerPanelLabel.text =
             $"Your best: #{me.rank} of {me.totalEntries} \u00B7 {FormatTime(me.time)}";
         _playerGameId = me.gameId;
