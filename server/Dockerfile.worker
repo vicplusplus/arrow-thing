@@ -16,7 +16,7 @@ COPY server/ArrowThing.Domain/ server/ArrowThing.Domain/
 COPY server/ArrowThing.Server/ server/ArrowThing.Server/
 COPY server/ArrowThing.Worker/ server/ArrowThing.Worker/
 RUN dotnet publish server/ArrowThing.Worker/ArrowThing.Worker.csproj \
-    -c Release -o /app/publish --no-restore
+    -c Release -o /app/publish
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
