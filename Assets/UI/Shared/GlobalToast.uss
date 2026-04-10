@@ -1,5 +1,6 @@
 /* GlobalToast — persists across scenes, renders above all other UI. */
-/* Base toast styles (.toast, .toast__text, .toast__action-btn) live in Shared.uss. */
+/* Base toast styles (.toast, .toast__text) live in Shared.uss. */
+/* Named icon classes (.icon--close, .icon--refresh) live in Shared.uss. */
 
 .global-toast--hidden {
     display: none;
@@ -10,16 +11,26 @@
     right: 12px;
 }
 
-.global-toast__close-btn {
-    font-size: 14px;
-    color: var(--text-secondary);
+.global-toast__btn {
+    width: 28px;
+    height: 28px;
+    padding: 5px;
+    margin: 0 0 0 4px;
     background-color: rgba(0, 0, 0, 0);
     border-width: 0;
-    padding: 2px 6px;
-    margin: 0;
-    -unity-text-align: middle-center;
+    border-radius: 4px;
 }
 
-.global-toast__close-btn:hover {
-    color: var(--text-primary);
+.global-toast__btn:hover {
+    background-color: var(--bg-btn-hover);
+}
+
+.global-toast__btn-icon {
+    flex-grow: 1;
+    -unity-background-scale-mode: scale-to-fit;
+    -unity-background-image-tint-color: var(--text-secondary);
+}
+
+.global-toast__btn:hover .global-toast__btn-icon {
+    -unity-background-image-tint-color: var(--text-primary);
 }

@@ -4,7 +4,11 @@
 
     <ui:VisualElement name="global-toast" class="toast global-toast global-toast--hidden" picking-mode="Ignore">
         <ui:Label name="global-toast-text" class="toast__text" />
-        <ui:Button name="global-toast-retry" class="toast__action-btn global-toast--hidden" text="Retry" />
-        <ui:Button name="global-toast-dismiss" class="global-toast__close-btn" text="✕" />
+        <ui:Button name="global-toast-retry" class="global-toast__btn global-toast--hidden">
+            <ui:VisualElement class="global-toast__btn-icon icon--refresh" />
+        </ui:Button>
+        <ui:Button name="global-toast-dismiss" class="global-toast__btn global-toast--hidden">
+            <ui:VisualElement class="global-toast__btn-icon icon--close" />
+        </ui:Button>
     </ui:VisualElement>
 </ui:UXML>
