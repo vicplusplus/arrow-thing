@@ -78,6 +78,26 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  worker:
+    image: ghcr.io/vicplusplus/arrow-thing-worker:latest
+    restart: unless-stopped
+    environment:
+      - ConnectionStrings__Default=Host=db;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      - Redis__ConnectionString=redis:6379
+      - Loki__Url=http://loki:3100
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      loki:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   nginx:
     image: nginx:alpine
     restart: unless-stopped

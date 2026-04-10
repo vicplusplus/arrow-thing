@@ -324,6 +324,15 @@ public class ApiClient
             while (!op.isDone)
                 await Task.Yield();
 
+            // 202 Accepted — async verification, need to poll
+            if (request.responseCode == 202)
+            {
+                var accepted = JsonUtility.FromJson<SubmitAcceptedResponse>(
+                    request.downloadHandler.text
+                );
+                return ApiResult<SubmitResultResponse>.Accepted(accepted.gameId);
+            }
+
             if (request.result == UnityWebRequest.Result.Success)
             {
                 var response = JsonUtility.FromJson<SubmitResultResponse>(
@@ -339,6 +348,36 @@ public class ApiClient
         {
             Debug.LogWarning($"[ApiClient] SubmitScore failed: {e.Message}");
             return ApiResult<SubmitResultResponse>.Fail(0, "Network error");
+        }
+    }
+
+    public async Task<ApiResult<ScoreStatusResponse>> GetScoreStatusAsync(string gameId)
+    {
+        try
+        {
+            using var request = UnityWebRequest.Get($"{_baseUrl}/api/scores/{gameId}/status");
+            request.SetRequestHeader("Authorization", $"Bearer {Token}");
+            request.timeout = 10;
+
+            var op = request.SendWebRequest();
+            while (!op.isDone)
+                await Task.Yield();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var response = JsonUtility.FromJson<ScoreStatusResponse>(
+                    request.downloadHandler.text
+                );
+                return ApiResult<ScoreStatusResponse>.Ok(response);
+            }
+
+            var error = TryParseError(request.downloadHandler.text);
+            return ApiResult<ScoreStatusResponse>.Fail(request.responseCode, error);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] GetScoreStatus failed: {e.Message}");
+            return ApiResult<ScoreStatusResponse>.Fail(0, "Network error");
         }
     }
 
@@ -724,6 +763,22 @@ public class SubmitResultResponse
 }
 
 [Serializable]
+public class SubmitAcceptedResponse
+{
+    public string gameId;
+    public string status;
+}
+
+[Serializable]
+public class ScoreStatusResponse
+{
+    public string status;
+    public int rank;
+    public bool isPersonalBest;
+    public string reason;
+}
+
+[Serializable]
 public class GlobalLeaderboardResponse
 {
     public int totalEntries;
@@ -763,11 +818,22 @@ public class ReplayFetchResponse
 public class ApiResult<T>
 {
     public bool Success { get; private set; }
+    public bool IsAccepted { get; private set; }
+    public string AcceptedGameId { get; private set; }
     public T Data { get; private set; }
     public long StatusCode { get; private set; }
     public string Error { get; private set; }
 
     public static ApiResult<T> Ok(T data) => new ApiResult<T> { Success = true, Data = data };
+
+    public static ApiResult<T> Accepted(string gameId) =>
+        new ApiResult<T>
+        {
+            Success = true,
+            IsAccepted = true,
+            AcceptedGameId = gameId,
+            StatusCode = 202,
+        };
 
     public static ApiResult<T> Fail(long statusCode, string error) =>
         new ApiResult<T>

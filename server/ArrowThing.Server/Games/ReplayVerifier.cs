@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 
+namespace ArrowThing.Server.Games;
+
 /// <summary>
 /// Verifies a completed replay by regenerating the board from seed,
 /// comparing it against the snapshot, and simulating all clear events.

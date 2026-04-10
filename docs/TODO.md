@@ -1,34 +1,27 @@
-# PR 2: Redis Infrastructure
+# PR 3: Verification Worker
 
-Reference: `docs/AntiCheatDesign.md` § PR 2
+Reference: `docs/AntiCheatDesign.md` § PR 3
 
 ## Plan
 
-1. **Docker Compose** — Add Redis 7 Alpine to both dev and deploy compose files
-   - Internal-only (expose, not ports)
-   - AOF persistence, 256MB max memory, allkeys-lru eviction
-   - Health check via `redis-cli ping`
-   - Volume for persistence
+1. **Create `ArrowThing.Worker` project** — .NET 10 console app with `Microsoft.Extensions.Hosting`. References `ArrowThing.Domain` (for `ReplayVerifier`). Uses `StackExchange.Redis` + `Npgsql.EntityFrameworkCore.PostgreSQL`. Add to solution.
 
-2. **NuGet** — Add `StackExchange.Redis` to `ArrowThing.Server.csproj`
+2. **`VerificationWorker`** — `BackgroundService` that BRPOP from `verify:queue`, runs `ReplayVerifier.Verify()`, persists score to DB, writes result to `verify:result:{gameId}` (1h TTL).
 
-3. **DI registration** — Register `IConnectionMultiplexer` as singleton in `Program.cs`
-   - Connection string from `Redis:ConnectionString` config key
-   - Dev .env loader maps `REDIS_CONNECTION_STRING` env var
+3. **Update `GameService`** — After pre-verification, enqueue job to Redis and return 202. Remove inline verify + persistence.
 
-4. **Migrate LeaderboardCache to Redis**
-   - Replace `ConcurrentDictionary` with Redis GET/SET
-   - Keys: `leaderboard:{width}x{height}`, `leaderboard:all`
-   - TTL: 5 minutes (or until invalidated)
-   - Invalidate by DEL key
-   - Serialize/deserialize `LeaderboardResponse` as JSON
+4. **Add `GET /api/scores/{gameId}/status`** — Reads result from Redis, returns pending/verified/rejected.
 
-5. **Config** — Update `.env.sample` with `REDIS_CONNECTION_STRING`
+5. **Dockerfile.worker** — Multi-stage build.
 
-6. **Tests** — Add `Testcontainers.Redis` to test project, spin up Redis container in `TestFactory`
+6. **Docker Compose** — Add worker service.
 
-7. **Manual testing** — Verify leaderboard caching works end-to-end
+7. **CI/CD** — Build + push worker image alongside API.
+
+8. **Client** — Handle 202 + poll status in `ApiClient`/`ScoreSubmitter`.
+
+9. **Tests** — Update integration tests for 202 flow.
 
 ## Open Questions
 
-None — design is settled in AntiCheatDesign.md.
+None.

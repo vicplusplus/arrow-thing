@@ -1,3 +1,5 @@
+namespace ArrowThing.Server.Games;
+
 /// <summary>
 /// Result of replay verification. Contains validity status,
 /// a reason string on failure, and the server-computed solve time on success.

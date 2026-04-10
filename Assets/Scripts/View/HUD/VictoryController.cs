@@ -371,6 +371,13 @@ public sealed class VictoryController : MonoBehaviour
         {
             HideToast();
         }
+        else if (result.IsPending)
+        {
+            ShowToast("Score submitted \u2014 verification in progress");
+            // Hide retry button since the score is being processed
+            if (_toastActionBtn != null)
+                _toastActionBtn.AddToClassList("victory--hidden");
+        }
         else
         {
             ShowToast(result.Error ?? "Could not submit score");

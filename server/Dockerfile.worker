@@ -10,15 +10,15 @@ COPY server/ArrowThing.Domain/ArrowThing.Domain.csproj server/ArrowThing.Domain/
 COPY server/ArrowThing.Server/ArrowThing.Server.csproj server/ArrowThing.Server/
 COPY server/ArrowThing.Server.Tests/ArrowThing.Server.Tests.csproj server/ArrowThing.Server.Tests/
 COPY server/ArrowThing.Worker/ArrowThing.Worker.csproj server/ArrowThing.Worker/
-RUN dotnet restore server/ArrowThing.Server/ArrowThing.Server.csproj
+RUN dotnet restore server/ArrowThing.Worker/ArrowThing.Worker.csproj
 
 COPY server/ArrowThing.Domain/ server/ArrowThing.Domain/
 COPY server/ArrowThing.Server/ server/ArrowThing.Server/
-RUN dotnet publish server/ArrowThing.Server/ArrowThing.Server.csproj \
+COPY server/ArrowThing.Worker/ server/ArrowThing.Worker/
+RUN dotnet publish server/ArrowThing.Worker/ArrowThing.Worker.csproj \
     -c Release -o /app/publish --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/publish .
-ENTRYPOINT ["dotnet", "ArrowThing.Server.dll"]
+ENTRYPOINT ["dotnet", "ArrowThing.Worker.dll"]

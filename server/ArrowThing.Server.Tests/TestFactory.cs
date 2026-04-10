@@ -1,5 +1,6 @@
 using ArrowThing.Server.Auth;
 using ArrowThing.Server.Data;
+using ArrowThing.Server.Games;
 using DotNet.Testcontainers.Builders;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -79,6 +80,9 @@ public class TestFactory : WebApplicationFactory<Program>, IAsyncLifetime
                 services.Remove(emailDescriptor);
 
             services.AddSingleton<IEmailService>(fakeEmail);
+
+            // Run verification worker in-process so tests can exercise the full async flow
+            services.AddHostedService<VerificationWorker>();
         });
     }
 }
