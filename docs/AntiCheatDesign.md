@@ -16,7 +16,9 @@ Replay verification is also synchronous and single-threaded — a large board ve
 
 ---
 
-## PR 1: Pre-Verification Static Checks
+## PR 1: Pre-Verification & Account Flagging — COMPLETED
+
+Merged: #81, #82
 
 ### Problem
 
@@ -28,64 +30,60 @@ Three classes of invalid submissions can be caught with cheap static checks befo
 
 ### Design
 
-The API runs these checks **synchronously on the request thread** before enqueuing for full verification (PR 3). They're all O(1) or O(n) over event count — no board generation, no simulation.
+All pre-verification checks run **synchronously on the request thread**. They're all O(1) or O(n) over event count — no board generation, no simulation. Failures flag the **user account** (not individual scores) and reject with 403.
+
+#### Submission flow
+
+1. Deserialize replay.
+2. **User flag check** → if `User.Flagged`, reject 403.
+3. **Board size check** → if invalid, flag user and reject 403.
+4. **Timing check** → if implausibly fast, flag user and reject 403.
+5. **Seed duplicate check** → if match found, flag user and reject 403.
+6. Idempotency check (existing score with same gameId).
+7. Rate limit check.
+8. Full verification (`ReplayVerifier.Verify`).
+9. Persist score.
+
+No score record is created for flagged submissions. The user account is permanently locked from future submissions until an admin unflags them.
 
 #### Board size validation
 
 | Limit | Value | Rationale |
 |-------|-------|-----------|
-| Min width | 2 | Minimum playable board |
-| Min height | 2 | Minimum playable board |
-| Max width | 400 | Client slider maximum |
-| Max height | 400 | Client slider maximum |
-
-Reject the submission (400) before any further work.
+| Min dimension | 2 | Minimum playable board |
+| Max dimension | 400 | Client slider maximum |
 
 #### Minimum solve time
 
 | Check | Formula | Action |
 |-------|---------|--------|
-| **Min solve time** | `clearCount * 0.08s` | Reject: "Solve time implausibly fast." |
+| **Min solve time** | `clearCount * 0.08s` | Flag user, reject 403 |
 
-Where `clearCount` is the number of successful arrow clears only (not rejects, misses, or other events).
-
-Rationale:
-- 0.08s/arrow is the absolute physical floor. A 10x10 board has ~8 arrows; 0.08 * 8 = 0.64s minimum. A legitimate 1.75s solve on 8 arrows is 0.22s/arrow — well above the threshold.
-- No inter-event gap check. Players legitimately click very rapidly (autoclickers, spam-clicking, or just fast fingers), and two clears can land within a single frame on small boards. The per-arrow minimum on total time is sufficient — the real bottleneck is moving between arrows and processing the board, not individual click speed.
-
-**Edge case: small boards.** On very small boards, a fast player can clear all arrows within a frame or two each. The first clear also shares a timestamp with `start_solve`, making sub-frame solves legitimate. Timing checks are skipped entirely when `clearCount <= 5`. The smallest standard preset (10x10) generates well above 5 arrows, so this threshold doesn't create a gap for meaningful boards.
+Where `clearCount` is the number of successful arrow clears only (not rejects, misses, or other events). Skipped when `clearCount <= 5` (very small boards where sub-frame solves are legitimate).
 
 #### Seed duplicate detection
 
-On score submission, check if any other user already has a score with the same `(Seed, BoardWidth, BoardHeight)`. Cheap query — unique index on `(UserId, BoardWidth, BoardHeight)`.
-
-| Scenario | Action |
-|----------|--------|
-| Same seed, different user | Flag the new submission (`Score.Flagged = true`, `FlagReason = "duplicate_seed"`). The existing score is the victim — left untouched. |
-| Same seed, same user | Already handled by idempotency check. |
+On score submission, check if any other user already has a score with the same `(Seed, BoardWidth, BoardHeight)`. If found, flag the submitting user and reject — no score is created. The existing score (the victim) is left untouched.
 
 ### Database changes
 
-**Score model:**
-- `Flagged` (bool, default false) — score-level flag for suspicious scores. Flagged scores are excluded from leaderboard queries (`WHERE Flagged = false`).
-- `FlagReason` (string, nullable) — reason for the flag.
+**User model:**
+- `Flagged` (bool, default false) — account-level flag. Flagged users are excluded from leaderboard queries and blocked from submitting scores.
+- `FlagReason` (string, nullable) — reason for the flag (e.g. "duplicate_seed", "Solve time implausibly fast.").
 
 ### Admin endpoints
 
 ```
-GET  /api/admin/flagged-scores              → list of flagged scores with reasons
-POST /api/admin/scores/{id}/unflag          → clear the score flag
-POST /api/admin/scores/{id}/remove          → hard delete (confirmed cheat)
+GET  /api/admin/flagged-users            → list of flagged users with reasons
+POST /api/admin/users/{id}/unflag        → clear the user flag, re-enable submissions
+POST /api/admin/scores/{id}/remove       → hard delete a score
 ```
 
-### Implementation
+### Leaderboard integration
 
-**Pre-verification (API thread, synchronous):**
-1. Deserialize replay.
-2. Board size check → if invalid, reject.
-3. Timing checks (min solve time, min inter-event gap) → if invalid, reject.
-4. Seed duplicate check → if match found, flag both scores.
-5. If all pre-checks pass, enqueue for full verification (PR 3).
+- All leaderboard queries filter `!s.User.Flagged` — scores from flagged users are invisible.
+- Player entry endpoints (`/me`) include `flagged` and `flagReason` fields.
+- Client player panel shows "Account flagged: {reason}" when the user is flagged, with no play button.
 
 ### New replay event type: `miss`
 
@@ -98,13 +96,14 @@ Add a `miss` event type for clicks that don't hit any arrow. Same shape as `reje
 
 ### Changes
 
-- `ReplayVerifier.cs` — new static `PreVerify(ReplayData)` method for timing checks (no board generation)
+- `ReplayVerifier.cs` — new static `PreVerify(ReplayData)` method for timing/size checks
 - `ReplayEventType` / `InputHandler` — add `miss` event type
-- `Score.cs` — add `Flagged` + `FlagReason` columns + migration
-- `GameService.cs` — pre-verification gate, seed dedup
-- `LeaderboardService.cs` — filter `Flagged = false`
-- `Program.cs` — admin endpoints
-- Tests: rejects out-of-range boards, rejects sub-threshold times, accepts normal times, skips timing for clearCount <= 5, duplicate seed flags new submission, flagged scores excluded from leaderboard
+- `User.cs` — add `Flagged` + `FlagReason` columns + migration
+- `GameService.cs` — user flag check, pre-verification gate with user flagging, seed dedup with user flagging
+- `LeaderboardService.cs` — filter `!s.User.Flagged`, include flag status in player entry
+- `Program.cs` — admin endpoints (flagged-users, unflag-user, remove-score)
+- `ApiClient.cs` / `LeaderboardScreenController.cs` — show flag status in player panel
+- Tests: 9 EditMode tests for PreVerify, 8 server integration tests (oversized board, implausibly fast, seed dedup, admin flagged/unflag/remove, flagged account blocking, pre-verify flags then blocks)
 
 ---
 
@@ -280,7 +279,7 @@ GET /api/scores/{gameId}/status → { status: "pending" | "verified" | "rejected
 
 `POST /api/scores` now:
 1. Deserialize replay.
-2. Run pre-verification (PR 1): board size, timing, inter-event gaps.
+2. Run pre-verification (PR 1): user flag check, board size, timing, seed dedup.
 3. Idempotency check (existing score with same gameId).
 4. Rate limit check.
 5. Enqueue to Redis.
@@ -308,14 +307,10 @@ No inline verification path. All boards go through the worker.
 ## Implementation Order
 
 ```
-PR 1 (pre-verification)        — standalone, do first (covers DoS + timing + dedup)
-PR 2 (Redis infrastructure)    — standalone, prerequisite for PR 3
+PR 1 (pre-verification)        — ✅ COMPLETED (#81, #82)
+PR 2 (Redis infrastructure)    — next, prerequisite for PR 3
 PR 3 (verification worker)     — depends on PR 2
 ```
-
-Suggested order: **PR 1 → PR 2 → PR 3**
-
-PR 1 is the most urgent — it blocks the DoS vector (oversized boards rejected before verification), catches fabricated timestamps, and flags stolen replays. PR 2 + PR 3 then move the expensive verification off the request thread.
 
 ---
 
@@ -325,5 +320,5 @@ PR 1 is the most urgent — it blocks the DoS vector (oversized boards rejected 
 - **WebSocket-based server-witnessed timing** — mentioned in OnlineRoadmap.md as a future path.
 - **IP-based rate limiting** — already handled by Cloudflare (60 req/10s per IP) and Nginx (30 req/min API, 5 req/min auth).
 - **Client-side obfuscation** — security through obscurity, not worth the maintenance cost.
-- **Soft-flag / manual review queue** — not worth the overhead for current player base. Hard reject blatant cheaters, flag duplicate seeds, that's it.
+- **Score-level flagging** — considered and removed. User-level flagging is simpler and more effective: a cheater's entire account is locked, not just individual scores. Admin can unflag users after review.
 - **Play session tokens** — considered and rejected. Tokens prove presence at start/end but not during play. Save/resume makes continuous check-ins impractical. Bots that actually play the game are effectively impossible to distinguish from fast humans for this game type. PR 1 (timing + seed dedup) covers the real threats.
