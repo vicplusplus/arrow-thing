@@ -25,4 +25,10 @@ public class Score
 
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+
+    /// <summary>Whether this score has been flagged for review (e.g. duplicate seed).</summary>
+    public bool Flagged { get; set; }
+
+    /// <summary>Reason for flagging, if any (e.g. "duplicate_seed").</summary>
+    public string? FlagReason { get; set; }
 }

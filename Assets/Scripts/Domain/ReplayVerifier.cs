@@ -7,6 +7,53 @@ using System.Collections.Generic;
 /// </summary>
 public static class ReplayVerifier
 {
+    private const double MinSecondsPerArrow = 0.08;
+    private const int TimingCheckMinClearCount = 5;
+    private const int MinBoardDimension = 2;
+    private const int MaxBoardDimension = 400;
+
+    /// <summary>
+    /// Cheap static checks that run before expensive board regeneration.
+    /// Validates board dimensions and solve timing plausibility.
+    /// Returns null if all checks pass; returns a reason string on failure.
+    /// </summary>
+    public static string PreVerify(ReplayData replay)
+    {
+        if (replay == null)
+            return "Replay is null.";
+
+        // Board size validation
+        if (
+            replay.boardWidth < MinBoardDimension
+            || replay.boardHeight < MinBoardDimension
+            || replay.boardWidth > MaxBoardDimension
+            || replay.boardHeight > MaxBoardDimension
+        )
+            return "Board dimensions out of range.";
+
+        if (replay.events == null || replay.events.Count == 0)
+            return "Replay has no events.";
+
+        // Count successful clears only
+        int clearCount = 0;
+        for (int i = 0; i < replay.events.Count; i++)
+        {
+            if (replay.events[i].type == ReplayEventType.Clear)
+                clearCount++;
+        }
+
+        // Timing checks skipped for small boards (clearCount <= 5)
+        if (clearCount > TimingCheckMinClearCount)
+        {
+            double solveTime = replay.ComputedSolveElapsed;
+            double minTime = clearCount * MinSecondsPerArrow;
+            if (solveTime < minTime)
+                return "Solve time implausibly fast.";
+        }
+
+        return null;
+    }
+
     public static VerificationResult Verify(ReplayData replay)
     {
         try

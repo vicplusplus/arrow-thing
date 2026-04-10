@@ -133,6 +133,20 @@ public sealed class ReplayRecorder
         );
     }
 
+    public void RecordMiss(float posX, float posY)
+    {
+        _events.Add(
+            new ReplayEvent
+            {
+                seq = _nextSeq++,
+                type = ReplayEventType.Miss,
+                posX = posX,
+                posY = posY,
+                timestamp = DateTime.UtcNow.ToString("O"),
+            }
+        );
+    }
+
     /// <summary>
     /// Produces a <see cref="ReplayData"/> snapshot of all accumulated events.
     /// </summary>

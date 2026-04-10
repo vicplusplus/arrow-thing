@@ -341,7 +341,10 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             token
         );
 
-        await _client.PostAsJsonAsync("/api/scores", new { replayJson = MakeValidReplayJson() });
+        await _client.PostAsJsonAsync(
+            "/api/scores",
+            new { replayJson = MakeValidReplayJson(seed: 555, width: 9, height: 9) }
+        );
 
         // Rename
         var renameRequest = new HttpRequestMessage(HttpMethod.Patch, "/api/auth/me");
@@ -351,7 +354,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
 
         // Leaderboard should show new name
         _client.DefaultRequestHeaders.Authorization = null;
-        var lbResponse = await _client.GetAsync("/api/leaderboards/10x10");
+        var lbResponse = await _client.GetAsync("/api/leaderboards/9x9");
         var lb = await lbResponse.Content.ReadFromJsonAsync<LeaderboardResponse>();
         var entry = lb!.Entries.Find(e => e.DisplayName == "NewName");
         Assert.NotNull(entry);
@@ -451,6 +454,321 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         Assert.Contains("mismatch", result.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task SubmitOversizedBoard_Returns400()
+    {
+        var token = await RegisterAndGetTokenAsync("oversize@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
+
+        // Build a replay with out-of-range dimensions (can't actually generate, just fake JSON)
+        var replay = new ReplayData
+        {
+            version = 3,
+            gameId = Guid.NewGuid().ToString(),
+            seed = 1,
+            boardWidth = 500,
+            boardHeight = 500,
+            maxArrowLength = 5,
+            boardSnapshot = new List<List<Cell>>(),
+            events = new List<ReplayEvent>
+            {
+                new ReplayEvent
+                {
+                    seq = 0,
+                    type = ReplayEventType.SessionStart,
+                    timestamp = "2026-01-01T00:00:00Z",
+                },
+            },
+            finalTime = 1.0,
+        };
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/scores",
+            new { replayJson = replay.ToJson() }
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SubmitImplausiblyFastReplay_Returns400()
+    {
+        var token = await RegisterAndGetTokenAsync("fast@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
+
+        // Build a valid board but with impossibly fast timestamps
+        var board = new Board(10, 10);
+        TestBoardHelper.FillBoard(board, 5, new Random(42));
+
+        var snapshot = new List<List<Cell>>();
+        foreach (var arrow in board.Arrows)
+            snapshot.Add(new List<Cell>(arrow.Cells));
+
+        var events = new List<ReplayEvent>();
+        int seq = 0;
+        var baseTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        events.Add(
+            new ReplayEvent
+            {
+                seq = seq++,
+                type = ReplayEventType.SessionStart,
+                timestamp = baseTime.ToString("O"),
+            }
+        );
+        events.Add(
+            new ReplayEvent
+            {
+                seq = seq++,
+                type = ReplayEventType.StartSolve,
+                timestamp = baseTime.AddSeconds(1).ToString("O"),
+            }
+        );
+
+        // Clear all arrows with 1ms spacing — implausibly fast
+        double t = 1.001;
+        while (board.Arrows.Count > 0)
+        {
+            Arrow? toClear = null;
+            foreach (var arrow in board.Arrows)
+                if (board.IsClearable(arrow))
+                {
+                    toClear = arrow;
+                    break;
+                }
+
+            events.Add(
+                new ReplayEvent
+                {
+                    seq = seq++,
+                    type = ReplayEventType.Clear,
+                    posX = toClear!.HeadCell.X,
+                    posY = toClear.HeadCell.Y,
+                    timestamp = baseTime.AddSeconds(t).ToString("O"),
+                }
+            );
+            board.RemoveArrow(toClear);
+            t += 0.001;
+        }
+
+        events.Add(
+            new ReplayEvent
+            {
+                seq = seq++,
+                type = ReplayEventType.EndSolve,
+                timestamp = baseTime.AddSeconds(t).ToString("O"),
+            }
+        );
+
+        var replay = new ReplayData
+        {
+            version = 3,
+            gameId = Guid.NewGuid().ToString(),
+            seed = 42,
+            boardWidth = 10,
+            boardHeight = 10,
+            maxArrowLength = 5,
+            boardSnapshot = snapshot,
+            events = events,
+            finalTime = t - 1.0,
+        };
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/scores",
+            new { replayJson = replay.ToJson() }
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SubmitDuplicateSeed_FlagsNewScore()
+    {
+        // First user submits with seed 777
+        var token1 = await RegisterAndGetTokenAsync("dedup1@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token1
+        );
+        var replay1 = MakeValidReplayJson(seed: 777, width: 7, height: 7, maxArrowLength: 3);
+        var response1 = await _client.PostAsJsonAsync("/api/scores", new { replayJson = replay1 });
+        Assert.Equal(HttpStatusCode.OK, response1.StatusCode);
+
+        // Second user submits with same seed
+        _client.DefaultRequestHeaders.Authorization = null;
+        var token2 = await RegisterAndGetTokenAsync("dedup2@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token2
+        );
+        var replay2 = MakeValidReplayJson(seed: 777, width: 7, height: 7, maxArrowLength: 3);
+        var response2 = await _client.PostAsJsonAsync("/api/scores", new { replayJson = replay2 });
+        var result2 = await response2.Content.ReadFromJsonAsync<SubmitResultResponse>();
+        Assert.True(result2!.Verified);
+
+        // The flagged score should not appear on the leaderboard
+        _client.DefaultRequestHeaders.Authorization = null;
+        var lbResponse = await _client.GetAsync("/api/leaderboards/7x7");
+        var lb = await lbResponse.Content.ReadFromJsonAsync<LeaderboardResponse>();
+        // Only the original (unflagged) score should be on the leaderboard
+        Assert.Equal(1, lb!.TotalEntries);
+    }
+
+    [Fact]
+    public async Task AdminFlaggedScores_ListsFlaggedScores()
+    {
+        // Submit a duplicate-seed score to create a flagged entry
+        var token1 = await RegisterAndGetTokenAsync("admflag1@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token1
+        );
+        await _client.PostAsJsonAsync(
+            "/api/scores",
+            new
+            {
+                replayJson = MakeValidReplayJson(seed: 888, width: 6, height: 6, maxArrowLength: 3),
+            }
+        );
+
+        _client.DefaultRequestHeaders.Authorization = null;
+        var token2 = await RegisterAndGetTokenAsync("admflag2@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token2
+        );
+        await _client.PostAsJsonAsync(
+            "/api/scores",
+            new
+            {
+                replayJson = MakeValidReplayJson(seed: 888, width: 6, height: 6, maxArrowLength: 3),
+            }
+        );
+
+        // Admin: list flagged scores
+        _client.DefaultRequestHeaders.Authorization = null;
+        _client.DefaultRequestHeaders.Add("X-Admin-Key", "test-admin-key");
+        var response = await _client.GetAsync("/api/admin/flagged-scores");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var flagged = await response.Content.ReadFromJsonAsync<List<FlaggedScoreDto>>();
+        Assert.True(flagged!.Count >= 1);
+        Assert.True(flagged.Exists(s => s.FlagReason == "duplicate_seed"));
+    }
+
+    [Fact]
+    public async Task AdminUnflag_RestoresScoreToLeaderboard()
+    {
+        // Create a flagged score via duplicate seed
+        var token1 = await RegisterAndGetTokenAsync("unflag1@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token1
+        );
+        await _client.PostAsJsonAsync(
+            "/api/scores",
+            new
+            {
+                replayJson = MakeValidReplayJson(seed: 999, width: 8, height: 8, maxArrowLength: 3),
+            }
+        );
+
+        _client.DefaultRequestHeaders.Authorization = null;
+        var token2 = await RegisterAndGetTokenAsync("unflag2@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token2
+        );
+        await _client.PostAsJsonAsync(
+            "/api/scores",
+            new
+            {
+                replayJson = MakeValidReplayJson(seed: 999, width: 8, height: 8, maxArrowLength: 3),
+            }
+        );
+
+        // Leaderboard should only have 1 entry (unflagged)
+        _client.DefaultRequestHeaders.Authorization = null;
+        var lb1 = await (
+            await _client.GetAsync("/api/leaderboards/8x8")
+        ).Content.ReadFromJsonAsync<LeaderboardResponse>();
+        Assert.Equal(1, lb1!.TotalEntries);
+
+        // Admin: get flagged, then unflag
+        _client.DefaultRequestHeaders.Add("X-Admin-Key", "test-admin-key");
+        var flaggedResponse = await _client.GetAsync("/api/admin/flagged-scores");
+        var flagged = await flaggedResponse.Content.ReadFromJsonAsync<List<FlaggedScoreDto>>();
+        var flaggedScore = flagged!.Find(s =>
+            s.FlagReason == "duplicate_seed" && s.BoardWidth == 8 && s.BoardHeight == 8
+        );
+        Assert.NotNull(flaggedScore);
+
+        await _client.PostAsync($"/api/admin/scores/{flaggedScore!.Id}/unflag", null);
+
+        // Leaderboard should now have 2 entries
+        _client.DefaultRequestHeaders.Remove("X-Admin-Key");
+        var lb2 = await (
+            await _client.GetAsync("/api/leaderboards/8x8")
+        ).Content.ReadFromJsonAsync<LeaderboardResponse>();
+        Assert.Equal(2, lb2!.TotalEntries);
+    }
+
+    [Fact]
+    public async Task AdminRemoveScore_DeletesFromLeaderboard()
+    {
+        var token = await RegisterAndGetTokenAsync("remove1@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
+        await _client.PostAsJsonAsync(
+            "/api/scores",
+            new
+            {
+                replayJson = MakeValidReplayJson(seed: 42, width: 3, height: 3, maxArrowLength: 3),
+            }
+        );
+
+        // Submit from a second user with the same seed to create a flagged score
+        var token2 = await RegisterAndGetTokenAsync("remove2@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token2
+        );
+        await _client.PostAsJsonAsync(
+            "/api/scores",
+            new
+            {
+                replayJson = MakeValidReplayJson(seed: 42, width: 3, height: 3, maxArrowLength: 3),
+            }
+        );
+
+        // Get the flagged score's ID via admin endpoint
+        _client.DefaultRequestHeaders.Authorization = null;
+        _client.DefaultRequestHeaders.Add("X-Admin-Key", "test-admin-key");
+        var flaggedResp = await _client.GetAsync("/api/admin/flagged-scores");
+        var flaggedScores = await flaggedResp.Content.ReadFromJsonAsync<List<FlaggedScoreDto>>();
+        Assert.NotNull(flaggedScores);
+        var flaggedScore = flaggedScores!.First(s => s.BoardWidth == 3 && s.BoardHeight == 3);
+
+        // Remove the flagged score
+        var removeResp = await _client.PostAsync(
+            $"/api/admin/scores/{flaggedScore.Id}/remove",
+            null
+        );
+        Assert.Equal(HttpStatusCode.OK, removeResp.StatusCode);
+
+        // Verify it's gone from flagged list
+        var flaggedResp2 = await _client.GetAsync("/api/admin/flagged-scores");
+        var flaggedScores2 = await flaggedResp2.Content.ReadFromJsonAsync<List<FlaggedScoreDto>>();
+        Assert.DoesNotContain(flaggedScores2!, s => s.Id == flaggedScore.Id);
+
+        _client.DefaultRequestHeaders.Remove("X-Admin-Key");
+    }
+
     [Fact(Skip = "Rate limit counts stored rows, not submission attempts — needs separate counter")]
     public async Task RateLimit_ExceedsThreshold_Returns429()
     {
@@ -489,3 +807,15 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
 }
 
 file record AuthResponse(string Token, string DisplayName);
+
+file record FlaggedScoreDto(
+    Guid Id,
+    Guid UserId,
+    Guid GameId,
+    int Seed,
+    int BoardWidth,
+    int BoardHeight,
+    double Time,
+    string FlagReason,
+    DateTime UpdatedAt
+);
