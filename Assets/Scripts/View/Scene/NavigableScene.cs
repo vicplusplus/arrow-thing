@@ -9,10 +9,8 @@ using UnityEngine.UIElements;
 ///
 /// Subclasses override:
 ///   NavContext          — which KeybindManager.Context to activate
-///   BuildUI(root)       — wire buttons, create components (called every OnEnable)
+///   BuildUI(root)       — wire buttons, create components (called in OnEnable)
 ///   BuildNavGraph(nav)  — set items and links on the navigator
-///   SaveState()         — persist fields before disable (optional)
-///   RestoreState(root)  — restore from saved fields on re-enable (optional)
 ///   PreUpdate(km)       — return false to skip Navigator.Update() this frame (optional)
 ///   OnUpdate(km)        — per-frame keybinds beyond navigation (optional)
 ///   OnCancel()          — escape pressed after all guards pass (optional)
@@ -25,27 +23,15 @@ public abstract class NavigableScene : MonoBehaviour
     /// <summary>The current FocusNavigator. Subclasses may reassign (e.g. dynamic list rebuild).</summary>
     protected FocusNavigator Navigator { get; set; }
 
-    /// <summary>The UIDocument root visual element, set fresh each OnEnable.</summary>
+    /// <summary>The UIDocument root visual element, set in OnEnable.</summary>
     protected VisualElement Root { get; private set; }
-
-    private bool _hasState;
 
     // -- Subclass hooks -------------------------------------------------------
 
     /// <summary>Which keybind context to activate when this scene is enabled.</summary>
     protected abstract KeybindManager.Context NavContext { get; }
 
-    /// <summary>
-    /// Wire buttons, create UI components. Called every OnEnable because
-    /// UIDocument recreates the visual tree when re-enabled.
-    ///
-    /// IMPORTANT: any subclass field that mirrors visual-tree state (cached
-    /// CSS class flags, current button text, last-applied layout mode, etc.)
-    /// must be reset here, since C# fields persist across re-enable but the
-    /// tree itself does not. Prefer deriving such state from the live tree
-    /// (e.g. <c>root.ClassListContains(...)</c>) over caching it; if caching
-    /// is unavoidable, reset the cache at the top of <see cref="BuildUI"/>.
-    /// </summary>
+    /// <summary>Wire buttons, create UI components. Called in OnEnable.</summary>
     protected abstract void BuildUI(VisualElement root);
 
     /// <summary>
@@ -53,16 +39,6 @@ public abstract class NavigableScene : MonoBehaviour
     /// Called after BuildUI. The navigator is already created.
     /// </summary>
     protected abstract void BuildNavGraph(FocusNavigator nav);
-
-    /// <summary>Called in OnDisable before the scene is deactivated. Save any state here.</summary>
-    protected virtual void SaveState() { }
-
-    /// <summary>
-    /// Called in OnEnable when re-enabling a previously disabled scene.
-    /// Root and all UI elements are already available (BuildUI ran first).
-    /// Restore visual state from saved fields.
-    /// </summary>
-    protected virtual void RestoreState(VisualElement root) { }
 
     /// <summary>
     /// Called before Navigator.Update() each frame (after guards pass).
@@ -88,21 +64,12 @@ public abstract class NavigableScene : MonoBehaviour
 
         BuildUI(Root);
 
-        if (_hasState)
-            RestoreState(Root);
-
         Navigator?.Dispose();
         Navigator = new FocusNavigator(Root);
         BuildNavGraph(Navigator);
 
         if (KeybindManager.Instance != null)
             KeybindManager.Instance.ActiveContext = NavContext;
-    }
-
-    protected virtual void OnDisable()
-    {
-        SaveState();
-        _hasState = true;
     }
 
     protected virtual void Update()
