@@ -19,3 +19,7 @@
     padding: 5px;
     margin: 0 0 0 4px;
 }
+
+.global-toast__icon-btn:disabled {
+    opacity: 0.35;
+}

@@ -112,8 +112,12 @@ public sealed class GlobalToast : MonoBehaviour
 
     private void OnRetry()
     {
-        // Keep the toast visible during retry. The retry callback will
-        // either dismiss on success or update the message on failure.
+        // Disable the button while the retry is in flight. The retry
+        // callback will re-enable it via Show (on failure) or hide the
+        // toast entirely via Dismiss (on success).
+        if (_retryBtn != null)
+            _retryBtn.SetEnabled(false);
+
         _retryAction?.Invoke();
     }
 
@@ -129,6 +133,7 @@ public sealed class GlobalToast : MonoBehaviour
         // Retry button: visible only when a retry action is provided
         if (_retryBtn != null)
         {
+            _retryBtn.SetEnabled(true);
             if (retryAction != null)
                 _retryBtn.RemoveFromClassList(HiddenClass);
             else
