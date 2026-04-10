@@ -429,6 +429,21 @@ app.MapPost(
 
         score.Flagged = false;
         score.FlagReason = null;
+
+        // Clear user flag if no other flagged scores remain
+        var hasOtherFlagged = await db.Scores.AnyAsync(s =>
+            s.UserId == score.UserId && s.Id != id && s.Flagged
+        );
+        if (!hasOtherFlagged)
+        {
+            var user = await db.Users.FindAsync(score.UserId);
+            if (user != null)
+            {
+                user.Flagged = false;
+                user.FlagReason = null;
+            }
+        }
+
         await db.SaveChangesAsync();
         cache.Invalidate(score.BoardWidth, score.BoardHeight);
         return Results.Ok(new { message = "Score unflagged." });

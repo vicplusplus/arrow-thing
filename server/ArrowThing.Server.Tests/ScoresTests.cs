@@ -138,6 +138,90 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         return replay.ToJson();
     }
 
+    private static string MakeImplausiblyFastReplayJson(
+        int seed = 42,
+        int width = 10,
+        int height = 10,
+        int maxArrowLength = 5
+    )
+    {
+        var board = new Board(width, height);
+        TestBoardHelper.FillBoard(board, maxArrowLength, new Random(seed));
+
+        var snapshot = new List<List<Cell>>();
+        foreach (var arrow in board.Arrows)
+            snapshot.Add(new List<Cell>(arrow.Cells));
+
+        var events = new List<ReplayEvent>();
+        int seq = 0;
+        var baseTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        events.Add(
+            new ReplayEvent
+            {
+                seq = seq++,
+                type = ReplayEventType.SessionStart,
+                timestamp = baseTime.ToString("O"),
+            }
+        );
+        events.Add(
+            new ReplayEvent
+            {
+                seq = seq++,
+                type = ReplayEventType.StartSolve,
+                timestamp = baseTime.AddSeconds(1).ToString("O"),
+            }
+        );
+
+        double t = 1.001;
+        while (board.Arrows.Count > 0)
+        {
+            Arrow? toClear = null;
+            foreach (var arrow in board.Arrows)
+                if (board.IsClearable(arrow))
+                {
+                    toClear = arrow;
+                    break;
+                }
+
+            events.Add(
+                new ReplayEvent
+                {
+                    seq = seq++,
+                    type = ReplayEventType.Clear,
+                    posX = toClear!.HeadCell.X,
+                    posY = toClear.HeadCell.Y,
+                    timestamp = baseTime.AddSeconds(t).ToString("O"),
+                }
+            );
+            board.RemoveArrow(toClear);
+            t += 0.001;
+        }
+
+        events.Add(
+            new ReplayEvent
+            {
+                seq = seq++,
+                type = ReplayEventType.EndSolve,
+                timestamp = baseTime.AddSeconds(t).ToString("O"),
+            }
+        );
+
+        var replay = new ReplayData
+        {
+            version = 3,
+            gameId = Guid.NewGuid().ToString(),
+            seed = seed,
+            boardWidth = width,
+            boardHeight = height,
+            maxArrowLength = maxArrowLength,
+            boardSnapshot = snapshot,
+            events = events,
+            finalTime = t - 1.0,
+        };
+
+        return replay.ToJson();
+    }
+
     [Fact]
     public async Task SubmitValidReplay_ReturnsVerified()
     {
@@ -455,7 +539,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
     }
 
     [Fact]
-    public async Task SubmitOversizedBoard_Returns400()
+    public async Task SubmitOversizedBoard_FlagsAccount()
     {
         var token = await RegisterAndGetTokenAsync("oversize@test.com");
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
@@ -489,11 +573,11 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             "/api/scores",
             new { replayJson = replay.ToJson() }
         );
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
-    public async Task SubmitImplausiblyFastReplay_Returns400()
+    public async Task SubmitImplausiblyFastReplay_FlagsAccount()
     {
         var token = await RegisterAndGetTokenAsync("fast@test.com");
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
@@ -501,87 +585,11 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             token
         );
 
-        // Build a valid board but with impossibly fast timestamps
-        var board = new Board(10, 10);
-        TestBoardHelper.FillBoard(board, 5, new Random(42));
-
-        var snapshot = new List<List<Cell>>();
-        foreach (var arrow in board.Arrows)
-            snapshot.Add(new List<Cell>(arrow.Cells));
-
-        var events = new List<ReplayEvent>();
-        int seq = 0;
-        var baseTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        events.Add(
-            new ReplayEvent
-            {
-                seq = seq++,
-                type = ReplayEventType.SessionStart,
-                timestamp = baseTime.ToString("O"),
-            }
-        );
-        events.Add(
-            new ReplayEvent
-            {
-                seq = seq++,
-                type = ReplayEventType.StartSolve,
-                timestamp = baseTime.AddSeconds(1).ToString("O"),
-            }
-        );
-
-        // Clear all arrows with 1ms spacing — implausibly fast
-        double t = 1.001;
-        while (board.Arrows.Count > 0)
-        {
-            Arrow? toClear = null;
-            foreach (var arrow in board.Arrows)
-                if (board.IsClearable(arrow))
-                {
-                    toClear = arrow;
-                    break;
-                }
-
-            events.Add(
-                new ReplayEvent
-                {
-                    seq = seq++,
-                    type = ReplayEventType.Clear,
-                    posX = toClear!.HeadCell.X,
-                    posY = toClear.HeadCell.Y,
-                    timestamp = baseTime.AddSeconds(t).ToString("O"),
-                }
-            );
-            board.RemoveArrow(toClear);
-            t += 0.001;
-        }
-
-        events.Add(
-            new ReplayEvent
-            {
-                seq = seq++,
-                type = ReplayEventType.EndSolve,
-                timestamp = baseTime.AddSeconds(t).ToString("O"),
-            }
-        );
-
-        var replay = new ReplayData
-        {
-            version = 3,
-            gameId = Guid.NewGuid().ToString(),
-            seed = 42,
-            boardWidth = 10,
-            boardHeight = 10,
-            maxArrowLength = 5,
-            boardSnapshot = snapshot,
-            events = events,
-            finalTime = t - 1.0,
-        };
-
         var response = await _client.PostAsJsonAsync(
             "/api/scores",
-            new { replayJson = replay.ToJson() }
+            new { replayJson = MakeImplausiblyFastReplayJson() }
         );
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
@@ -811,6 +819,38 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             }
         );
         Assert.Equal(HttpStatusCode.Forbidden, blockedResp.StatusCode);
+    }
+
+    [Fact]
+    public async Task PreVerifyFailure_FlagsAccount_BlocksSubsequent()
+    {
+        var token = await RegisterAndGetTokenAsync("prevflag@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
+
+        // Submit a cheated replay (implausibly fast)
+        var cheatedResp = await _client.PostAsJsonAsync(
+            "/api/scores",
+            new { replayJson = MakeImplausiblyFastReplayJson() }
+        );
+        Assert.Equal(HttpStatusCode.Forbidden, cheatedResp.StatusCode);
+
+        // Now submit a legitimate replay — should be rejected because account is flagged
+        var legitimateResp = await _client.PostAsJsonAsync(
+            "/api/scores",
+            new
+            {
+                replayJson = MakeValidReplayJson(
+                    seed: 4001,
+                    width: 5,
+                    height: 5,
+                    maxArrowLength: 3
+                ),
+            }
+        );
+        Assert.Equal(HttpStatusCode.Forbidden, legitimateResp.StatusCode);
     }
 
     [Fact(Skip = "Rate limit counts stored rows, not submission attempts — needs separate counter")]

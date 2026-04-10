@@ -32,6 +32,10 @@ public class User
     // Account lock (admin-initiated)
     public DateTime? LockedAt { get; set; }
 
+    // Anti-cheat flagging
+    public bool Flagged { get; set; }
+    public string? FlagReason { get; set; }
+
     public bool IsLocked => LockedAt.HasValue;
     public bool IsEmailVerified => EmailVerifiedAt.HasValue;
 }

@@ -45,15 +45,22 @@ public class GameService
         if (!Guid.TryParse(replay.gameId, out var gameId))
             return (null, 400, "Invalid gameId.");
 
+        // Reject submissions from flagged accounts
+        var user = await _db.Users.FindAsync(userId);
+        if (user == null)
+            return (null, 401, "User not found.");
+        if (user.Flagged)
+            return (null, 403, "Account is flagged. Contact support.");
+
         // Pre-verification: cheap static checks before expensive board regeneration
         var preVerifyReason = ReplayVerifier.PreVerify(replay);
         if (preVerifyReason != null)
-            return (null, 400, preVerifyReason);
-
-        // Reject submissions from accounts with flagged scores
-        var hasFlagged = await _db.Scores.AnyAsync(s => s.UserId == userId && s.Flagged);
-        if (hasFlagged)
-            return (null, 403, "Account has flagged scores. Contact support.");
+        {
+            user.Flagged = true;
+            user.FlagReason = preVerifyReason;
+            await _db.SaveChangesAsync();
+            return (null, 403, "Account is flagged. Contact support.");
+        }
 
         // Idempotency check
         var existing = await _db.Scores.FirstOrDefaultAsync(s =>
@@ -79,6 +86,20 @@ public class GameService
                 200,
                 null
             );
+        }
+
+        // Seed duplicate detection: flag if another user has the same seed + board size
+        var duplicate = await _db.Scores.FirstOrDefaultAsync(s =>
+            s.Seed == replay.seed
+            && s.BoardWidth == replay.boardWidth
+            && s.BoardHeight == replay.boardHeight
+            && s.UserId != userId
+        );
+        bool flagged = duplicate != null;
+        if (flagged)
+        {
+            user.Flagged = true;
+            user.FlagReason = "duplicate_seed";
         }
 
         // Rate limit: count verified score updates in the past hour
@@ -113,15 +134,6 @@ public class GameService
                 null
             );
         }
-
-        // Seed duplicate detection: flag if another user has the same seed + board size
-        var duplicate = await _db.Scores.FirstOrDefaultAsync(s =>
-            s.Seed == replay.seed
-            && s.BoardWidth == replay.boardWidth
-            && s.BoardHeight == replay.boardHeight
-            && s.UserId != userId
-        );
-        bool flagged = duplicate != null;
 
         // Compute rank for the new score (exclude flagged from ranking)
         var newRank = await ComputeRank(replay.boardWidth, replay.boardHeight, result.VerifiedTime);
