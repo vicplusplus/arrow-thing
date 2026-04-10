@@ -12,6 +12,7 @@ services:
       - Resend__ApiKey=${Resend__ApiKey}
       - Resend__FromAddress=${Resend__FromAddress}
       - Admin__ApiKey=${ADMIN_API_KEY}
+      - Redis__ConnectionString=redis:6379
       - Loki__Url=http://loki:3100
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
@@ -21,6 +22,8 @@ services:
       start_period: 15s
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       loki:
         condition: service_started
@@ -47,6 +50,25 @@ services:
       - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    expose:
+      - "6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -132,6 +154,7 @@ services:
 
 volumes:
   pgdata:
+  redis-data:
   loki-data:
   prometheus-data:
   grafana-data:
