@@ -26,8 +26,6 @@ Three classes of invalid submissions can be caught with cheap static checks befo
 2. **Stolen replays** — same seed for the same board size from different users is a near-certain indicator.
 3. **Out-of-range board sizes** — the client supports up to 400x400; anything beyond that is either a bug or an attack.
 
-Submissions that fail size checks are actively malicious (no legitimate client sends these), so the submitting account should be flagged and all their scores invalidated.
-
 ### Design
 
 The API runs these checks **synchronously on the request thread** before enqueuing for full verification (PR 3). They're all O(1) or O(n) over event count — no board generation, no simulation.
@@ -47,12 +45,15 @@ Reject the submission (400) before any further work.
 
 | Check | Formula | Action |
 |-------|---------|--------|
-| **Min solve time** | `arrowCount * 0.08s` | Reject: "Solve time implausibly fast." |
-| **Min inter-event gap** | 30ms between consecutive clears | Reject: "Input events implausibly fast." |
+| **Min solve time** | `clearCount * 0.08s` | Reject: "Solve time implausibly fast." |
+
+Where `clearCount` is the number of successful arrow clears only (not rejects, misses, or other events).
 
 Rationale:
 - 0.08s/arrow is the absolute physical floor. A 10x10 board has ~8 arrows; 0.08 * 8 = 0.64s minimum. A legitimate 1.75s solve on 8 arrows is 0.22s/arrow — well above the threshold.
-- 30ms minimum gap between consecutive clears. No human can visually locate, move to, and tap two distinct screen positions in under 30ms.
+- No inter-event gap check. Players legitimately click very rapidly (autoclickers, spam-clicking, or just fast fingers), and two clears can land within a single frame on small boards. The per-arrow minimum on total time is sufficient — the real bottleneck is moving between arrows and processing the board, not individual click speed.
+
+**Edge case: very small boards.** The first clear shares a timestamp with `start_solve` (both fire from the same input event), so a board with 1 arrow has a legitimate solve time of 0.000s. Timing checks are skipped entirely when `clearCount <= 1`.
 
 #### Seed duplicate detection
 
@@ -60,13 +61,13 @@ On score submission, check if any other user already has a score with the same `
 
 | Scenario | Action |
 |----------|--------|
-| Same seed, different user | Flag both scores (`Score.Flagged = true`, `FlagReason = "duplicate_seed"`). Second submitter still gets verified normally. |
+| Same seed, different user | Flag the new submission (`Score.Flagged = true`, `FlagReason = "duplicate_seed"`). The existing score is the victim — left untouched. |
 | Same seed, same user | Already handled by idempotency check. |
 
 ### Database changes
 
 **Score model:**
-- `Flagged` (bool, default false) — score-level flag for suspicious scores.
+- `Flagged` (bool, default false) — score-level flag for suspicious scores. Flagged scores are excluded from leaderboard queries (`WHERE Flagged = false`).
 - `FlagReason` (string, nullable) — reason for the flag.
 
 ### Admin endpoints
@@ -86,13 +87,24 @@ POST /api/admin/scores/{id}/remove          → hard delete (confirmed cheat)
 4. Seed duplicate check → if match found, flag both scores.
 5. If all pre-checks pass, enqueue for full verification (PR 3).
 
+### New replay event type: `miss`
+
+Add a `miss` event type for clicks that don't hit any arrow. Same shape as `reject` (has `posX`/`posY` + `timestamp`), but recorded when the tap lands on an empty cell. This doesn't affect verification or scoring — misses are ignored like rejects. The value is observability: a replay full of rapid miss events makes autoclicker/spam patterns obvious at a glance during manual review.
+
+- `ReplayEventType` — add `Miss` constant
+- `InputHandler` — record `miss` event when a tap doesn't hit any arrow
+- `ReplayVerifier` — ignore `miss` events (same as `reject`)
+- Replay viewer — show red tap indicator for misses (same as rejects)
+
 ### Changes
 
 - `ReplayVerifier.cs` — new static `PreVerify(ReplayData)` method for timing checks (no board generation)
+- `ReplayEventType` / `InputHandler` — add `miss` event type
 - `Score.cs` — add `Flagged` + `FlagReason` columns + migration
 - `GameService.cs` — pre-verification gate, seed dedup
+- `LeaderboardService.cs` — filter `Flagged = false`
 - `Program.cs` — admin endpoints
-- Tests: rejects out-of-range boards, rejects sub-threshold times, rejects sub-30ms gaps, accepts normal times, duplicate seed flags both scores
+- Tests: rejects out-of-range boards, rejects sub-threshold times, accepts normal times, accepts 1-arrow boards with 0s time, duplicate seed flags new submission, flagged scores excluded from leaderboard
 
 ---
 
