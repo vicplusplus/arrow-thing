@@ -385,4 +385,175 @@ public class ReplayVerifierTests
             Assert.That(result.IsValid, Is.True, $"Seed {seed} failed: {result.Reason}");
         }
     }
+
+    // ── PreVerify ──────────────────────────────────────────────────────────────
+
+    [Test]
+    public void PreVerify_ValidReplay_ReturnsNull()
+    {
+        var replay = MakeValidReplay();
+        Assert.That(ReplayVerifier.PreVerify(replay), Is.Null);
+    }
+
+    [Test]
+    public void PreVerify_BoardTooSmall_ReturnsReason()
+    {
+        var replay = MakeValidReplay();
+        replay.boardWidth = 1;
+        Assert.That(ReplayVerifier.PreVerify(replay), Does.Contain("dimensions"));
+    }
+
+    [Test]
+    public void PreVerify_BoardTooLarge_ReturnsReason()
+    {
+        var replay = MakeValidReplay();
+        replay.boardWidth = 401;
+        Assert.That(ReplayVerifier.PreVerify(replay), Does.Contain("dimensions"));
+    }
+
+    [Test]
+    public void PreVerify_MaxBoardSize_ReturnsNull()
+    {
+        var replay = MakeValidReplay();
+        replay.boardWidth = 400;
+        replay.boardHeight = 400;
+        Assert.That(ReplayVerifier.PreVerify(replay), Is.Null);
+    }
+
+    [Test]
+    public void PreVerify_ImplausiblyFastTime_ReturnsReason()
+    {
+        // Build a replay with many clears but impossibly short total time
+        var replay = MakeValidReplay();
+
+        // Count clears
+        int clearCount = 0;
+        foreach (var evt in replay.events)
+            if (evt.type == ReplayEventType.Clear)
+                clearCount++;
+
+        // Only applies when clearCount > 5
+        Assert.That(clearCount, Is.GreaterThan(5), "Need >5 clears for timing check to apply");
+
+        // Squash all timestamps into a tiny window (1ms per clear)
+        var baseTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        double t = 0;
+        for (int i = 0; i < replay.events.Count; i++)
+        {
+            replay.events[i].timestamp = baseTime.AddMilliseconds(t).ToString("O");
+            if (replay.events[i].type == ReplayEventType.Clear)
+                t += 1; // 1ms per clear
+            else
+                t += 1;
+        }
+
+        Assert.That(ReplayVerifier.PreVerify(replay), Does.Contain("implausibly fast"));
+    }
+
+    [Test]
+    public void PreVerify_SmallClearCount_SkipsTiming()
+    {
+        // A replay with <= 5 clears should skip timing checks even with 0s solve time
+        var board = new Board(3, 3);
+        TestBoardHelper.FillBoard(board, 3, new Random(42));
+
+        var snapshot = new List<List<Cell>>();
+        foreach (var arrow in board.Arrows)
+            snapshot.Add(new List<Cell>(arrow.Cells));
+
+        // Count arrows — should be small on a 3x3 board
+        int arrowCount = board.Arrows.Count;
+        Assert.That(
+            arrowCount,
+            Is.LessThanOrEqualTo(5),
+            "3x3 board should have <= 5 arrows for this test"
+        );
+
+        var events = new List<ReplayEvent>();
+        int seq = 0;
+        var baseTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        events.Add(
+            new ReplayEvent
+            {
+                seq = seq++,
+                type = ReplayEventType.SessionStart,
+                timestamp = baseTime.ToString("O"),
+            }
+        );
+        // All events at the same timestamp (0s solve time)
+        events.Add(
+            new ReplayEvent
+            {
+                seq = seq++,
+                type = ReplayEventType.StartSolve,
+                timestamp = baseTime.AddSeconds(1).ToString("O"),
+            }
+        );
+        while (board.Arrows.Count > 0)
+        {
+            Arrow toClear = null;
+            foreach (var arrow in board.Arrows)
+                if (board.IsClearable(arrow))
+                {
+                    toClear = arrow;
+                    break;
+                }
+            events.Add(
+                new ReplayEvent
+                {
+                    seq = seq++,
+                    type = ReplayEventType.Clear,
+                    posX = toClear.HeadCell.X,
+                    posY = toClear.HeadCell.Y,
+                    timestamp = baseTime.AddSeconds(1).ToString("O"),
+                }
+            );
+            board.RemoveArrow(toClear);
+        }
+        events.Add(
+            new ReplayEvent
+            {
+                seq = seq++,
+                type = ReplayEventType.EndSolve,
+                timestamp = baseTime.AddSeconds(1).ToString("O"),
+            }
+        );
+
+        var replay = new ReplayData
+        {
+            version = 3,
+            gameId = Guid.NewGuid().ToString(),
+            seed = 42,
+            boardWidth = 3,
+            boardHeight = 3,
+            maxArrowLength = 3,
+            boardSnapshot = snapshot,
+            events = events,
+            finalTime = 0,
+        };
+
+        Assert.That(ReplayVerifier.PreVerify(replay), Is.Null);
+    }
+
+    [Test]
+    public void PreVerify_NormalTime_ReturnsNull()
+    {
+        // The default MakeValidReplay uses 0.5s per clear — well above threshold
+        var replay = MakeValidReplay();
+        Assert.That(ReplayVerifier.PreVerify(replay), Is.Null);
+    }
+
+    [Test]
+    public void PreVerify_NullReplay_ReturnsReason()
+    {
+        Assert.That(ReplayVerifier.PreVerify(null), Does.Contain("null"));
+    }
+
+    [Test]
+    public void PreVerify_NoEvents_ReturnsReason()
+    {
+        var replay = MakeValidReplay();
+        replay.events = new List<ReplayEvent>();
+        Assert.That(ReplayVerifier.PreVerify(replay), Does.Contain("no events"));
+    }
 }

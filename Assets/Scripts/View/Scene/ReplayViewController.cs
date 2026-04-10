@@ -769,6 +769,12 @@ public sealed class ReplayViewController : MonoBehaviour
             if (_tapPool != null)
                 _tapPool.Spawn(worldPos, true);
         }
+        else if (evt.type == ReplayEventType.Miss)
+        {
+            var worldPos = new Vector3(evt.posX ?? 0f, evt.posY ?? 0f, 0f);
+            if (_tapPool != null)
+                _tapPool.Spawn(worldPos, true);
+        }
     }
 
     /// <summary>

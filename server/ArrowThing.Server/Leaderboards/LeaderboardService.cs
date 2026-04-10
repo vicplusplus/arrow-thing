@@ -21,11 +21,11 @@ public class LeaderboardService
             return cached;
 
         var totalEntries = await _db.Scores.CountAsync(s =>
-            s.BoardWidth == width && s.BoardHeight == height
+            s.BoardWidth == width && s.BoardHeight == height && !s.Flagged
         );
 
         var entries = await _db
-            .Scores.Where(s => s.BoardWidth == width && s.BoardHeight == height)
+            .Scores.Where(s => s.BoardWidth == width && s.BoardHeight == height && !s.Flagged)
             .OrderBy(s => s.Time)
             .Take(limit)
             .Select(s => new LeaderboardEntryDto
@@ -53,7 +53,7 @@ public class LeaderboardService
 
         // For each user, find their score with the largest board area, then fastest time.
         // This uses a raw approach: get all scores grouped by user, pick representative.
-        var allScores = await _db.Scores.Include(s => s.User).ToListAsync();
+        var allScores = await _db.Scores.Where(s => !s.Flagged).Include(s => s.User).ToListAsync();
 
         var byUser = allScores
             .GroupBy(s => s.UserId)
@@ -102,11 +102,14 @@ public class LeaderboardService
 
         var rank =
             await _db.Scores.CountAsync(s =>
-                s.BoardWidth == width && s.BoardHeight == height && s.Time < score.Time
+                s.BoardWidth == width
+                && s.BoardHeight == height
+                && !s.Flagged
+                && s.Time < score.Time
             ) + 1;
 
         var totalEntries = await _db.Scores.CountAsync(s =>
-            s.BoardWidth == width && s.BoardHeight == height
+            s.BoardWidth == width && s.BoardHeight == height && !s.Flagged
         );
 
         return new PlayerEntryDto
@@ -132,7 +135,7 @@ public class LeaderboardService
             .First();
 
         // Compute rank among all users' representative scores
-        var allScores = await _db.Scores.ToListAsync();
+        var allScores = await _db.Scores.Where(s => !s.Flagged).ToListAsync();
         var allRepresentatives = allScores
             .GroupBy(s => s.UserId)
             .Select(g =>

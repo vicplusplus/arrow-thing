@@ -164,7 +164,11 @@ public sealed class InputHandler : MonoBehaviour
 
         Arrow arrow = _board.GetArrowAt(cell);
         if (arrow == null)
+        {
+            if (_recorder != null)
+                _recorder.RecordMiss(worldPos.x, worldPos.y);
             return;
+        }
 
         double wallTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
 

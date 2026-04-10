@@ -381,6 +381,86 @@ app.MapPost(
     }
 );
 
+// Admin: score moderation
+app.MapGet(
+    "/api/admin/flagged-scores",
+    async (AppDbContext db, IConfiguration config, HttpContext ctx) =>
+    {
+        if (!VerifyAdminKey(config, ctx))
+            return Results.Json(new { error = "Unauthorized." }, statusCode: 401);
+
+        var scores = await db
+            .Scores.Where(s => s.Flagged)
+            .OrderByDescending(s => s.UpdatedAt)
+            .Select(s => new
+            {
+                s.Id,
+                s.UserId,
+                s.GameId,
+                s.Seed,
+                s.BoardWidth,
+                s.BoardHeight,
+                s.Time,
+                s.FlagReason,
+                s.UpdatedAt,
+            })
+            .ToListAsync();
+
+        return Results.Ok(scores);
+    }
+);
+
+app.MapPost(
+    "/api/admin/scores/{id:guid}/unflag",
+    async (
+        Guid id,
+        AppDbContext db,
+        LeaderboardCache cache,
+        IConfiguration config,
+        HttpContext ctx
+    ) =>
+    {
+        if (!VerifyAdminKey(config, ctx))
+            return Results.Json(new { error = "Unauthorized." }, statusCode: 401);
+
+        var score = await db.Scores.FindAsync(id);
+        if (score == null)
+            return Results.NotFound();
+
+        score.Flagged = false;
+        score.FlagReason = null;
+        await db.SaveChangesAsync();
+        cache.Invalidate(score.BoardWidth, score.BoardHeight);
+        return Results.Ok(new { message = "Score unflagged." });
+    }
+);
+
+app.MapPost(
+    "/api/admin/scores/{id:guid}/remove",
+    async (
+        Guid id,
+        AppDbContext db,
+        LeaderboardCache cache,
+        IConfiguration config,
+        HttpContext ctx
+    ) =>
+    {
+        if (!VerifyAdminKey(config, ctx))
+            return Results.Json(new { error = "Unauthorized." }, statusCode: 401);
+
+        var score = await db.Scores.FindAsync(id);
+        if (score == null)
+            return Results.NotFound();
+
+        var width = score.BoardWidth;
+        var height = score.BoardHeight;
+        db.Scores.Remove(score);
+        await db.SaveChangesAsync();
+        cache.Invalidate(width, height);
+        return Results.Ok(new { message = "Score removed." });
+    }
+);
+
 // Score submission
 app.MapPost(
         "/api/scores",

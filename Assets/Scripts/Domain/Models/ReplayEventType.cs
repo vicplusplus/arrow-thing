@@ -22,6 +22,9 @@ public static class ReplayEventType
     /// <summary>Player tapped a blocked arrow (no gameplay effect, recorded for replay fidelity).</summary>
     public const string Reject = "reject";
 
+    /// <summary>Player tapped an empty cell (no arrow hit, recorded for observability).</summary>
+    public const string Miss = "miss";
+
     /// <summary>Player cleared the last arrow on the board, ending the solve.</summary>
     public const string EndSolve = "end_solve";
 }

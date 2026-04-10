@@ -53,7 +53,7 @@ Rationale:
 - 0.08s/arrow is the absolute physical floor. A 10x10 board has ~8 arrows; 0.08 * 8 = 0.64s minimum. A legitimate 1.75s solve on 8 arrows is 0.22s/arrow — well above the threshold.
 - No inter-event gap check. Players legitimately click very rapidly (autoclickers, spam-clicking, or just fast fingers), and two clears can land within a single frame on small boards. The per-arrow minimum on total time is sufficient — the real bottleneck is moving between arrows and processing the board, not individual click speed.
 
-**Edge case: very small boards.** The first clear shares a timestamp with `start_solve` (both fire from the same input event), so a board with 1 arrow has a legitimate solve time of 0.000s. Timing checks are skipped entirely when `clearCount <= 1`.
+**Edge case: small boards.** On very small boards, a fast player can clear all arrows within a frame or two each. The first clear also shares a timestamp with `start_solve`, making sub-frame solves legitimate. Timing checks are skipped entirely when `clearCount <= 5`. The smallest standard preset (10x10) generates well above 5 arrows, so this threshold doesn't create a gap for meaningful boards.
 
 #### Seed duplicate detection
 
@@ -104,7 +104,7 @@ Add a `miss` event type for clicks that don't hit any arrow. Same shape as `reje
 - `GameService.cs` — pre-verification gate, seed dedup
 - `LeaderboardService.cs` — filter `Flagged = false`
 - `Program.cs` — admin endpoints
-- Tests: rejects out-of-range boards, rejects sub-threshold times, accepts normal times, accepts 1-arrow boards with 0s time, duplicate seed flags new submission, flagged scores excluded from leaderboard
+- Tests: rejects out-of-range boards, rejects sub-threshold times, accepts normal times, skips timing for clearCount <= 5, duplicate seed flags new submission, flagged scores excluded from leaderboard
 
 ---
 

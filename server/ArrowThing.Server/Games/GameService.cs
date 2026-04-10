@@ -45,6 +45,16 @@ public class GameService
         if (!Guid.TryParse(replay.gameId, out var gameId))
             return (null, 400, "Invalid gameId.");
 
+        // Pre-verification: cheap static checks before expensive board regeneration
+        var preVerifyReason = ReplayVerifier.PreVerify(replay);
+        if (preVerifyReason != null)
+            return (null, 400, preVerifyReason);
+
+        // Reject submissions from accounts with flagged scores
+        var hasFlagged = await _db.Scores.AnyAsync(s => s.UserId == userId && s.Flagged);
+        if (hasFlagged)
+            return (null, 403, "Account has flagged scores. Contact support.");
+
         // Idempotency check
         var existing = await _db.Scores.FirstOrDefaultAsync(s =>
             s.UserId == userId
@@ -104,7 +114,16 @@ public class GameService
             );
         }
 
-        // Compute rank for the new score
+        // Seed duplicate detection: flag if another user has the same seed + board size
+        var duplicate = await _db.Scores.FirstOrDefaultAsync(s =>
+            s.Seed == replay.seed
+            && s.BoardWidth == replay.boardWidth
+            && s.BoardHeight == replay.boardHeight
+            && s.UserId != userId
+        );
+        bool flagged = duplicate != null;
+
+        // Compute rank for the new score (exclude flagged from ranking)
         var newRank = await ComputeRank(replay.boardWidth, replay.boardHeight, result.VerifiedTime);
 
         // Prepare stored replay JSON (snapshot handling)
@@ -121,6 +140,8 @@ public class GameService
             existing.Time = result.VerifiedTime;
             existing.ReplayJson = storedReplayJson;
             existing.UpdatedAt = now;
+            existing.Flagged = flagged;
+            existing.FlagReason = flagged ? "duplicate_seed" : null;
         }
         else
         {
@@ -137,6 +158,8 @@ public class GameService
                 ReplayJson = storedReplayJson,
                 CreatedAt = now,
                 UpdatedAt = now,
+                Flagged = flagged,
+                FlagReason = flagged ? "duplicate_seed" : null,
             };
             _db.Scores.Add(score);
         }
@@ -165,7 +188,7 @@ public class GameService
     private async Task<int> ComputeRank(int width, int height, double time)
     {
         var betterCount = await _db.Scores.CountAsync(s =>
-            s.BoardWidth == width && s.BoardHeight == height && s.Time < time
+            s.BoardWidth == width && s.BoardHeight == height && !s.Flagged && s.Time < time
         );
         return betterCount + 1;
     }
