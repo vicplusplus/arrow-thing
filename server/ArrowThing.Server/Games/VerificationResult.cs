@@ -7,10 +7,10 @@ namespace ArrowThing.Server.Games;
 public sealed class VerificationResult
 {
     public bool IsValid { get; }
-    public string Reason { get; }
+    public string? Reason { get; }
     public double VerifiedTime { get; }
 
-    private VerificationResult(bool isValid, string reason, double verifiedTime)
+    private VerificationResult(bool isValid, string? reason, double verifiedTime)
     {
         IsValid = isValid;
         Reason = reason;

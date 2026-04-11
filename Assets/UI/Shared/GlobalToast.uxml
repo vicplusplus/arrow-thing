@@ -1,0 +1,14 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <Style src="Shared.uss" />
+    <Style src="GlobalToast.uss" />
+
+    <ui:VisualElement name="global-toast" class="toast global-toast global-toast--hidden" picking-mode="Ignore">
+        <ui:Label name="global-toast-text" class="toast__text" />
+        <ui:Button name="global-toast-retry" class="icon-btn global-toast__icon-btn global-toast--hidden">
+            <ui:VisualElement class="icon-btn__icon icon--refresh" />
+        </ui:Button>
+        <ui:Button name="global-toast-dismiss" class="icon-btn global-toast__icon-btn global-toast--hidden">
+            <ui:VisualElement class="icon-btn__icon icon--close" />
+        </ui:Button>
+    </ui:VisualElement>
+</ui:UXML>

@@ -13,13 +13,40 @@ if [ ! -f .env ]; then
     echo "Created .env with dev defaults. Edit if needed."
 fi
 
-# Start PostgreSQL
-docker compose -f docker-compose.dev.yml up -d
+# Start PostgreSQL and Redis (worker runs locally below)
+docker compose -f docker-compose.dev.yml up -d db redis
 echo "Waiting for PostgreSQL..."
 until docker exec arrowthing-dev pg_isready -U arrowthing -q 2>/dev/null; do
     sleep 1
 done
 echo "PostgreSQL ready."
 
-# Run the API (applies migrations on startup)
+echo "Waiting for Redis..."
+until docker exec arrowthing-redis-dev redis-cli ping 2>/dev/null | grep -q PONG; do
+    sleep 1
+done
+echo "Redis ready."
+
+# Load .env for local process configuration
+set -a
+source .env
+set +a
+
+LOCAL_CONN="Host=localhost;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+
+cleanup() {
+    echo "Shutting down..."
+    kill "$WORKER_PID" 2>/dev/null
+    wait "$WORKER_PID" 2>/dev/null
+}
+trap cleanup EXIT
+
+# Run the worker in the background
+ConnectionStrings__Default="$LOCAL_CONN" \
+Redis__ConnectionString="localhost:6379" \
+dotnet run --project ArrowThing.Worker &
+WORKER_PID=$!
+echo "Worker started (PID $WORKER_PID)."
+
+# Run the API in the foreground (applies migrations on startup)
 dotnet run --project ArrowThing.Server

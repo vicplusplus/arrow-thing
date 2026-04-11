@@ -20,7 +20,7 @@ public class ReplayVerifierTests
     )
     {
         var board = new Board(width, height);
-        TestBoardHelper.FillBoard(board, maxArrowLength, new Random(seed));
+        TestBoardHelper.FillBoard(board, maxArrowLength, seed);
 
         var snapshot = new List<List<Cell>>();
         foreach (var arrow in board.Arrows)
@@ -152,7 +152,7 @@ public class ReplayVerifierTests
     public void Verify_ClearNonClearableArrow_ReturnsInvalid()
     {
         var board = new Board(Width, Height);
-        TestBoardHelper.FillBoard(board, MaxArrowLength, new Random(Seed));
+        TestBoardHelper.FillBoard(board, MaxArrowLength, Seed);
 
         var snapshot = new List<List<Cell>>();
         foreach (var arrow in board.Arrows)
@@ -426,7 +426,7 @@ public class ReplayVerifierTests
     public void PreVerify_SmallClearCount_SkipsTiming()
     {
         var board = new Board(3, 3);
-        TestBoardHelper.FillBoard(board, 3, new Random(42));
+        TestBoardHelper.FillBoard(board, 3, 42);
 
         var snapshot = new List<List<Cell>>();
         foreach (var arrow in board.Arrows)

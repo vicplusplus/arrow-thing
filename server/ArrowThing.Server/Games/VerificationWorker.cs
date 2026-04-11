@@ -73,14 +73,17 @@ public class VerificationWorker : BackgroundService
         {
             job = System.Text.Json.JsonSerializer.Deserialize<VerificationJob>(jobJson);
         }
-        catch
+        catch (Exception ex)
         {
-            _logger.LogWarning("Failed to deserialize verification job");
+            _logger.LogWarning(ex, "Failed to deserialize verification job: {Json}", jobJson);
             return;
         }
 
-        if (job == null)
+        if (job == null || string.IsNullOrEmpty(job.GameId))
+        {
+            _logger.LogWarning("Deserialized verification job is null or missing GameId");
             return;
+        }
 
         _logger.LogInformation(
             "Processing verification for game {GameId}, user {UserId}",
@@ -243,7 +246,13 @@ public class VerificationWorker : BackgroundService
         VerificationResultPayload result
     )
     {
-        var json = System.Text.Json.JsonSerializer.Serialize(result);
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            result,
+            new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+            }
+        );
         await redis.StringSetAsync($"{ResultKeyPrefix}{gameId}", json, ResultTtl);
     }
 

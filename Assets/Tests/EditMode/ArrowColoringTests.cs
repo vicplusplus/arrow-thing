@@ -8,7 +8,7 @@ public class ArrowColoringTests
     public void AssignColors_NoAdjacentArrowsShareColor([Values(7, 42, 99, 123, 256)] int seed)
     {
         var board = new Board(10, 10);
-        TestBoardHelper.FillBoard(board, 5, new System.Random(seed));
+        TestBoardHelper.FillBoard(board, 5, seed);
 
         int[] colors = ArrowColoring.AssignColors(board);
 
@@ -49,7 +49,7 @@ public class ArrowColoringTests
     public void AssignColors_AllColorsWithinRange()
     {
         var board = new Board(10, 10);
-        TestBoardHelper.FillBoard(board, 5, new System.Random(42));
+        TestBoardHelper.FillBoard(board, 5, 42);
 
         int maxColors = 4;
         int[] colors = ArrowColoring.AssignColors(board, maxColors);
@@ -85,7 +85,7 @@ public class ArrowColoringTests
     public void AssignColors_Deterministic()
     {
         var board = new Board(10, 10);
-        TestBoardHelper.FillBoard(board, 5, new System.Random(42));
+        TestBoardHelper.FillBoard(board, 5, 42);
 
         int[] first = ArrowColoring.AssignColors(board);
         int[] second = ArrowColoring.AssignColors(board);
@@ -97,7 +97,7 @@ public class ArrowColoringTests
     public void AssignColors_LargeBoard_NoAdjacentConflicts()
     {
         var board = new Board(20, 20);
-        TestBoardHelper.FillBoard(board, 10, new System.Random(77));
+        TestBoardHelper.FillBoard(board, 10, 77);
 
         int[] colors = ArrowColoring.AssignColors(board);
 

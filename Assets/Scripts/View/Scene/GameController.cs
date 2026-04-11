@@ -96,6 +96,9 @@ public sealed class GameController : MonoBehaviour
     /// <summary>Set to true by the X button during loading to abort.</summary>
     private bool _cancelRequested;
 
+    /// <summary>Set to true once the victory sequence begins. Blocks Escape/leave modal.</summary>
+    private bool _victoryStarted;
+
     // Loading overlay state — driven by Update()
     private VisualElement _loadingOverlay;
     private VisualElement _loadingBarFill;
@@ -166,8 +169,8 @@ public sealed class GameController : MonoBehaviour
 
         // Escape: open/close leave modal. Checked after FocusNavigator so
         // modal dismiss (via ConsumesCancel) runs first and this doesn't re-open it.
-        var km = KeybindManager.Instance;
-        if (NavigableScene.ShouldHandleCancel(_focusNavigator))
+        // Blocked once the victory sequence starts — VictoryController owns input from that point.
+        if (!_victoryStarted && NavigableScene.ShouldHandleCancel(_focusNavigator))
         {
             OnEscape();
         }
@@ -399,11 +402,7 @@ public sealed class GameController : MonoBehaviour
 
     private IEnumerator GenerateBoard()
     {
-        var generator = BoardGeneration.FillBoardIncremental(
-            _board,
-            _maxLen,
-            new System.Random(_activeSeed)
-        );
+        var generator = BoardGeneration.FillBoardIncremental(_board, _maxLen, _activeSeed);
 
         // Progress is split across four phases. Weights tuned from PlayMode
         // GenerationProfiler data (300x300), matching measured wall-time
@@ -956,6 +955,7 @@ public sealed class GameController : MonoBehaviour
         );
         _boardView.LastArrowClearing += () =>
         {
+            _victoryStarted = true;
             _inputHandler.SetInputEnabled(false);
             if (_backBtn != null)
                 _backBtn.style.display = DisplayStyle.None;

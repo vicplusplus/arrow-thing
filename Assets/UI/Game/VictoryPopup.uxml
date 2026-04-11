@@ -3,10 +3,6 @@
     <Style src="VictoryPopup.uss" />
 
     <ui:VisualElement name="victory-overlay" class="modal-overlay victory--hidden">
-        <ui:VisualElement name="toast" class="toast victory-toast victory--hidden">
-            <ui:Label name="toast-text" class="toast__text" />
-            <ui:Button name="toast-action-btn" class="toast__action-btn victory--hidden" text="Retry" />
-        </ui:VisualElement>
         <ui:VisualElement class="victory-box">
             <ui:Label name="victory-message" class="victory-message" text="Nice!" />
             <ui:Label name="victory-time" class="victory-time" text="0.000" />

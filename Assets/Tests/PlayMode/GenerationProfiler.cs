@@ -52,11 +52,7 @@ public class GenerationProfiler
 
         // Board + generator — exact production code path
         var board = new Board(w, h);
-        var generator = BoardGeneration.FillBoardIncremental(
-            board,
-            maxLen,
-            new System.Random(seed)
-        );
+        var generator = BoardGeneration.FillBoardIncremental(board, maxLen, seed);
 
         float frameBudgetMs = 12f;
         int arrowCount = 0;

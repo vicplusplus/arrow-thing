@@ -11,7 +11,7 @@ public static class BoardGeneration
     /// Places as many arrows as possible, yielding after each arrow for progress.
     /// Yields <see cref="GenerationPhase"/> values between phases.
     /// </summary>
-    public static IEnumerator FillBoardIncremental(Board board, int maxLength, Random random)
+    public static IEnumerator FillBoardIncremental(Board board, int maxLength, int seed)
     {
         int maxPossibleArrows = board.Width * board.Height / 2;
 
@@ -22,8 +22,10 @@ public static class BoardGeneration
         state.InitializeCandidates();
         board.InitialCandidateCount = state.candidateCount;
 
-        // PortableRandom seed must be nonzero (xorshift fixed point).
-        var rng = new PortableRandom((uint)random.Next(1, int.MaxValue));
+        // Derive the generation RNG seed portably using PortableRandom itself,
+        // avoiding System.Random which differs between Mono (Unity) and .NET.
+        var seedRng = new PortableRandom((uint)seed);
+        var rng = new PortableRandom((uint)seedRng.NextInt(1, int.MaxValue));
         int created = 0;
 
         while (created < maxPossibleArrows && state.candidateCount > 0)

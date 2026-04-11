@@ -1,0 +1,25 @@
+/* GlobalToast — persists across scenes, renders above all other UI. */
+/* Base toast styles (.toast, .toast__text) live in Shared.uss. */
+/* Reusable icon button (.icon-btn, .icon-btn__icon) lives in Shared.uss. */
+/* Named icon classes (.icon--close, .icon--refresh) live in Shared.uss. */
+
+.global-toast--hidden {
+    display: none;
+}
+
+.global-toast {
+    top: 12px;
+    right: 12px;
+}
+
+/* Smaller icon-btn variant to fit inside the toast row. */
+.global-toast__icon-btn {
+    width: 28px;
+    height: 28px;
+    padding: 5px;
+    margin: 0 0 0 4px;
+}
+
+.global-toast__icon-btn:disabled {
+    opacity: 0.35;
+}

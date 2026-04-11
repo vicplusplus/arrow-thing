@@ -102,7 +102,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
     )
     {
         var board = new Board(width, height);
-        TestBoardHelper.FillBoard(board, maxArrowLength, new Random(seed));
+        TestBoardHelper.FillBoard(board, maxArrowLength, seed);
 
         var snapshot = new List<List<Cell>>();
         foreach (var arrow in board.Arrows)
@@ -192,7 +192,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
     )
     {
         var board = new Board(width, height);
-        TestBoardHelper.FillBoard(board, maxArrowLength, new Random(seed));
+        TestBoardHelper.FillBoard(board, maxArrowLength, seed);
 
         var snapshot = new List<List<Cell>>();
         foreach (var arrow in board.Arrows)
@@ -280,6 +280,35 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         var replayJson = MakeValidReplayJson(seed: 100);
         var status = await SubmitAndExpectVerifiedAsync(replayJson);
         Assert.True(status.Rank > 0);
+        Assert.True(status.IsPersonalBest == true);
+    }
+
+    [Theory]
+    [InlineData(5, 5, 3, 42)]
+    [InlineData(10, 10, 5, 42)]
+    [InlineData(20, 20, 8, 42)]
+    [InlineData(50, 50, 10, 42)]
+    public async Task SubmitValidReplay_VariousSizes_ReturnsVerified(
+        int width,
+        int height,
+        int maxArrowLength,
+        int seed
+    )
+    {
+        var token = await RegisterAndGetTokenAsync($"size{width}x{height}@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
+
+        var replayJson = MakeValidReplayJson(
+            seed: seed,
+            width: width,
+            height: height,
+            maxArrowLength: maxArrowLength
+        );
+        var status = await SubmitAndExpectVerifiedAsync(replayJson);
+        Assert.Equal("verified", status.Status);
         Assert.True(status.IsPersonalBest == true);
     }
 
@@ -480,7 +509,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
 
         // Build a valid replay, then tamper with a clear event position
         var board = new Board(10, 10);
-        TestBoardHelper.FillBoard(board, 5, new Random(105));
+        TestBoardHelper.FillBoard(board, 5, 105);
 
         var snapshot = new List<List<Cell>>();
         foreach (var arrow in board.Arrows)

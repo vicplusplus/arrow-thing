@@ -4,9 +4,9 @@
 /// </summary>
 public static class TestBoardHelper
 {
-    public static void FillBoard(Board board, int maxLength, System.Random random)
+    public static void FillBoard(Board board, int maxLength, int seed)
     {
-        var enumerator = BoardGeneration.FillBoardIncremental(board, maxLength, random);
+        var enumerator = BoardGeneration.FillBoardIncremental(board, maxLength, seed);
         while (enumerator.MoveNext()) { }
     }
 }

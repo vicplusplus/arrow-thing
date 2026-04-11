@@ -186,8 +186,11 @@ public sealed class ReplayViewController : MonoBehaviour
                 $"[ReplayViewController] No snapshot — regenerating board from seed={_replayData.seed}"
             );
 
-            var rng = new System.Random(_replayData.seed);
-            var gen = BoardGeneration.FillBoardIncremental(_board, _replayData.maxArrowLength, rng);
+            var gen = BoardGeneration.FillBoardIncremental(
+                _board,
+                _replayData.maxArrowLength,
+                _replayData.seed
+            );
 
             while (gen.MoveNext())
             {
