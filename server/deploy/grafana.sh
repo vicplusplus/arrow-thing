@@ -22,9 +22,18 @@ fi
 VPS_HOST="${VPS_HOST:?Set VPS_HOST in server/.env or environment}"
 VPS_USER="${VPS_USER:-deploy}"
 
+URL="http://localhost:3000"
+
 echo "Opening SSH tunnel to $VPS_USER@$VPS_HOST:3000 → localhost:3000"
-echo "Grafana will be available at http://localhost:3000"
+echo "Grafana will be available at $URL"
 echo "Press Ctrl+C to close the tunnel."
 echo ""
+
+# Open browser after tunnel has time to establish
+(sleep 2 && python3 -c "import webbrowser; webbrowser.open('$URL')" 2>/dev/null ||
+  start "$URL" 2>/dev/null ||
+  xdg-open "$URL" 2>/dev/null ||
+  open "$URL" 2>/dev/null ||
+  echo "Open $URL in your browser.") &
 
 ssh -N -L 3000:localhost:3000 "$VPS_USER@$VPS_HOST"
