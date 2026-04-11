@@ -72,6 +72,12 @@ public abstract class NavigableScene : MonoBehaviour
             KeybindManager.Instance.ActiveContext = NavContext;
     }
 
+    protected virtual void OnDisable()
+    {
+        Navigator?.Dispose();
+        Navigator = null;
+    }
+
     protected virtual void Update()
     {
         if (Navigator == null)

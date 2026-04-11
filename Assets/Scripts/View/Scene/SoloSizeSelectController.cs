@@ -79,11 +79,9 @@ public sealed class SoloSizeSelectController : NavigableScene
         var trophyBtn = root.Q<Button>("trophy-btn");
         if (trophyBtn != null)
             trophyBtn.clicked += OnLeaderboard;
-    }
 
-    protected override void BuildNavGraph(FocusNavigator nav)
-    {
-        // Restore selection from GameSettings if a previous game was played.
+        // Restore selection from GameSettings (runs once on scene load, not on
+        // nav rebuilds, so it won't undo user clicks that trigger a rebuild).
         if (GameSettings.IsSet)
         {
             bool matchesPreset =
@@ -93,19 +91,25 @@ public sealed class SoloSizeSelectController : NavigableScene
                 || (GameSettings.Width == 100 && GameSettings.Height == 100);
 
             if (matchesPreset)
-                SelectPreset(GameSettings.Width, GameSettings.Height);
+            {
+                _selectedWidth = GameSettings.Width;
+                _selectedHeight = GameSettings.Height;
+            }
             else
             {
                 _customWidthSnap.SetValueWithoutNotify(GameSettings.Width);
                 _customHeightSnap.SetValueWithoutNotify(GameSettings.Height);
-                SelectCustom();
+                _isCustomSelected = true;
+                _selectedWidth = GameSettings.Width;
+                _selectedHeight = GameSettings.Height;
+                SetVisible(_customPanel, true);
             }
         }
-        else
-        {
-            SelectPreset(10, 10);
-        }
+        UpdateAllPresetHighlights();
+    }
 
+    protected override void BuildNavGraph(FocusNavigator nav)
+    {
         var items = new List<FocusNavigator.FocusItem>();
 
         _backIdx = items.Count;
@@ -240,10 +244,14 @@ public sealed class SoloSizeSelectController : NavigableScene
         _startIdx = items.Count - 1;
         nav.SetItems(items, GetPresetIndex());
 
-        // Grid links built after layout resolves.
+        // Grid links built after layout resolves. Unregister first to avoid
+        // stacking callbacks when RebuildNavigator re-enters BuildNavGraph.
         var presetGrid = Root.Q(className: "preset-grid");
         if (presetGrid != null)
+        {
+            presetGrid.UnregisterCallback<GeometryChangedEvent>(OnPresetGridLayout);
             presetGrid.RegisterCallback<GeometryChangedEvent>(OnPresetGridLayout);
+        }
     }
 
     private void OnPresetGridLayout(GeometryChangedEvent evt) => LinkPresetGrid();
@@ -365,7 +373,7 @@ public sealed class SoloSizeSelectController : NavigableScene
         SetVisible(_customPanel, false);
         UpdateAllPresetHighlights();
         if (wasCustom)
-            RebuildNavigator();
+            RebuildNavigator(preserveFocus: true);
     }
 
     private void SelectCustom()

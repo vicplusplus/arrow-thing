@@ -296,6 +296,7 @@ public sealed class FocusNavigator
         _navGraph = saved.NavGraph;
         _currentIndex = saved.CurrentIndex;
         _ringVisible = saved.RingVisible;
+        _prevFocusedIndex = _currentIndex; // avoid stale blur on wrong item
         foreach (var item in _items)
             item.Element.AddToClassList(FocusableClass);
         if (_ringVisible)
