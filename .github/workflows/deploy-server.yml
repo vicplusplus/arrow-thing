@@ -73,13 +73,14 @@ jobs:
              ./server/deploy/setup.sh && \
              cd /home/deploy/arrow-thing && \
              docker compose pull && \
-             docker compose up -d --remove-orphans"
+             docker compose up -d --remove-orphans && \
+             docker compose restart nginx"
 
       - name: Health check
         run: |
           echo "Waiting for container to be ready..."
-          sleep 5
-          for i in $(seq 1 6); do
+          sleep 10
+          for i in $(seq 1 10); do
             STATUS=$(curl -o /dev/null -s -w "%{http_code}" https://api.arrow-thing.com/health)
             if [ "$STATUS" = "200" ]; then
               echo "Health check passed (HTTP $STATUS)"
