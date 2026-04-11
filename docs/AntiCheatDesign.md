@@ -1,18 +1,6 @@
-# Anti-Cheat & Server Hardening
+# Anti-Cheat & Score Integrity — Design History
 
-Design document covering score integrity, infrastructure improvements, and replay fraud detection. Each section maps to a separate PR.
-
----
-
-## Current State
-
-The server verifies replays by regenerating the board from seed, comparing the snapshot, simulating all clear events, and computing solve time from event timestamps. This catches fabricated replays (impossible clears, wrong snapshot, incomplete solves) but does **not** detect:
-
-- **Superhuman speed** — timestamps can be arbitrarily close (e.g. 10ms between clears) and the server accepts them.
-- **Stolen replays** — a player can submit another player's replay (or a slight modification) as their own.
-- **Unbounded board sizes** — no cap on `boardWidth`/`boardHeight`, so a malicious client can submit absurdly large boards that consume server CPU/memory during verification.
-
-Replay verification is also synchronous and single-threaded — a large board verification blocks the request thread and delays all other score submissions.
+This document captures the design history and rationale for the anti-cheat system. The authoritative technical description lives in `TechnicalDesign.md` § Score Integrity.
 
 ---
 
@@ -89,7 +77,9 @@ Also added `miss` replay event type (taps on empty cells) for observability in m
 
 ---
 
-## PR 2: Redis Infrastructure
+## PR 2: Redis Infrastructure — COMPLETED
+
+Merged: #83
 
 ### Problem
 
@@ -149,7 +139,9 @@ Benefits:
 
 ---
 
-## PR 3: Verification Worker
+## PR 3: Verification Worker — COMPLETED
+
+Merged: #84, #85
 
 ### Problem
 
@@ -290,17 +282,26 @@ No inline verification path. All boards go through the worker.
 
 ```
 PR 1 (pre-verification)        — ✅ COMPLETED (#81, #82)
-PR 2 (Redis infrastructure)    — next, prerequisite for PR 3
-PR 3 (verification worker)     — depends on PR 2
+PR 2 (Redis infrastructure)    — ✅ COMPLETED (#83)
+PR 3 (verification worker)     — ✅ COMPLETED (#84, #85)
 ```
 
 ---
 
+## Stopping Point
+
+PR 3 is the final anti-cheat PR. The root problem is that the client has full knowledge of game state — the board is fully visible, clearability is computable, and optimal solve order is trivially derivable. No amount of server-side validation can prove a human was in the loop when the game logic is deterministic and fully observable.
+
+**Server-issued seeds were considered and rejected.** Auto-solving any board from any seed is instant — issuing the seed server-side doesn't prevent pre-computation, it just adds one HTTP call to a bot's workflow. Server-side timing doesn't work for async games (multi-session play over days/weeks) because pause gaps are client-reported, so a bot can fabricate pauses to match wall time. The endpoint would add complexity without meaningful security gain.
+
+Further hardening (behavioral analysis, click pattern detection, statistical outlier detection) yields diminishing returns against increasingly unlikely attackers while costing significant development time. For a free open-source puzzle game, the realistic threat is casual cheaters — not sophisticated bots — and PRs 1–3 cover that.
+
+A determined attacker with domain knowledge can always cheat. Accept that and invest development time in features that make the game better.
+
 ## Out of Scope
 
-- **Statistical outlier detection** (analyzing score distributions over time) — future work, requires more data.
-- **WebSocket-based server-witnessed timing** — mentioned in OnlineRoadmap.md as a future path.
+- **Behavioral analysis** (click patterns, reaction times, mouse paths) — diminishing returns; a bot can simulate plausible human behavior.
+- **Statistical outlier detection** (score distributions over time) — requires large player population to be meaningful.
 - **IP-based rate limiting** — already handled by Cloudflare (60 req/10s per IP) and Nginx (30 req/min API, 5 req/min auth).
 - **Client-side obfuscation** — security through obscurity, not worth the maintenance cost.
 - **Score-level flagging** — considered and removed. User-level flagging is simpler and more effective: a cheater's entire account is locked, not just individual scores. Admin can unflag users after review.
-- **Play session tokens** — considered and rejected. Tokens prove presence at start/end but not during play. Save/resume makes continuous check-ins impractical. Bots that actually play the game are effectively impossible to distinguish from fast humans for this game type. PR 1 (timing + seed dedup) covers the real threats.
