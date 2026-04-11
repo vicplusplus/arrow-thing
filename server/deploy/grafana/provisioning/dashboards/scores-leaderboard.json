@@ -21,21 +21,7 @@
       "icon": "shield"
     }
   ],
-  "templating": {
-    "list": [
-      {
-        "name": "board_size",
-        "label": "Board Size",
-        "type": "query",
-        "datasource": { "type": "postgres", "uid": "postgres" },
-        "query": "SELECT DISTINCT \"BoardWidth\" || 'x' || \"BoardHeight\" AS __text, \"BoardWidth\" || 'x' || \"BoardHeight\" AS __value FROM \"Scores\" ORDER BY 1;",
-        "includeAll": true,
-        "allValue": "%",
-        "current": { "text": "All", "value": "$__all" },
-        "refresh": 1
-      }
-    ]
-  },
+  "templating": { "list": [] },
   "panels": [
     {
       "id": 1,
@@ -236,57 +222,140 @@
       }
     },
     {
-      "id": 8,
-      "title": "Fastest Times per Board Size",
-      "description": "Top 10 fastest solve times per board size (excludes flagged)",
-      "type": "table",
-      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 22 },
-      "datasource": { "type": "postgres", "uid": "postgres" },
-      "targets": [
-        {
-          "rawSql": "SELECT ranked.board_size AS \"Board Size\", ranked.rank AS \"#\", ranked.display_name AS \"Player\", ranked.solve_time AS \"Time (s)\" FROM ( SELECT s.\"BoardWidth\" || 'x' || s.\"BoardHeight\" AS board_size, u.\"DisplayName\" AS display_name, ROUND(s.\"Time\"::numeric, 3) AS solve_time, ROW_NUMBER() OVER (PARTITION BY s.\"BoardWidth\", s.\"BoardHeight\" ORDER BY s.\"Time\" ASC) AS rank FROM \"Scores\" s JOIN \"Users\" u ON s.\"UserId\" = u.\"Id\" WHERE u.\"Flagged\" = false ) ranked WHERE ranked.rank <= 10 ORDER BY ranked.board_size, ranked.rank;",
-          "format": "table",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "options": {
-        "showHeader": true,
-        "sortBy": [{ "displayName": "Board Size" }]
-      }
+      "id": 20,
+      "title": "Leaderboards",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "collapsed": false,
+      "panels": []
     },
     {
-      "id": 9,
-      "title": "Average Solve Time by Board Size",
-      "description": "Mean solve time per board dimension (excludes flagged)",
-      "type": "barchart",
-      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 22 },
+      "id": 8,
+      "title": "Leaderboard — 10x10",
+      "type": "table",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 23 },
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT s.\"BoardWidth\" || 'x' || s.\"BoardHeight\" AS \"Board Size\", ROUND(AVG(s.\"Time\")::numeric, 2) AS \"Avg Time (s)\", ROUND(MIN(s.\"Time\")::numeric, 2) AS \"Best (s)\", COUNT(*) AS \"Scores\" FROM \"Scores\" s JOIN \"Users\" u ON s.\"UserId\" = u.\"Id\" WHERE u.\"Flagged\" = false GROUP BY s.\"BoardWidth\", s.\"BoardHeight\" ORDER BY s.\"BoardWidth\", s.\"BoardHeight\";",
+          "rawSql": "SELECT ROW_NUMBER() OVER (ORDER BY s.\"Time\" ASC) AS \"#\", u.\"DisplayName\" AS \"Player\", ROUND(s.\"Time\"::numeric, 3) AS \"Time (s)\", s.\"GameId\" AS \"Game ID\" FROM \"Scores\" s JOIN \"Users\" u ON s.\"UserId\" = u.\"Id\" WHERE s.\"BoardWidth\" = 10 AND s.\"BoardHeight\" = 10 AND u.\"Flagged\" = false ORDER BY s.\"Time\" ASC;",
           "format": "table",
           "refId": "A"
         }
       ],
       "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "unit": "s"
-        },
-        "overrides": []
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Game ID" },
+            "properties": [{ "id": "custom.width", "value": 280 }]
+          }
+        ]
       },
-      "options": {
-        "xField": "Board Size",
-        "orientation": "vertical"
-      }
+      "options": { "showHeader": true }
+    },
+    {
+      "id": 9,
+      "title": "Leaderboard — 20x20",
+      "type": "table",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 23 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT ROW_NUMBER() OVER (ORDER BY s.\"Time\" ASC) AS \"#\", u.\"DisplayName\" AS \"Player\", ROUND(s.\"Time\"::numeric, 3) AS \"Time (s)\", s.\"GameId\" AS \"Game ID\" FROM \"Scores\" s JOIN \"Users\" u ON s.\"UserId\" = u.\"Id\" WHERE s.\"BoardWidth\" = 20 AND s.\"BoardHeight\" = 20 AND u.\"Flagged\" = false ORDER BY s.\"Time\" ASC;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Game ID" },
+            "properties": [{ "id": "custom.width", "value": 280 }]
+          }
+        ]
+      },
+      "options": { "showHeader": true }
+    },
+    {
+      "id": 11,
+      "title": "Leaderboard — 40x40",
+      "type": "table",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 33 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT ROW_NUMBER() OVER (ORDER BY s.\"Time\" ASC) AS \"#\", u.\"DisplayName\" AS \"Player\", ROUND(s.\"Time\"::numeric, 3) AS \"Time (s)\", s.\"GameId\" AS \"Game ID\" FROM \"Scores\" s JOIN \"Users\" u ON s.\"UserId\" = u.\"Id\" WHERE s.\"BoardWidth\" = 40 AND s.\"BoardHeight\" = 40 AND u.\"Flagged\" = false ORDER BY s.\"Time\" ASC;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Game ID" },
+            "properties": [{ "id": "custom.width", "value": 280 }]
+          }
+        ]
+      },
+      "options": { "showHeader": true }
+    },
+    {
+      "id": 12,
+      "title": "Leaderboard — 100x100",
+      "type": "table",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 33 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT ROW_NUMBER() OVER (ORDER BY s.\"Time\" ASC) AS \"#\", u.\"DisplayName\" AS \"Player\", ROUND(s.\"Time\"::numeric, 3) AS \"Time (s)\", s.\"GameId\" AS \"Game ID\" FROM \"Scores\" s JOIN \"Users\" u ON s.\"UserId\" = u.\"Id\" WHERE s.\"BoardWidth\" = 100 AND s.\"BoardHeight\" = 100 AND u.\"Flagged\" = false ORDER BY s.\"Time\" ASC;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Game ID" },
+            "properties": [{ "id": "custom.width", "value": 280 }]
+          }
+        ]
+      },
+      "options": { "showHeader": true }
+    },
+    {
+      "id": 13,
+      "title": "Leaderboard — All (by size)",
+      "description": "All scores across all board sizes, sorted by size then time",
+      "type": "table",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 43 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT s.\"BoardWidth\" || 'x' || s.\"BoardHeight\" AS \"Board Size\", ROW_NUMBER() OVER (PARTITION BY s.\"BoardWidth\", s.\"BoardHeight\" ORDER BY s.\"Time\" ASC) AS \"#\", u.\"DisplayName\" AS \"Player\", ROUND(s.\"Time\"::numeric, 3) AS \"Time (s)\", s.\"GameId\" AS \"Game ID\" FROM \"Scores\" s JOIN \"Users\" u ON s.\"UserId\" = u.\"Id\" WHERE u.\"Flagged\" = false ORDER BY s.\"BoardWidth\" ASC, s.\"BoardHeight\" ASC, s.\"Time\" ASC;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Game ID" },
+            "properties": [{ "id": "custom.width", "value": 280 }]
+          }
+        ]
+      },
+      "options": { "showHeader": true }
     },
     {
       "id": 10,
       "title": "Flagged Users' Scores",
       "description": "All scores belonging to flagged accounts",
       "type": "table",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 55 },
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
