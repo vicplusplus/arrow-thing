@@ -17,6 +17,7 @@ This document is the implementation-facing counterpart to [`GDD.md`](GDD.md).
 - [`GDD.md`](GDD.md): game design goals and player-facing behavior.
 - [`BoardGeneration.md`](BoardGeneration.md): generator algorithm, dependency graph maintenance, and cycle detection.
 - [`OnlineRoadmap.md`](OnlineRoadmap.md): planned features (server, leaderboards, replays, accounts).
+- [`AntiCheatDesign.md`](AntiCheatDesign.md): design history and PR-level details for score integrity work.
 
 ## Architecture Overview
 
@@ -290,6 +291,66 @@ Structured logging via **Serilog** (console + Grafana Loki push). HTTP request l
 
 Infrastructure services (`loki`, `prometheus`, `grafana`) run as Docker containers alongside the existing `api`, `db`, and `nginx` services. None are publicly exposed — Prometheus and Loki are internal-only (`expose:`), Grafana binds to `127.0.0.1:3000`.
 
+## Score Integrity
+
+### Threat Model
+
+The game's board state is fully observable and deterministic. Clearability is computable, and optimal solve order is trivially derivable — a bot can auto-solve any board instantly. No amount of server-side validation can prove a human was in the loop. The anti-cheat system targets **casual cheaters** (browser console, memory editing, trivial scripts), not sophisticated bots. A determined attacker with domain knowledge can always cheat; this is accepted.
+
+### Architecture
+
+Score submission is async. The API performs cheap pre-verification checks synchronously, enqueues the job to Redis, and returns 202. A dedicated `VerificationWorker` process consumes the queue, runs full board regeneration + clear simulation, persists verified scores, and writes results back to Redis for client polling.
+
+```
+Client → POST /api/scores → Pre-verify → Redis queue → 202 Accepted
+                                                ↓
+                                         VerificationWorker
+                                         (Board regen + simulate)
+                                                ↓
+Client ← GET /api/scores/{id}/status ← Redis result (TTL 1h)
+```
+
+### Pre-Verification (synchronous, O(1)/O(n))
+
+Run on the request thread before enqueuing:
+
+| Check | Action on failure |
+|-------|-------------------|
+| `User.Flagged` | Reject 403 |
+| Board dimensions outside [2, 400] | Flag user, reject 403 |
+| Solve time < `clearCount * 0.08s` (skipped if ≤5 clears) | Flag user, reject 403 |
+| Same `(seed, width, height)` from different user | Flag user, reject 403 |
+| Rate limit (per-user, per-hour) | Reject 429 |
+
+### Full Verification (async, in worker)
+
+1. Regenerate board from seed using `PortableRandom` (xorshift32 — deterministic across Unity Mono and .NET).
+2. Compare board snapshot (arrow count + cell lists).
+3. Simulate all clear events in sequence, verifying each arrow is clearable.
+4. Verify board is fully cleared.
+5. Compute solve time from event timestamps (subtracting pause gaps).
+
+### User Flagging
+
+Account-level flag (`User.Flagged`, `User.FlagReason`). Flagged users are excluded from all leaderboard queries and blocked from submitting scores. Admin endpoints: `GET /api/admin/flagged-users`, `POST /api/admin/users/{id}/unflag`, `POST /api/admin/scores/{id}/remove`.
+
+### Client Integration
+
+`ScoreSubmitter` is fire-and-forget (`async void`). On 202, polls status 3 times at 2s intervals. Retryable errors (network, 5xx, 429) show a persistent toast with Retry button; permanent errors (401, 403, rejection) show Dismiss only. `GlobalToast` is a `DontDestroyOnLoad` singleton that survives scene transitions.
+
+### Cross-Platform Determinism
+
+`System.Random` produces different sequences on Mono (Unity) vs .NET from the same seed. All board generation randomness uses `PortableRandom` exclusively. `GenerationFingerprintTests` (both Unity EditMode and server xUnit) verify identical output for the same seeds across runtimes.
+
+### What's Not Covered (and Why)
+
+- **Server-issued seeds** — rejected. Auto-solving is instant for any seed; issuing server-side just adds one HTTP call to a bot's workflow.
+- **Server-side timing** — rejected. Incompatible with async play (multi-session games over days/weeks). Pause gaps are client-reported, so a bot can fabricate them to match wall time.
+- **Behavioral analysis** — diminishing returns. A bot can simulate plausible human click patterns.
+- **Statistical outlier detection** — requires large player population to be meaningful.
+
+See `docs/AntiCheatDesign.md` for full design history and PR-level implementation details.
+
 ## Known Limitations
 
 ### Mobile UI Scaling
@@ -408,4 +469,5 @@ Posts release notes to a Discord webhook. Triggers after a successful WebGL depl
 - 2026-03-21: Added leaderboard UI and replay viewer (Phase 3-4). Leaderboard scene: `LeaderboardScreenController` with 5 size tabs, 3 sort modes, Local/Global toggle, scrollable entry list, context menu, favorite toggle, auto-scroll from victory via `LeaderboardFocusGameId`. Replay viewer: `BoardSetupHelper` extracted from `GameController` for shared board/view/camera setup. `ReplayViewController` drives frame-based playback with `ReplayPlayer.Advance()`, animated clears/bumps, seek (pause-during-drag pattern), speed cycling, controls bar toggle, and clearable highlighting (electric cyan `#00DFFF`). `TapIndicatorPool` spawns procedural ring sprites (no asset needed). `ReplayPlayer` enhanced with 0.5s lead-in, 1.0s exit padding, `DisplayDuration` for UI clamping. Biggest sort tiebreaker: area → time → date.
 - 2026-04-07: Added post-process compaction to board generation. `CompactBoardInPlace` iteratively merges trivial collinear same-direction adjacent arrow chains after generation, reducing visual clutter without affecting solvability. `FillBoardIncremental` accepts `compact` parameter; loading progress uses a three-phase model (generation → compaction → finalization) with `CompactionMarker` and `FinalizationMarker` sentinels. `GameController` rebuilds ArrowViews after compaction. `RemoveArrowForGeneration` on `Board` enables in-place modification during generation phase. Standalone benchmark project (`generation-benchmark/`) used during development and removed after benchmarking concluded.
 - 2026-04-10: Fixed cross-platform board generation determinism. `FillBoardIncremental` now accepts `int seed` directly and derives all randomness via `PortableRandom` (xorshift32). Previously used `System.Random` to derive the `PortableRandom` seed, but Mono (Unity) and .NET produce different sequences from the same seed, causing server-side replay verification to always fail (snapshot mismatch). `System.Random` is now banned from domain code that affects board layout or verification. Added `GlobalToast` singleton (DontDestroyOnLoad) for persistent cross-scene error toasts. `ScoreSubmitter` rewritten as fire-and-forget with retryable error classification and 202 polling. Victory popup keyboard shortcuts (R=Play Again, L=Leaderboard, Escape=Menu). Escape blocked during victory animation.
+- 2026-04-11: Finalized score integrity system. Three PRs: pre-verification with account flagging (#81/#82), Redis infrastructure (#83), async verification worker (#84/#85). Moved authoritative spec from standalone `AntiCheatDesign.md` into TDD § Score Integrity. Server-issued seeds and server-side timing evaluated and rejected — game state is fully observable, so no server-side measure can prove human presence. Anti-cheat targets casual cheaters; determined attackers are accepted as unstoppable.
 - 2026-03-29: Complete UI overhaul. (1) Shared component library: `Shared.uss` extracts reusable styles (modals, back-button, icon-button, entry rows, loading overlay) used across all screens, eliminating duplication. (2) CSS variable theming: all UI colours moved to `ThemeColors.uss` as custom properties; all screen USS files reference `var(--...)` only. `VisualSettings.themeUIStyleSheet` holds the active theme; `UIThemeApplier` injects it into every UIDocument at runtime — swapping the asset in the inspector swaps the full palette. (3) Runtime theme switching: `ThemeManager` static class initialises from `ThemeRegistry` (`Resources/ThemeRegistry`) at `BeforeSceneLoad`, fires `ThemeChanged` event on `Apply()`; `UIThemeApplier` rewritten to subscribe to `ThemeChanged` and hot-swap the active stylesheet. `CustomDropdown` (custom popup injected into `panel.visualTree`) replaces Unity `DropdownField` for the theme selector. (4) Reusable C# components: `ConfirmModal` wrapper used by all confirm/cancel dialogs; `EditableLabel` (inline-edit label+icon); `LabeledField` (labeled TextField); `ExternalLinks` (WebGL-safe URL routing with confirmation modal). (5) Account panel redesign: offline display name always editable via `EditableLabel`; `LabeledField` standardises all form inputs. (6) `LeaderboardManager.AutoCreate` now bootstraps `GameSettings.DisplayName` from PlayerPrefs on startup, so display names appear in leaderboard entries even when the settings panel is never opened. (7) Leaderboard improvements: top-3 medal tints (gold/silver/bronze), Fastest/Biggest sort visibility swapped correctly per tab, Favorites sort secondary area tiebreaker. (8) View layer refactoring: `MainMenuController.OnEnable` split into Wire* helpers; `InputHandler.HandleSelectAndPan` extracts `HandleTap`; `BoardView.TryClearArrow` extracts `PlayBlockedFeedback`. (9) Icons: all circular HUD/nav buttons use PNG icons (WebGL-safe); lock, play, trophy, close, info, logout use filled icon variants. (10) Folder restructure: `Scripts/View/` split into Account/, Board/, Components/, Data/, HUD/, Scene/, Theme/ subfolders; `Art/` split into Icons/ and Sprites/; `UI/` split into Shared/, MainMenu/, Game/, Leaderboard/, Replay/. (11) `SettingsController` extracted from `MainMenuController` as a standalone MonoBehaviour; attach to any scene's UIDocument to get a fully functional settings panel including keyboard shortcut, account management, and external-link confirmation modal.

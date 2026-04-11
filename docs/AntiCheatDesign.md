@@ -1,18 +1,6 @@
-# Anti-Cheat & Server Hardening
+# Anti-Cheat & Score Integrity — Design History
 
-Design document covering score integrity, infrastructure improvements, and replay fraud detection. Each section maps to a separate PR.
-
----
-
-## Current State
-
-The server verifies replays by regenerating the board from seed, comparing the snapshot, simulating all clear events, and computing solve time from event timestamps. This catches fabricated replays (impossible clears, wrong snapshot, incomplete solves) but does **not** detect:
-
-- **Superhuman speed** — timestamps can be arbitrarily close (e.g. 10ms between clears) and the server accepts them.
-- **Stolen replays** — a player can submit another player's replay (or a slight modification) as their own.
-- **Unbounded board sizes** — no cap on `boardWidth`/`boardHeight`, so a malicious client can submit absurdly large boards that consume server CPU/memory during verification.
-
-Replay verification is also synchronous and single-threaded — a large board verification blocks the request thread and delays all other score submissions.
+This document captures the design history and rationale for the anti-cheat system. The authoritative technical description lives in `TechnicalDesign.md` § Score Integrity.
 
 ---
 
