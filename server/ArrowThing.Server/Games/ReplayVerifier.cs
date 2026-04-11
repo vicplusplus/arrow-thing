@@ -19,7 +19,7 @@ public static class ReplayVerifier
     /// Validates board dimensions and solve timing plausibility.
     /// Returns null if all checks pass; returns a reason string on failure.
     /// </summary>
-    public static string PreVerify(ReplayData replay)
+    public static string? PreVerify(ReplayData replay)
     {
         if (replay == null)
             return "Replay is null.";
@@ -123,7 +123,7 @@ public static class ReplayVerifier
         return VerificationResult.Valid(verifiedTime);
     }
 
-    private static string CompareSnapshot(Board board, List<List<Cell>> snapshot)
+    private static string? CompareSnapshot(Board board, List<List<Cell>> snapshot)
     {
         if (board.Arrows.Count != snapshot.Count)
             return $"Snapshot mismatch: expected {board.Arrows.Count} arrows, snapshot has {snapshot.Count}.";
