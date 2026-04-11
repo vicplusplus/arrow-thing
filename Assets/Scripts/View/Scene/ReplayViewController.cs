@@ -113,8 +113,9 @@ public sealed class ReplayViewController : MonoBehaviour
         ThemeManager.ThemeChanged += OnThemeChanged;
 
         // Create navigator early so navigation events are suppressed from the start.
+        // Stored in _replayNavigator; replaced by the real one in WireHud.
         if (hudUIDocument != null && hudUIDocument.rootVisualElement != null)
-            new FocusNavigator(hudUIDocument.rootVisualElement);
+            _replayNavigator = new FocusNavigator(hudUIDocument.rootVisualElement);
 
         if (KeybindManager.Instance != null)
             KeybindManager.Instance.ActiveContext = KeybindManager.Context.Replay;
@@ -124,6 +125,7 @@ public sealed class ReplayViewController : MonoBehaviour
 
     private void OnDestroy()
     {
+        _replayNavigator?.Dispose();
         SettingsController.IsOpenChanged -= OnSettingsOpenChanged;
         ThemeManager.ThemeChanged -= OnThemeChanged;
         if (EnhancedTouchSupport.enabled)

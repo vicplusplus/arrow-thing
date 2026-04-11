@@ -143,6 +143,7 @@ public sealed class GameController : MonoBehaviour
 
     private void OnDestroy()
     {
+        _focusNavigator?.Dispose();
         SettingsController.IsOpenChanged -= OnSettingsOpenChanged;
         ThemeManager.ThemeChanged -= OnThemeChanged;
     }
