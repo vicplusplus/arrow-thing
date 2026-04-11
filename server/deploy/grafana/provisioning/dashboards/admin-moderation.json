@@ -30,7 +30,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT COUNT(*) AS \"Total Users\" FROM users;",
+          "rawSql": "SELECT COUNT(*) AS \"Total Users\" FROM \"Users\";",
           "format": "table",
           "refId": "A"
         }
@@ -56,7 +56,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT COUNT(*) AS \"Verified\" FROM users WHERE email_verified_at IS NOT NULL;",
+          "rawSql": "SELECT COUNT(*) AS \"Verified\" FROM \"Users\" WHERE \"EmailVerifiedAt\" IS NOT NULL;",
           "format": "table",
           "refId": "A"
         }
@@ -82,7 +82,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT COUNT(*) AS \"Flagged\" FROM users WHERE flagged = true;",
+          "rawSql": "SELECT COUNT(*) AS \"Flagged\" FROM \"Users\" WHERE \"Flagged\" = true;",
           "format": "table",
           "refId": "A"
         }
@@ -112,7 +112,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT COUNT(*) AS \"Locked\" FROM users WHERE locked_at IS NOT NULL;",
+          "rawSql": "SELECT COUNT(*) AS \"Locked\" FROM \"Users\" WHERE \"LockedAt\" IS NOT NULL;",
           "format": "table",
           "refId": "A"
         }
@@ -143,7 +143,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT u.id, u.display_name AS \"Display Name\", u.email AS \"Email\", u.flag_reason AS \"Flag Reason\", u.created_at AS \"Account Created\", COUNT(s.id) AS \"Scores\" FROM users u LEFT JOIN scores s ON s.user_id = u.id WHERE u.flagged = true GROUP BY u.id, u.display_name, u.email, u.flag_reason, u.created_at ORDER BY u.created_at DESC;",
+          "rawSql": "SELECT u.\"Id\", u.\"DisplayName\" AS \"Display Name\", u.\"Email\", u.\"FlagReason\" AS \"Flag Reason\", u.\"CreatedAt\" AS \"Account Created\", COUNT(s.\"Id\") AS \"Scores\" FROM \"Users\" u LEFT JOIN \"Scores\" s ON s.\"UserId\" = u.\"Id\" WHERE u.\"Flagged\" = true GROUP BY u.\"Id\", u.\"DisplayName\", u.\"Email\", u.\"FlagReason\", u.\"CreatedAt\" ORDER BY u.\"CreatedAt\" DESC;",
           "format": "table",
           "refId": "A"
         }
@@ -152,7 +152,7 @@
         "defaults": {},
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "id" },
+            "matcher": { "id": "byName", "options": "Id" },
             "properties": [{ "id": "custom.width", "value": 280 }]
           },
           {
@@ -175,7 +175,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT u.id, u.display_name AS \"Display Name\", u.email AS \"Email\", u.locked_at AS \"Locked At\" FROM users u WHERE u.locked_at IS NOT NULL ORDER BY u.locked_at DESC;",
+          "rawSql": "SELECT u.\"Id\", u.\"DisplayName\" AS \"Display Name\", u.\"Email\", u.\"LockedAt\" AS \"Locked At\" FROM \"Users\" u WHERE u.\"LockedAt\" IS NOT NULL ORDER BY u.\"LockedAt\" DESC;",
           "format": "table",
           "refId": "A"
         }
@@ -195,7 +195,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT u.display_name AS \"Display Name\", u.email AS \"Email\", u.flag_reason AS \"Reason\" FROM users u WHERE u.flagged = true AND u.flag_reason LIKE 'verification_failed:%' ORDER BY u.created_at DESC;",
+          "rawSql": "SELECT u.\"DisplayName\" AS \"Display Name\", u.\"Email\", u.\"FlagReason\" AS \"Reason\" FROM \"Users\" u WHERE u.\"Flagged\" = true AND u.\"FlagReason\" LIKE 'verification_failed:%' ORDER BY u.\"CreatedAt\" DESC;",
           "format": "table",
           "refId": "A"
         }
@@ -212,7 +212,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT a.timestamp AS \"Time\", a.event AS \"Event\", a.email AS \"Email\", a.ip_address AS \"IP\", a.detail AS \"Detail\" FROM audit_logs a WHERE a.timestamp >= $__timeFrom()::timestamptz AND a.timestamp <= $__timeTo()::timestamptz ORDER BY a.timestamp DESC LIMIT 100;",
+          "rawSql": "SELECT a.\"Timestamp\" AS \"Time\", a.\"Event\", a.\"Email\", a.\"IpAddress\" AS \"IP\", a.\"Detail\" FROM \"AuditLogs\" a WHERE a.\"Timestamp\" >= $__timeFrom()::timestamptz AND a.\"Timestamp\" <= $__timeTo()::timestamptz ORDER BY a.\"Timestamp\" DESC LIMIT 100;",
           "format": "table",
           "refId": "A"
         }
@@ -240,7 +240,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT a.event AS \"Event\", COUNT(*) AS \"Count\" FROM audit_logs a WHERE a.timestamp >= $__timeFrom()::timestamptz AND a.timestamp <= $__timeTo()::timestamptz GROUP BY a.event ORDER BY \"Count\" DESC;",
+          "rawSql": "SELECT a.\"Event\", COUNT(*) AS \"Count\" FROM \"AuditLogs\" a WHERE a.\"Timestamp\" >= $__timeFrom()::timestamptz AND a.\"Timestamp\" <= $__timeTo()::timestamptz GROUP BY a.\"Event\" ORDER BY \"Count\" DESC;",
           "format": "table",
           "refId": "A"
         }
@@ -265,7 +265,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT a.email AS \"Email\", a.ip_address AS \"IP\", COUNT(*) AS \"Attempts\", MAX(a.timestamp) AS \"Last Attempt\" FROM audit_logs a WHERE a.event = 'login_failed' AND a.timestamp >= $__timeFrom()::timestamptz AND a.timestamp <= $__timeTo()::timestamptz GROUP BY a.email, a.ip_address ORDER BY \"Attempts\" DESC LIMIT 50;",
+          "rawSql": "SELECT a.\"Email\", a.\"IpAddress\" AS \"IP\", COUNT(*) AS \"Attempts\", MAX(a.\"Timestamp\") AS \"Last Attempt\" FROM \"AuditLogs\" a WHERE a.\"Event\" = 'login_failed' AND a.\"Timestamp\" >= $__timeFrom()::timestamptz AND a.\"Timestamp\" <= $__timeTo()::timestamptz GROUP BY a.\"Email\", a.\"IpAddress\" ORDER BY \"Attempts\" DESC LIMIT 50;",
           "format": "table",
           "refId": "A"
         }
@@ -285,7 +285,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT $__timeGroup(a.timestamp, '1d') AS time, COUNT(*) AS \"Registrations\" FROM audit_logs a WHERE a.event = 'register' AND $__timeFilter(a.timestamp) GROUP BY 1 ORDER BY 1;",
+          "rawSql": "SELECT $__timeGroup(a.\"Timestamp\", '1d') AS time, COUNT(*) AS \"Registrations\" FROM \"AuditLogs\" a WHERE a.\"Event\" = 'register' AND $__timeFilter(a.\"Timestamp\") GROUP BY 1 ORDER BY 1;",
           "format": "time_series",
           "refId": "A"
         }
@@ -315,7 +315,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT u.display_name AS \"Display Name\", u.email AS \"Email\", u.created_at AS \"Account Created\" FROM users u WHERE u.flagged = true AND u.flag_reason = 'duplicate_seed' ORDER BY u.created_at DESC;",
+          "rawSql": "SELECT u.\"DisplayName\" AS \"Display Name\", u.\"Email\", u.\"CreatedAt\" AS \"Account Created\" FROM \"Users\" u WHERE u.\"Flagged\" = true AND u.\"FlagReason\" = 'duplicate_seed' ORDER BY u.\"CreatedAt\" DESC;",
           "format": "table",
           "refId": "A"
         }

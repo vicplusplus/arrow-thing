@@ -28,7 +28,7 @@
         "label": "Board Size",
         "type": "query",
         "datasource": { "type": "postgres", "uid": "postgres" },
-        "query": "SELECT DISTINCT board_width || 'x' || board_height AS __text, board_width || 'x' || board_height AS __value FROM scores ORDER BY board_width, board_height;",
+        "query": "SELECT DISTINCT \"BoardWidth\" || 'x' || \"BoardHeight\" AS __text, \"BoardWidth\" || 'x' || \"BoardHeight\" AS __value FROM \"Scores\" ORDER BY 1;",
         "includeAll": true,
         "allValue": "%",
         "current": { "text": "All", "value": "$__all" },
@@ -45,7 +45,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT COUNT(*) AS \"Total Scores\" FROM scores;",
+          "rawSql": "SELECT COUNT(*) AS \"Total Scores\" FROM \"Scores\";",
           "format": "table",
           "refId": "A"
         }
@@ -71,7 +71,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT COUNT(*) AS \"Today\" FROM scores WHERE updated_at >= CURRENT_DATE;",
+          "rawSql": "SELECT COUNT(*) AS \"Today\" FROM \"Scores\" WHERE \"UpdatedAt\" >= CURRENT_DATE;",
           "format": "table",
           "refId": "A"
         }
@@ -97,7 +97,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT COUNT(DISTINCT user_id) AS \"Players\" FROM scores;",
+          "rawSql": "SELECT COUNT(DISTINCT \"UserId\") AS \"Players\" FROM \"Scores\";",
           "format": "table",
           "refId": "A"
         }
@@ -123,7 +123,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT COUNT(DISTINCT (board_width, board_height)) AS \"Sizes\" FROM scores;",
+          "rawSql": "SELECT COUNT(DISTINCT (\"BoardWidth\", \"BoardHeight\")) AS \"Sizes\" FROM \"Scores\";",
           "format": "table",
           "refId": "A"
         }
@@ -150,7 +150,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT s.updated_at AS \"Time\", u.display_name AS \"Player\", s.board_width || 'x' || s.board_height AS \"Board Size\", ROUND(s.time::numeric, 3) AS \"Solve Time (s)\", s.seed AS \"Seed\", u.flagged AS \"Flagged\", s.game_id AS \"Game ID\" FROM scores s JOIN users u ON s.user_id = u.id WHERE s.updated_at >= $__timeFrom()::timestamptz AND s.updated_at <= $__timeTo()::timestamptz ORDER BY s.updated_at DESC LIMIT 100;",
+          "rawSql": "SELECT s.\"UpdatedAt\" AS \"Time\", u.\"DisplayName\" AS \"Player\", s.\"BoardWidth\" || 'x' || s.\"BoardHeight\" AS \"Board Size\", ROUND(s.\"Time\"::numeric, 3) AS \"Solve Time (s)\", s.\"Seed\", u.\"Flagged\", s.\"GameId\" AS \"Game ID\" FROM \"Scores\" s JOIN \"Users\" u ON s.\"UserId\" = u.\"Id\" WHERE s.\"UpdatedAt\" >= $__timeFrom()::timestamptz AND s.\"UpdatedAt\" <= $__timeTo()::timestamptz ORDER BY s.\"UpdatedAt\" DESC LIMIT 100;",
           "format": "table",
           "refId": "A"
         }
@@ -189,7 +189,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT s.board_width || 'x' || s.board_height AS \"Board Size\", COUNT(*) AS \"Scores\" FROM scores s JOIN users u ON s.user_id = u.id WHERE u.flagged = false GROUP BY s.board_width, s.board_height ORDER BY COUNT(*) DESC;",
+          "rawSql": "SELECT s.\"BoardWidth\" || 'x' || s.\"BoardHeight\" AS \"Board Size\", COUNT(*) AS \"Scores\" FROM \"Scores\" s JOIN \"Users\" u ON s.\"UserId\" = u.\"Id\" WHERE u.\"Flagged\" = false GROUP BY s.\"BoardWidth\", s.\"BoardHeight\" ORDER BY COUNT(*) DESC;",
           "format": "table",
           "refId": "A"
         }
@@ -214,7 +214,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT $__timeGroup(s.updated_at, '1d') AS time, COUNT(*) AS \"Submissions\" FROM scores s WHERE $__timeFilter(s.updated_at) GROUP BY 1 ORDER BY 1;",
+          "rawSql": "SELECT $__timeGroup(s.\"UpdatedAt\", '1d') AS time, COUNT(*) AS \"Submissions\" FROM \"Scores\" s WHERE $__timeFilter(s.\"UpdatedAt\") GROUP BY 1 ORDER BY 1;",
           "format": "time_series",
           "refId": "A"
         }
@@ -244,7 +244,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT ranked.board_size AS \"Board Size\", ranked.rank AS \"#\", ranked.display_name AS \"Player\", ranked.time AS \"Time (s)\" FROM ( SELECT s.board_width || 'x' || s.board_height AS board_size, u.display_name, ROUND(s.time::numeric, 3) AS time, ROW_NUMBER() OVER (PARTITION BY s.board_width, s.board_height ORDER BY s.time ASC) AS rank FROM scores s JOIN users u ON s.user_id = u.id WHERE u.flagged = false ) ranked WHERE ranked.rank <= 10 ORDER BY ranked.board_size, ranked.rank;",
+          "rawSql": "SELECT ranked.board_size AS \"Board Size\", ranked.rank AS \"#\", ranked.display_name AS \"Player\", ranked.solve_time AS \"Time (s)\" FROM ( SELECT s.\"BoardWidth\" || 'x' || s.\"BoardHeight\" AS board_size, u.\"DisplayName\" AS display_name, ROUND(s.\"Time\"::numeric, 3) AS solve_time, ROW_NUMBER() OVER (PARTITION BY s.\"BoardWidth\", s.\"BoardHeight\" ORDER BY s.\"Time\" ASC) AS rank FROM \"Scores\" s JOIN \"Users\" u ON s.\"UserId\" = u.\"Id\" WHERE u.\"Flagged\" = false ) ranked WHERE ranked.rank <= 10 ORDER BY ranked.board_size, ranked.rank;",
           "format": "table",
           "refId": "A"
         }
@@ -264,7 +264,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT s.board_width || 'x' || s.board_height AS \"Board Size\", ROUND(AVG(s.time)::numeric, 2) AS \"Avg Time (s)\", ROUND(MIN(s.time)::numeric, 2) AS \"Best (s)\", COUNT(*) AS \"Scores\" FROM scores s JOIN users u ON s.user_id = u.id WHERE u.flagged = false GROUP BY s.board_width, s.board_height ORDER BY s.board_width, s.board_height;",
+          "rawSql": "SELECT s.\"BoardWidth\" || 'x' || s.\"BoardHeight\" AS \"Board Size\", ROUND(AVG(s.\"Time\")::numeric, 2) AS \"Avg Time (s)\", ROUND(MIN(s.\"Time\")::numeric, 2) AS \"Best (s)\", COUNT(*) AS \"Scores\" FROM \"Scores\" s JOIN \"Users\" u ON s.\"UserId\" = u.\"Id\" WHERE u.\"Flagged\" = false GROUP BY s.\"BoardWidth\", s.\"BoardHeight\" ORDER BY s.\"BoardWidth\", s.\"BoardHeight\";",
           "format": "table",
           "refId": "A"
         }
@@ -290,7 +290,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT u.display_name AS \"Player\", u.email AS \"Email\", u.flag_reason AS \"Flag Reason\", s.board_width || 'x' || s.board_height AS \"Board Size\", ROUND(s.time::numeric, 3) AS \"Time (s)\", s.seed AS \"Seed\", s.updated_at AS \"Submitted\", s.id AS \"Score ID\" FROM scores s JOIN users u ON s.user_id = u.id WHERE u.flagged = true ORDER BY s.updated_at DESC;",
+          "rawSql": "SELECT u.\"DisplayName\" AS \"Player\", u.\"Email\", u.\"FlagReason\" AS \"Flag Reason\", s.\"BoardWidth\" || 'x' || s.\"BoardHeight\" AS \"Board Size\", ROUND(s.\"Time\"::numeric, 3) AS \"Time (s)\", s.\"Seed\", s.\"UpdatedAt\" AS \"Submitted\", s.\"Id\" AS \"Score ID\" FROM \"Scores\" s JOIN \"Users\" u ON s.\"UserId\" = u.\"Id\" WHERE u.\"Flagged\" = true ORDER BY s.\"UpdatedAt\" DESC;",
           "format": "table",
           "refId": "A"
         }
