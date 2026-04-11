@@ -54,6 +54,7 @@ public sealed class VictoryController : MonoBehaviour
     private Label _timeLabel;
     private System.Func<ReplayData> _buildReplayData;
     private string _recordedGameId;
+    private bool _popupVisible;
 
     [SerializeField]
     private float zoomOutDuration = 0.6f;
@@ -182,6 +183,7 @@ public sealed class VictoryController : MonoBehaviour
         RecordToLeaderboard();
 
         _overlay.RemoveFromClassList("victory--hidden");
+        _popupVisible = true;
 
         // Set up keyboard navigation for victory popup buttons.
         SetupVictoryNavigator();
@@ -266,6 +268,29 @@ public sealed class VictoryController : MonoBehaviour
     {
         if (_victoryNavigator != null)
             _victoryNavigator.Update();
+
+        if (!_popupVisible)
+            return;
+
+        var km = KeybindManager.Instance;
+        if (km == null || km.TextFieldFocused)
+            return;
+
+        if (SettingsController.Instance != null && SettingsController.Instance.IsOpen)
+            return;
+
+        // R — Play Again (Gameplay map still active)
+        if (km.QuickReset != null && km.QuickReset.WasPerformedThisFrame())
+            OnPlayAgain();
+        // L — View Leaderboard (ModeSelect map is disabled during Gameplay,
+        // so read OpenLeaderboard binding directly via keyboard)
+        else if (
+            UnityEngine.InputSystem.Keyboard.current != null
+            && UnityEngine.InputSystem.Keyboard.current.lKey.wasPressedThisFrame
+        )
+            OnViewLeaderboard();
+        else if (NavigableScene.ShouldHandleCancel(_victoryNavigator))
+            OnMenu();
     }
 
     private void RecordToLeaderboard()
