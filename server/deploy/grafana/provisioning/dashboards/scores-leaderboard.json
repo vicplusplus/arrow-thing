@@ -1,0 +1,313 @@
+{
+  "uid": "scores-leaderboard",
+  "title": "Scores & Leaderboard",
+  "tags": ["arrow-thing"],
+  "timezone": "utc",
+  "refresh": "5m",
+  "time": { "from": "now-7d", "to": "now" },
+  "schemaVersion": 39,
+  "version": 1,
+  "links": [
+    {
+      "title": "Server Health",
+      "type": "link",
+      "url": "/d/server-health",
+      "icon": "heart"
+    },
+    {
+      "title": "Admin & Moderation",
+      "type": "link",
+      "url": "/d/admin-moderation",
+      "icon": "shield"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "board_size",
+        "label": "Board Size",
+        "type": "query",
+        "datasource": { "type": "postgres", "uid": "postgres" },
+        "query": "SELECT DISTINCT board_width || 'x' || board_height AS __text, board_width || 'x' || board_height AS __value FROM scores ORDER BY board_width, board_height;",
+        "includeAll": true,
+        "allValue": "%",
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Total Scores",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(*) AS \"Total Scores\" FROM scores;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [{ "color": "blue", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Scores Today",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(*) AS \"Today\" FROM scores WHERE updated_at >= CURRENT_DATE;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [{ "color": "green", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Unique Players",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(DISTINCT user_id) AS \"Players\" FROM scores;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [{ "color": "purple", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Board Sizes Played",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(DISTINCT (board_width, board_height)) AS \"Sizes\" FROM scores;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [{ "color": "orange", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Recent Submissions",
+      "description": "Latest score submissions/improvements",
+      "type": "table",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT s.updated_at AS \"Time\", u.display_name AS \"Player\", s.board_width || 'x' || s.board_height AS \"Board Size\", ROUND(s.time::numeric, 3) AS \"Solve Time (s)\", s.seed AS \"Seed\", u.flagged AS \"Flagged\", s.game_id AS \"Game ID\" FROM scores s JOIN users u ON s.user_id = u.id WHERE s.updated_at >= $__timeFrom()::timestamptz AND s.updated_at <= $__timeTo()::timestamptz ORDER BY s.updated_at DESC LIMIT 100;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Flagged" },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "true": { "text": "YES", "color": "red" }, "false": { "text": "", "color": "transparent" } } }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Game ID" },
+            "properties": [{ "id": "custom.width", "value": 280 }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Time", "desc": true }]
+      }
+    },
+    {
+      "id": 6,
+      "title": "Scores by Board Size",
+      "description": "Number of scores per board dimension",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT s.board_width || 'x' || s.board_height AS \"Board Size\", COUNT(*) AS \"Scores\" FROM scores s JOIN users u ON s.user_id = u.id WHERE u.flagged = false GROUP BY s.board_width, s.board_height ORDER BY COUNT(*) DESC;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "xField": "Board Size",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 7,
+      "title": "Score Volume Over Time",
+      "description": "Submissions per day",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT $__timeGroup(s.updated_at, '1d') AS time, COUNT(*) AS \"Submissions\" FROM scores s WHERE $__timeFilter(s.updated_at) GROUP BY 1 ORDER BY 1;",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 50,
+            "lineWidth": 0
+          },
+          "color": { "fixedColor": "green", "mode": "fixed" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Fastest Times per Board Size",
+      "description": "Top 10 fastest solve times per board size (excludes flagged)",
+      "type": "table",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 22 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT ranked.board_size AS \"Board Size\", ranked.rank AS \"#\", ranked.display_name AS \"Player\", ranked.time AS \"Time (s)\" FROM ( SELECT s.board_width || 'x' || s.board_height AS board_size, u.display_name, ROUND(s.time::numeric, 3) AS time, ROW_NUMBER() OVER (PARTITION BY s.board_width, s.board_height ORDER BY s.time ASC) AS rank FROM scores s JOIN users u ON s.user_id = u.id WHERE u.flagged = false ) ranked WHERE ranked.rank <= 10 ORDER BY ranked.board_size, ranked.rank;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Board Size" }]
+      }
+    },
+    {
+      "id": 9,
+      "title": "Average Solve Time by Board Size",
+      "description": "Mean solve time per board dimension (excludes flagged)",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 22 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT s.board_width || 'x' || s.board_height AS \"Board Size\", ROUND(AVG(s.time)::numeric, 2) AS \"Avg Time (s)\", ROUND(MIN(s.time)::numeric, 2) AS \"Best (s)\", COUNT(*) AS \"Scores\" FROM scores s JOIN users u ON s.user_id = u.id WHERE u.flagged = false GROUP BY s.board_width, s.board_height ORDER BY s.board_width, s.board_height;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "xField": "Board Size",
+        "orientation": "vertical"
+      }
+    },
+    {
+      "id": 10,
+      "title": "Flagged Users' Scores",
+      "description": "All scores belonging to flagged accounts",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT u.display_name AS \"Player\", u.email AS \"Email\", u.flag_reason AS \"Flag Reason\", s.board_width || 'x' || s.board_height AS \"Board Size\", ROUND(s.time::numeric, 3) AS \"Time (s)\", s.seed AS \"Seed\", s.updated_at AS \"Submitted\", s.id AS \"Score ID\" FROM scores s JOIN users u ON s.user_id = u.id WHERE u.flagged = true ORDER BY s.updated_at DESC;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Score ID" },
+            "properties": [{ "id": "custom.width", "value": 280 }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Submitted", "desc": true }]
+      }
+    }
+  ]
+}

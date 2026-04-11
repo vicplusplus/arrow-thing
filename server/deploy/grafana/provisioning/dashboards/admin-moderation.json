@@ -1,0 +1,328 @@
+{
+  "uid": "admin-moderation",
+  "title": "Admin & Moderation",
+  "tags": ["arrow-thing"],
+  "timezone": "utc",
+  "refresh": "5m",
+  "time": { "from": "now-24h", "to": "now" },
+  "schemaVersion": 39,
+  "version": 1,
+  "links": [
+    {
+      "title": "Server Health",
+      "type": "link",
+      "url": "/d/server-health",
+      "icon": "heart"
+    },
+    {
+      "title": "Scores & Leaderboard",
+      "type": "link",
+      "url": "/d/scores-leaderboard",
+      "icon": "table"
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Total Users",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(*) AS \"Total Users\" FROM users;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [{ "color": "blue", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Verified",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(*) AS \"Verified\" FROM users WHERE email_verified_at IS NOT NULL;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [{ "color": "green", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Flagged",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(*) AS \"Flagged\" FROM users WHERE flagged = true;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Locked",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(*) AS \"Locked\" FROM users WHERE locked_at IS NOT NULL;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 3 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Flagged Accounts",
+      "description": "All currently flagged accounts with reason",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT u.id, u.display_name AS \"Display Name\", u.email AS \"Email\", u.flag_reason AS \"Flag Reason\", u.created_at AS \"Account Created\", COUNT(s.id) AS \"Scores\" FROM users u LEFT JOIN scores s ON s.user_id = u.id WHERE u.flagged = true GROUP BY u.id, u.display_name, u.email, u.flag_reason, u.created_at ORDER BY u.created_at DESC;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "id" },
+            "properties": [{ "id": "custom.width", "value": 280 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Flag Reason" },
+            "properties": [{ "id": "custom.width", "value": 300 }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Account Created", "desc": true }]
+      }
+    },
+    {
+      "id": 6,
+      "title": "Locked Accounts",
+      "description": "Admin-locked accounts",
+      "type": "table",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT u.id, u.display_name AS \"Display Name\", u.email AS \"Email\", u.locked_at AS \"Locked At\" FROM users u WHERE u.locked_at IS NOT NULL ORDER BY u.locked_at DESC;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Locked At", "desc": true }]
+      }
+    },
+    {
+      "id": 7,
+      "title": "Suspicious: Verification Failures",
+      "description": "Accounts flagged by the verification worker",
+      "type": "table",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT u.display_name AS \"Display Name\", u.email AS \"Email\", u.flag_reason AS \"Reason\" FROM users u WHERE u.flagged = true AND u.flag_reason LIKE 'verification_failed:%' ORDER BY u.created_at DESC;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showHeader": true }
+    },
+    {
+      "id": 8,
+      "title": "Audit Log (Recent)",
+      "description": "Last 100 audit events",
+      "type": "table",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 18 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT a.timestamp AS \"Time\", a.event AS \"Event\", a.email AS \"Email\", a.ip_address AS \"IP\", a.detail AS \"Detail\" FROM audit_logs a WHERE a.timestamp >= $__timeFrom()::timestamptz AND a.timestamp <= $__timeTo()::timestamptz ORDER BY a.timestamp DESC LIMIT 100;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Detail" },
+            "properties": [{ "id": "custom.width", "value": 400 }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Time", "desc": true }]
+      }
+    },
+    {
+      "id": 9,
+      "title": "Audit Events by Type",
+      "description": "Event distribution in selected time range",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT a.event AS \"Event\", COUNT(*) AS \"Count\" FROM audit_logs a WHERE a.timestamp >= $__timeFrom()::timestamptz AND a.timestamp <= $__timeTo()::timestamptz GROUP BY a.event ORDER BY \"Count\" DESC;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "xField": "Event",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 10,
+      "title": "Failed Logins",
+      "description": "Failed login attempts grouped by email in selected time range",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT a.email AS \"Email\", a.ip_address AS \"IP\", COUNT(*) AS \"Attempts\", MAX(a.timestamp) AS \"Last Attempt\" FROM audit_logs a WHERE a.event = 'login_failed' AND a.timestamp >= $__timeFrom()::timestamptz AND a.timestamp <= $__timeTo()::timestamptz GROUP BY a.email, a.ip_address ORDER BY \"Attempts\" DESC LIMIT 50;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Attempts", "desc": true }]
+      }
+    },
+    {
+      "id": 11,
+      "title": "Registrations Over Time",
+      "description": "New account registrations per day",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 36 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT $__timeGroup(a.timestamp, '1d') AS time, COUNT(*) AS \"Registrations\" FROM audit_logs a WHERE a.event = 'register' AND $__timeFilter(a.timestamp) GROUP BY 1 ORDER BY 1;",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 50,
+            "lineWidth": 0
+          },
+          "color": { "fixedColor": "blue", "mode": "fixed" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 12,
+      "title": "Suspicious: Duplicate Seeds",
+      "description": "Accounts flagged for submitting a seed already used by another player",
+      "type": "table",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 44 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "rawSql": "SELECT u.display_name AS \"Display Name\", u.email AS \"Email\", u.created_at AS \"Account Created\" FROM users u WHERE u.flagged = true AND u.flag_reason = 'duplicate_seed' ORDER BY u.created_at DESC;",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showHeader": true }
+    }
+  ],
+  "templating": { "list": [] }
+}

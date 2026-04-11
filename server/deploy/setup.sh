@@ -20,6 +20,7 @@ mkdir -p "$DEPLOY_DIR/nginx/certs"
 mkdir -p "$DEPLOY_DIR/loki"
 mkdir -p "$DEPLOY_DIR/prometheus"
 mkdir -p "$DEPLOY_DIR/grafana/provisioning/datasources"
+mkdir -p "$DEPLOY_DIR/grafana/provisioning/dashboards"
 
 cp "$SCRIPT_DIR/docker-compose.yml" "$DEPLOY_DIR/"
 cp "$SCRIPT_DIR/init-db.sh" "$DEPLOY_DIR/"
@@ -29,6 +30,10 @@ cp "$SCRIPT_DIR/loki/loki-config.yml" "$DEPLOY_DIR/loki/"
 cp "$SCRIPT_DIR/prometheus/prometheus.yml" "$DEPLOY_DIR/prometheus/"
 cp "$SCRIPT_DIR/grafana/provisioning/datasources/datasources.yml" \
   "$DEPLOY_DIR/grafana/provisioning/datasources/"
+cp "$SCRIPT_DIR/grafana/provisioning/dashboards/"*.yml \
+  "$DEPLOY_DIR/grafana/provisioning/dashboards/"
+cp "$SCRIPT_DIR/grafana/provisioning/dashboards/"*.json \
+  "$DEPLOY_DIR/grafana/provisioning/dashboards/"
 echo "Downloading Cloudflare Authenticated Origin Pull CA certificate..."
 curl -fsSL "https://developers.cloudflare.com/ssl/static/authenticated_origin_pull_ca.pem" \
   -o "$DEPLOY_DIR/nginx/certs/cloudflare-origin-pull.pem"
