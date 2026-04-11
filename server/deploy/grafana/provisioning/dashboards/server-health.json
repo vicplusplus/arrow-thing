@@ -114,26 +114,33 @@
     },
     {
       "id": 4,
-      "title": "Uptime",
-      "description": "Time since last restart",
+      "title": "Memory",
+      "description": "Process working set",
       "type": "stat",
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "time() - process_start_time_seconds{job=\"arrow-thing-api\"}",
+          "expr": "dotnet_process_memory_working_set_bytes{job=\"arrow-thing-api\"}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "bytes",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 536870912 },
+              { "color": "red", "value": 1073741824 }
+            ]
+          }
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
-        "colorMode": "none"
+        "colorMode": "background"
       }
     },
     {
@@ -241,8 +248,8 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "process_runtime_dotnet_gc_heap_size_bytes{job=\"arrow-thing-api\"}",
-          "legendFormat": "GC Heap",
+          "expr": "dotnet_process_memory_working_set_bytes{job=\"arrow-thing-api\"}",
+          "legendFormat": "Working Set",
           "refId": "A"
         }
       ],
@@ -271,8 +278,8 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "rate(process_runtime_dotnet_gc_collections_count_total{job=\"arrow-thing-api\"}[5m])",
-          "legendFormat": "Gen {{generation}}",
+          "expr": "rate(dotnet_gc_collections_total{job=\"arrow-thing-api\"}[5m])",
+          "legendFormat": "{{gc_heap_generation}}",
           "refId": "A"
         }
       ],
