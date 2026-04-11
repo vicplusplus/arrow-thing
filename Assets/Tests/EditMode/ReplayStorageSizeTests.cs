@@ -20,9 +20,8 @@ public class ReplayStorageSizeTests
     [TestCase(200, 200)]
     public void MeasureReplaySize(int width, int height)
     {
-        var random = new System.Random(42);
         var board = new Board(width, height);
-        TestBoardHelper.FillBoard(board, width > 20 ? 10 : 5, random);
+        TestBoardHelper.FillBoard(board, width > 20 ? 10 : 5, 42);
 
         int arrowCount = board.Arrows.Count;
 
