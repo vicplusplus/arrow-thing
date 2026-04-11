@@ -92,9 +92,9 @@ public static class ScoreSubmitter
                     // Still pending, keep polling
                 }
 
-                // Exhausted poll attempts — still pending, not an error
+                // Exhausted poll attempts — still pending, let the user know
                 Debug.Log("[ScoreSubmitter] Verification still pending after polling");
-                DismissToast();
+                ShowInfo("Score submitted — verification in progress.");
                 return;
             }
 
@@ -148,6 +148,13 @@ public static class ScoreSubmitter
         var toast = GlobalToast.Instance;
         if (toast != null)
             toast.Dismiss();
+    }
+
+    private static void ShowInfo(string message)
+    {
+        var toast = GlobalToast.Instance;
+        if (toast != null)
+            toast.ShowInfo(message);
     }
 
     private static void ShowError(string message)
