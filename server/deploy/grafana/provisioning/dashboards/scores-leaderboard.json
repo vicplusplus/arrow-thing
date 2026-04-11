@@ -334,7 +334,7 @@
       "datasource": { "type": "postgres", "uid": "postgres" },
       "targets": [
         {
-          "rawSql": "SELECT s.\"BoardWidth\" || 'x' || s.\"BoardHeight\" AS \"Board Size\", ROW_NUMBER() OVER (PARTITION BY s.\"BoardWidth\", s.\"BoardHeight\" ORDER BY s.\"Time\" ASC) AS \"#\", u.\"DisplayName\" AS \"Player\", ROUND(s.\"Time\"::numeric, 3) AS \"Time (s)\", s.\"GameId\" AS \"Game ID\" FROM \"Scores\" s JOIN \"Users\" u ON s.\"UserId\" = u.\"Id\" WHERE u.\"Flagged\" = false ORDER BY s.\"BoardWidth\" ASC, s.\"BoardHeight\" ASC, s.\"Time\" ASC;",
+          "rawSql": "SELECT s.\"BoardWidth\" || 'x' || s.\"BoardHeight\" AS \"Board Size\", ROW_NUMBER() OVER (PARTITION BY s.\"BoardWidth\", s.\"BoardHeight\" ORDER BY s.\"Time\" ASC) AS \"#\", u.\"DisplayName\" AS \"Player\", ROUND(s.\"Time\"::numeric, 3) AS \"Time (s)\", s.\"GameId\" AS \"Game ID\" FROM \"Scores\" s JOIN \"Users\" u ON s.\"UserId\" = u.\"Id\" WHERE u.\"Flagged\" = false ORDER BY s.\"BoardWidth\" DESC, s.\"BoardHeight\" DESC, s.\"Time\" ASC;",
           "format": "table",
           "refId": "A"
         }
