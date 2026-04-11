@@ -246,7 +246,13 @@ public class VerificationWorker : BackgroundService
         VerificationResultPayload result
     )
     {
-        var json = System.Text.Json.JsonSerializer.Serialize(result);
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            result,
+            new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+            }
+        );
         await redis.StringSetAsync($"{ResultKeyPrefix}{gameId}", json, ResultTtl);
     }
 

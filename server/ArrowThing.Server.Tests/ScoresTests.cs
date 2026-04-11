@@ -283,6 +283,35 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         Assert.True(status.IsPersonalBest == true);
     }
 
+    [Theory]
+    [InlineData(5, 5, 3, 42)]
+    [InlineData(10, 10, 5, 42)]
+    [InlineData(20, 20, 8, 42)]
+    [InlineData(50, 50, 10, 42)]
+    public async Task SubmitValidReplay_VariousSizes_ReturnsVerified(
+        int width,
+        int height,
+        int maxArrowLength,
+        int seed
+    )
+    {
+        var token = await RegisterAndGetTokenAsync($"size{width}x{height}@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
+
+        var replayJson = MakeValidReplayJson(
+            seed: seed,
+            width: width,
+            height: height,
+            maxArrowLength: maxArrowLength
+        );
+        var status = await SubmitAndExpectVerifiedAsync(replayJson);
+        Assert.Equal("verified", status.Status);
+        Assert.True(status.IsPersonalBest == true);
+    }
+
     [Fact]
     public async Task SubmitSlowerSecondGame_KeepsOriginal()
     {
