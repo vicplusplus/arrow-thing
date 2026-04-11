@@ -402,11 +402,7 @@ public sealed class GameController : MonoBehaviour
 
     private IEnumerator GenerateBoard()
     {
-        var generator = BoardGeneration.FillBoardIncremental(
-            _board,
-            _maxLen,
-            new System.Random(_activeSeed)
-        );
+        var generator = BoardGeneration.FillBoardIncremental(_board, _maxLen, _activeSeed);
 
         // Progress is split across four phases. Weights tuned from PlayMode
         // GenerationProfiler data (300x300), matching measured wall-time

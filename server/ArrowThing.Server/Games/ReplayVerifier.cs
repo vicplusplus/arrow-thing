@@ -81,8 +81,7 @@ public static class ReplayVerifier
 
         // Step 1: Regenerate board from seed and compare to snapshot.
         var board = new Board(replay.boardWidth, replay.boardHeight);
-        var rng = new Random(replay.seed);
-        var gen = BoardGeneration.FillBoardIncremental(board, replay.maxArrowLength, rng);
+        var gen = BoardGeneration.FillBoardIncremental(board, replay.maxArrowLength, replay.seed);
         while (gen.MoveNext()) { }
 
         var snapshotError = CompareSnapshot(board, replay.boardSnapshot);

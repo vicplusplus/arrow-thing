@@ -102,7 +102,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
     )
     {
         var board = new Board(width, height);
-        TestBoardHelper.FillBoard(board, maxArrowLength, new Random(seed));
+        TestBoardHelper.FillBoard(board, maxArrowLength, seed);
 
         var snapshot = new List<List<Cell>>();
         foreach (var arrow in board.Arrows)
@@ -192,7 +192,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
     )
     {
         var board = new Board(width, height);
-        TestBoardHelper.FillBoard(board, maxArrowLength, new Random(seed));
+        TestBoardHelper.FillBoard(board, maxArrowLength, seed);
 
         var snapshot = new List<List<Cell>>();
         foreach (var arrow in board.Arrows)
@@ -480,7 +480,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
 
         // Build a valid replay, then tamper with a clear event position
         var board = new Board(10, 10);
-        TestBoardHelper.FillBoard(board, 5, new Random(105));
+        TestBoardHelper.FillBoard(board, 5, 105);
 
         var snapshot = new List<List<Cell>>();
         foreach (var arrow in board.Arrows)

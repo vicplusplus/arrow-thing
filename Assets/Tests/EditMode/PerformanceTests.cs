@@ -10,7 +10,7 @@ public class PerformanceTests
     {
         var board = new Board(w, h);
         var sw = Stopwatch.StartNew();
-        TestBoardHelper.FillBoard(board, maxLen, new System.Random(seed));
+        TestBoardHelper.FillBoard(board, maxLen, seed);
         sw.Stop();
         UnityEngine.Debug.Log(
             $"{w}x{h}  maxLen={maxLen}  arrows={board.Arrows.Count}  cells={TotalCells(board)}  time={sw.ElapsedMilliseconds}ms"
@@ -54,7 +54,7 @@ public class PerformanceTests
         for (int seed = 0; seed < 500; seed++)
         {
             var board = new Board(10, 10);
-            TestBoardHelper.FillBoard(board, 5, new System.Random(seed));
+            TestBoardHelper.FillBoard(board, 5, seed);
             totalArrows += board.Arrows.Count;
             AssertFullyClearable(board, seed);
         }
@@ -72,7 +72,7 @@ public class PerformanceTests
         for (int seed = 0; seed < 100; seed++)
         {
             var board = new Board(20, 20);
-            TestBoardHelper.FillBoard(board, 10, new System.Random(seed));
+            TestBoardHelper.FillBoard(board, 10, seed);
             totalArrows += board.Arrows.Count;
             AssertFullyClearable(board, seed);
         }
@@ -90,7 +90,7 @@ public class PerformanceTests
         for (int seed = 0; seed < 20; seed++)
         {
             var board = new Board(50, 50);
-            TestBoardHelper.FillBoard(board, 20, new System.Random(seed));
+            TestBoardHelper.FillBoard(board, 20, seed);
             totalArrows += board.Arrows.Count;
             AssertFullyClearable(board, seed);
         }
@@ -118,7 +118,7 @@ public class PerformanceTests
             {
                 var board = new Board(w, h);
                 var sw = Stopwatch.StartNew();
-                var gen = BoardGeneration.FillBoardIncremental(board, maxLen, new Random(s));
+                var gen = BoardGeneration.FillBoardIncremental(board, maxLen, s);
 
                 int initial = 0;
                 var samples = new List<(double ms, float raw, int arrowCount, int cellCount)>();
@@ -242,7 +242,7 @@ public class PerformanceTests
         foreach (var (w, h, maxLen) in configs)
         {
             var board = new Board(w, h);
-            var gen = BoardGeneration.FillBoardIncremental(board, maxLen, new Random(0));
+            var gen = BoardGeneration.FillBoardIncremental(board, maxLen, 0);
 
             var phase = GenerationPhase.Generating;
             var swTotal = Stopwatch.StartNew();
