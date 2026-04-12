@@ -170,7 +170,7 @@ public sealed class ReplayRecorder
     {
         return new ReplayData
         {
-            version = 3,
+            version = 4,
             gameId = gameId,
             seed = seed,
             boardWidth = boardWidth,

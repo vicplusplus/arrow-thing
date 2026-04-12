@@ -169,7 +169,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
 
         var replay = new ReplayData
         {
-            version = 3,
+            version = 4,
             gameId = Guid.NewGuid().ToString(),
             seed = seed,
             boardWidth = width,
@@ -254,7 +254,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
 
         var replay = new ReplayData
         {
-            version = 3,
+            version = 4,
             gameId = Guid.NewGuid().ToString(),
             seed = seed,
             boardWidth = width,
@@ -548,7 +548,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
 
         var replay = new ReplayData
         {
-            version = 3,
+            version = 4,
             gameId = Guid.NewGuid().ToString(),
             seed = 105,
             boardWidth = 10,
@@ -600,7 +600,7 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         // Build a replay with out-of-range dimensions (can't actually generate, just fake JSON)
         var replay = new ReplayData
         {
-            version = 3,
+            version = 4,
             gameId = Guid.NewGuid().ToString(),
             seed = 1,
             boardWidth = 500,
@@ -896,6 +896,92 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             }
         );
         Assert.Equal(HttpStatusCode.Forbidden, legitimateResp.StatusCode);
+    }
+
+    [Fact]
+    public async Task SubmitOutdatedReplayVersion_Returns426_DoesNotFlagUser()
+    {
+        var token = await RegisterAndGetTokenAsync("outdated@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
+
+        // Build an otherwise-valid replay, then downgrade its version field below the minimum.
+        var replayJson = MakeValidReplayJson(seed: 7001);
+        var replay = Newtonsoft.Json.JsonConvert.DeserializeObject<ReplayData>(replayJson)!;
+        replay.version = ReplayVersionPolicy.MinReplayVersion - 1;
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/scores",
+            new { replayJson = replay.ToJson() }
+        );
+
+        // 426 Upgrade Required — not 403 (which would mean the account got flagged).
+        Assert.Equal(HttpStatusCode.UpgradeRequired, response.StatusCode);
+
+        // Account must NOT be flagged: a subsequent legit submission should be accepted.
+        var okResp = await _client.PostAsJsonAsync(
+            "/api/scores",
+            new { replayJson = MakeValidReplayJson(seed: 7002) }
+        );
+        Assert.Equal(HttpStatusCode.Accepted, okResp.StatusCode);
+    }
+
+    [Fact]
+    public async Task SubmitOutdatedReplayVersion_ErrorMentionsUpdate()
+    {
+        var token = await RegisterAndGetTokenAsync("outdated2@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
+
+        var replayJson = MakeValidReplayJson(seed: 7003);
+        var replay = Newtonsoft.Json.JsonConvert.DeserializeObject<ReplayData>(replayJson)!;
+        replay.version = 1;
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/scores",
+            new { replayJson = replay.ToJson() }
+        );
+
+        Assert.Equal(HttpStatusCode.UpgradeRequired, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        // Message should clearly direct the user to update.
+        Assert.Contains("update", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SubmitOutdatedReplayVersion_BypassesPreVerifyTimingCheck()
+    {
+        // A replay that would normally be flagged as "implausibly fast" by PreVerify
+        // should instead be rejected with 426 when its version is below the minimum,
+        // because the version check runs first and must never flag the user.
+        var token = await RegisterAndGetTokenAsync("outdated3@test.com");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
+
+        var fastJson = MakeImplausiblyFastReplayJson(seed: 7004);
+        var replay = Newtonsoft.Json.JsonConvert.DeserializeObject<ReplayData>(fastJson)!;
+        replay.version = ReplayVersionPolicy.MinReplayVersion - 1;
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/scores",
+            new { replayJson = replay.ToJson() }
+        );
+
+        Assert.Equal(HttpStatusCode.UpgradeRequired, response.StatusCode);
+
+        // Sanity check: user still not flagged afterwards.
+        var okResp = await _client.PostAsJsonAsync(
+            "/api/scores",
+            new { replayJson = MakeValidReplayJson(seed: 7005) }
+        );
+        Assert.Equal(HttpStatusCode.Accepted, okResp.StatusCode);
     }
 
     [Fact(Skip = "Rate limit counts stored rows, not submission attempts — needs separate counter")]
