@@ -88,7 +88,7 @@ public class ReplayVerifierTests
 
         return new ReplayData
         {
-            version = 3,
+            version = 4,
             gameId = Guid.NewGuid().ToString(),
             seed = seed,
             boardWidth = width,
@@ -198,7 +198,7 @@ public class ReplayVerifierTests
 
         var replay = new ReplayData
         {
-            version = 3,
+            version = 4,
             gameId = "test",
             seed = Seed,
             boardWidth = Width,
@@ -486,7 +486,7 @@ public class ReplayVerifierTests
 
         var replay = new ReplayData
         {
-            version = 3,
+            version = 4,
             gameId = Guid.NewGuid().ToString(),
             seed = 42,
             boardWidth = 3,

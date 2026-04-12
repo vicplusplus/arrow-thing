@@ -188,7 +188,7 @@ public class ReplayRecorderTests
     }
 
     [Test]
-    public void ToReplayData_WithSnapshot_SetsVersionTwo()
+    public void ToReplayData_NewRecorder_SetsCurrentReplayVersion()
     {
         var rec = new ReplayRecorder();
         var snapshot = new List<List<Cell>>
@@ -196,7 +196,7 @@ public class ReplayRecorderTests
             new List<Cell> { new Cell(0, 0), new Cell(1, 0) },
         };
         var data = rec.ToReplayData("g", 0, 5, 5, 10, 15f, boardSnapshot: snapshot);
-        Assert.AreEqual(3, data.version);
+        Assert.AreEqual(4, data.version);
     }
 
     [Test]

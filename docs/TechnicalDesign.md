@@ -88,7 +88,8 @@ This document is the implementation-facing counterpart to [`GDD.md`](GDD.md).
 ### `ReplayData` (`sealed class`)
 
 - Full save/replay record for one game session.
-- Contains: `version` (field defaults to 1; `ReplayRecorder.ToReplayData()` sets it to 3 for new replays), `gameId` (UUID), `seed`, board dimensions, `inspectionDuration`, `gameVersion` (application version at recording time, v3+), `boardSnapshot` (initial arrow configuration — all arrows before any clears), `List<ReplayEvent> events`, `finalTime` (-1 = in-progress).
+- Contains: `version` (replay schema version — field defaults to 1; `ReplayRecorder.ToReplayData()` sets it to the current schema version for new replays, currently `4`), `gameId` (UUID), `seed`, board dimensions, `inspectionDuration`, `gameVersion` (application version at recording time, v3+), `boardSnapshot` (initial arrow configuration — all arrows before any clears), `List<ReplayEvent> events`, `finalTime` (-1 = in-progress).
+- `version` history: v1 = initial; v2 = added `boardSnapshot`; v3 = added `gameVersion`; v4 = post-RNG rewrite (replays from <v4 clients cannot be regenerated deterministically on the current server and are rejected up-front by `ReplayVersionPolicy`). Bump this whenever a change to board generation, RNG, or verification semantics makes older clients' replays unverifiable — never reuse an old value.
 - `boardSnapshot` — each inner list is one arrow's cells in head-to-tail order. On resume, the board is restored from this snapshot and clear events are replayed. Null for v1 legacy saves (falls back to seed-based regeneration).
 - `ComputedSolveElapsed` — derived property that sums active solve intervals from event timestamps, excluding `session_leave`→`session_rejoin` gaps. Used by `GameTimer.Resume` to restore the timer.
 - Serializes to JSON via `Newtonsoft.Json`. Stored at `Application.persistentDataPath/savegame.json`.
@@ -316,11 +317,18 @@ Run on the request thread before enqueuing:
 
 | Check | Action on failure |
 |-------|-------------------|
+| `ReplayData.version < ReplayVersionPolicy.MinReplayVersion` | Reject 426 Upgrade Required (no flag) |
 | `User.Flagged` | Reject 403 |
 | Board dimensions outside [2, 400] | Flag user, reject 403 |
 | Solve time < `clearCount * 0.08s` (skipped if ≤5 clears) | Flag user, reject 403 |
 | Same `(seed, width, height)` from different user | Flag user, reject 403 |
 | Rate limit (per-user, per-hour) | Reject 429 |
+
+The replay-version gate runs **first** — before any check that can flag the user — so
+clients on an outdated build (e.g. one that predates an RNG change) are told to update
+instead of being accused of cheating when their replays no longer regenerate against
+the current server code. Bump `ReplayVersionPolicy.MinReplayVersion` and the version
+literal in `ReplayRecorder.ToReplayData()` together whenever a breaking change lands.
 
 ### Full Verification (async, in worker)
 

@@ -53,6 +53,20 @@ public class GameService
         if (!Guid.TryParse(replay.gameId, out var gameId))
             return (null, 400, "Invalid gameId.");
 
+        // Replay version gate — runs BEFORE any flagging path. Old-format replays
+        // cannot be regenerated deterministically by the current verifier (e.g.
+        // after an RNG change), so we reject them up-front as "please update"
+        // rather than letting the verifier flag the user as a cheater.
+        if (!ReplayVersionPolicy.IsAllowed(replay.version))
+        {
+            _logger.LogInformation(
+                "Rejecting submission with outdated replay version {Version} for user {UserId}",
+                replay.version,
+                userId
+            );
+            return (null, 426, ReplayVersionPolicy.RejectionMessage(replay.version));
+        }
+
         // Reject submissions from flagged accounts
         var user = await _db.Users.FindAsync(userId);
         if (user == null)
