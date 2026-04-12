@@ -290,7 +290,7 @@ All auth operations are tracked via `AuditLog` records in PostgreSQL. `AuditLogS
 
 Structured logging via **Serilog** (console + Grafana Loki push). HTTP request logging via `UseSerilogRequestLogging()`. Metrics via **OpenTelemetry** (ASP.NET Core + .NET runtime instrumentation) exposed at `/metrics` for **Prometheus** scraping. All telemetry flows to **Grafana** (localhost:3000, SSH tunnel access only) which has three auto-provisioned datasources: Loki (logs), Prometheus (metrics), PostgreSQL (direct SQL queries against users and audit tables).
 
-Infrastructure services (`loki`, `prometheus`, `grafana`) run as Docker containers alongside the existing `api`, `db`, and `nginx` services. None are publicly exposed — Prometheus and Loki are internal-only (`expose:`), Grafana binds to `127.0.0.1:3000`.
+Infrastructure services (`loki`, `prometheus`, `grafana`) run as Docker containers alongside the existing `api`, `worker`, `db`, `redis`, and `nginx` services. None are publicly exposed — Prometheus, Loki, and Redis are internal-only (`expose:`), Grafana binds to `127.0.0.1:3000`. Pre-provisioned dashboards cover server health, admin actions, and score submission flow.
 
 ## Score Integrity
 
@@ -418,7 +418,7 @@ Activated via `git config core.hooksPath .githooks`. Setup: `dotnet tool restore
 Four jobs run in parallel:
 
 - **`format`**: CSharpier check, file size validation, meta file sync. Uses `dotnet tool restore` — no Unity license needed.
-- **`test-server`**: Server integration tests via `dotnet test`. Requires .NET 9 SDK. Uses Testcontainers (Docker).
+- **`test-server`**: Server integration tests via `dotnet test`. Requires .NET 10 SDK. Uses Testcontainers (Docker).
 - **`test`**: EditMode tests via [`game-ci/unity-test-runner@v4`](https://github.com/game-ci/unity-test-runner). Requires `UNITY_LICENSE`, `UNITY_EMAIL`, `UNITY_PASSWORD` secrets.
 - **`test-playmode`**: PlayMode tests (UI layout, API client) via `game-ci/unity-test-runner@v4`. Runs without `-nographics` to ensure UI Toolkit resolves layout correctly.
 

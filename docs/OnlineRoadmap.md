@@ -1,16 +1,21 @@
 # Roadmap
 
-## Current State (v0.5)
+## Current State (v0.7.4)
 
 - **Arrow coloring** — implemented. `ArrowColoring.AssignColors()` in domain layer; `BoardView` applies palette colors after spawn.
-- **Replay recording** — implemented. `ReplayEvent`, `ReplayRecorder`, `ReplayData` exist in domain layer. Events are recorded during play and persisted in save files. Replay viewer built (see below). Server submission not yet built.
+- **Replay recording & verification** — implemented. `ReplayEvent`, `ReplayRecorder`, `ReplayData` (schema v4) in domain layer. Events recorded during play, persisted in save files, and submitted to the server for verification on completion. `ReplayVerifier` runs on the server (in the async worker) and reproduces the board from seed via `PortableRandom` for byte-for-byte determinism with the client.
 - **Local saves / autosave** — implemented. Initial board snapshot persisted in save file; resumes without re-generation.
-- **Local leaderboards & personal best** — implemented. `LeaderboardStore` (domain) + `LeaderboardManager` (view) with per-config/global caps, favorites, 3 sort criteria. Dedicated leaderboard scene with 5 size tabs, Local/Global toggle. Victory screen records results, detects personal best.
-- **Replay viewer** — implemented. Dedicated scene with `ReplayViewController`, `ReplayPlayer` (domain), seek/speed/play-pause controls, tap indicators, clearable highlighting (electric cyan). Accessed via play button on leaderboard entries.
-- **Accounts & auth** — implemented. Email-based registration, login, verification, password reset, email/password change. JWT auth with SecurityStamp validation. Admin lock/unlock tooling. Account panel with 10-form flow in-game.
-- **Server** — implemented. ASP.NET Core 9 Minimal API, PostgreSQL, shared domain code via monorepo. Deployed via Docker Compose on Hetzner VPS behind Cloudflare. CD pipeline builds and deploys on release.
+- **Local leaderboards & personal best** — implemented. `LeaderboardStore` (domain) + `LeaderboardManager` (view) with per-config/global caps, favorites, 3 sort criteria. Dedicated leaderboard scene with 5 size tabs + All, Local/Global toggle. Victory screen records results, detects personal best.
+- **Global leaderboards** — implemented. Server-backed top-50 per-size and cross-size "All" tab, with player rank context, refresh button, and replay playback (top-50 carry a compressed snapshot; entries outside top-50 regenerate from seed on demand).
+- **Replay viewer** — implemented. Dedicated scene with `ReplayViewController`, `ReplayPlayer` (domain), seek / speed (0.5×–10×) / play-pause controls, tap indicators, clearable highlighting (electric cyan with trail lanes). Accessed via play button on leaderboard entries.
+- **Accounts & auth** — implemented. Email-based registration, login, verification, password reset, email/password change. JWT auth with SecurityStamp validation. Admin lock/unlock tooling. In-game account panel covering login, register, verify, forgot/reset password, account info, change email, confirm email, change password, and inline display name editing.
+- **Server** — implemented. ASP.NET Core Minimal API on **.NET 10**, PostgreSQL, shared domain code via monorepo. Deployed via Docker Compose on a Hetzner VPS behind Cloudflare. Stack now also includes Redis (verification queue + leaderboard cache) and a standalone `ArrowThing.Worker` process for async score verification. CD pipeline builds and deploys on release.
+- **Score integrity** — implemented. Synchronous pre-verification gate (replay schema version, board size, timing, seed dedup, account flag, rate limit) plus async full verification (board regeneration + clear simulation) on the worker. Casual cheaters get account-flagged; flagged users are excluded from leaderboards. See [`docs/AntiCheatDesign.md`](AntiCheatDesign.md) for design history and `TechnicalDesign.md § Score Integrity` for the authoritative spec.
 - **UI theming** — implemented. CSS custom property system with runtime theme switching. 4 themes (Dark, Light, Dark Monochrome, Light Monochrome). Shared reusable UI component library.
-- **Server CD** — implemented. Docker image → GitHub Container Registry → SSH deploy to VPS. Health check on deploy. Discord release announcements.
+- **Keyboard navigation** — implemented. `FocusNavigator` directed-graph nav, `KeybindManager` runtime InputActionAsset with rebindable keybinds, `NavigationCoverageTests` enforce that every UXML button is keyboard-reachable in some scene state. Gameplay/leaderboard/replay shortcuts.
+- **Global toast** — implemented. `GlobalToast` `DontDestroyOnLoad` singleton survives scene transitions, used by score submission for retry/dismiss UX on transient failures.
+- **Observability** — implemented. Serilog → Loki, OpenTelemetry → Prometheus, Grafana dashboards (server health, admin, scores) with PostgreSQL SQL datasource for audit log queries.
+- **Server CD** — implemented. Docker image → GitHub Container Registry → SSH deploy to VPS for both `api` and `worker`. Health check on deploy. Discord release announcements.
 
 Versions are tagged when a coherent chunk of work lands, not on a fixed schedule.
 
@@ -20,8 +25,10 @@ Versions are tagged when a coherent chunk of work lands, not on a fixed schedule
 
 ### Server Foundation
 
-- **ASP.NET Core 9 Minimal API** — lightweight (~30-50 MB idle RAM in Docker), C#, shares domain code. Use Workstation GC in container (`<ServerGarbageCollection>false</ServerGarbageCollection>`) for lower memory on small VPS.
+- **ASP.NET Core Minimal API on .NET 10** — lightweight (~30-50 MB idle RAM in Docker), C#, shares domain code. Use Workstation GC in container (`<ServerGarbageCollection>false</ServerGarbageCollection>`) for lower memory on small VPS.
 - **Entity Framework Core** — ORM. PostgreSQL everywhere (production and integration tests via Testcontainers). SQLite dropped.
+- **Redis** — verification job queue (`verify:queue`) and result cache (`verify:result:{gameId}`), plus global leaderboard response cache. Internal-only Docker network exposure.
+- **`ArrowThing.Worker`** — standalone .NET 10 console worker that consumes the verification queue, runs `ReplayVerifier.Verify`, and persists verified scores. Runs as a separate Docker service so verification CPU work never blocks API request threads.
 - **BCrypt** — password hashing.
 - **JWT** — stateless auth tokens.
 
@@ -29,7 +36,7 @@ Versions are tagged when a coherent chunk of work lands, not on a fixed schedule
 
 **Provider**: Hetzner Cloud CCX13 — 2 dedicated vCPU (AMD), 8 GB RAM, 80 GB SSD, ~$19.99/mo. Ashburn (US East) datacenter. IPv6-only (no IPv4 add-on); Cloudflare proxy provides IPv4 reachability for clients.
 
-**Stack**: Docker Compose (ASP.NET API + PostgreSQL) behind Nginx reverse proxy, fronted by Cloudflare for TLS termination, IPv4→IPv6 translation, and DDoS protection.
+**Stack**: Docker Compose (ASP.NET API + verification worker + PostgreSQL + Redis + Loki/Prometheus/Grafana) behind an Nginx reverse proxy, fronted by Cloudflare for TLS termination, IPv4→IPv6 translation, and DDoS protection.
 
 **Current state**: VPS provisioned and hardened (SSH key-only, UFW, fail2ban, unattended-upgrades, Docker). Origin certs and `.env` in place. Backup and disk monitoring cron jobs installed. CI SSH key authorized. Deploy configs version-controlled in `server/deploy/`.
 
@@ -53,11 +60,14 @@ Versions are tagged when a coherent chunk of work lands, not on a fixed schedule
 
 Run `server/deploy/setup.sh` from the repo root to sync configs, validate nginx, and install cron jobs.
 
-#### Docker Compose — three services
+#### Docker Compose — services
 
-- **api** — ASP.NET Core app. Exposes port 5000 internally only. Reads connection string and JWT secret from environment.
+- **api** — ASP.NET Core app. Exposes port 5000 internally only. Reads connection string and JWT secret from environment. Enqueues score-verification jobs to Redis.
+- **worker** — `ArrowThing.Worker` console process. Consumes the Redis verification queue, runs `ReplayVerifier.Verify`, persists verified scores, writes results back to Redis with a 1-hour TTL. No published ports.
 - **db** — PostgreSQL 16. Named volume for data persistence (`pgdata`). Not exposed to host network. Init script grants DML-only privileges to the app user.
+- **redis** — Redis 7 Alpine. Verification queue, verification result cache, global leaderboard response cache. Internal-only (`expose:`), `appendonly yes`, `maxmemory 256mb`, `allkeys-lru`.
 - **nginx** — Reverse proxy. Only service with published ports (80, 443). Cloudflare Origin cert for Full (Strict) TLS. Authenticated origin pulls verify requests come from Cloudflare. Rate limiting on auth endpoints (5 req/min) and general API (30 req/min), keyed on `CF-Connecting-IP`. CORS restricted to `https://arrow-thing.com`.
+- **loki / prometheus / grafana** — observability stack. None publicly exposed; Grafana binds to `127.0.0.1:3000` for SSH-tunnel access only.
 
 Docker bypasses UFW for published ports — this is why only nginx has `ports:` and all inter-container communication uses Docker's internal DNS.
 
@@ -136,21 +146,18 @@ Email-based authentication with verification, password reset, and email change f
 
 ## Planned Features
 
-### Server-Side Verification & Global Leaderboards
-
-Online flow: generate board locally (client always owns generation) → play, recording events → submit completed replay to server for verification → score appears on global leaderboard if verified. No server round-trip before play.
-
-**Known limitations** (acceptable for initial release, deferred to later):
-- **Bots/automation**: a bot could solve boards optimally. Mitigation deferred — statistical outlier detection is a future concern. The leaderboard is friendly competition, not a ranked ladder.
-- **Timing manipulation**: client reports input timestamps. A modified client could lie. Server can reject implausibly fast inter-event gaps as a basic sanity check. Full solution requires server-witnessed timing (future WebSocket path).
-
 ### Co-op boards
 
-Persistent shared puzzles that any number of registered players can chip away at, in real time when they overlap and asynchronously when they don't. Per-player timer and clear count, live sidebar, per-lobby results screen (no global co-op leaderboard). Built on a new WebSocket session layer on top of the existing REST server. Design and phased implementation plan: [`docs/CoopRoadmap.md`](CoopRoadmap.md).
+Persistent shared puzzles that any number of registered players can chip away at, in real time when they overlap and asynchronously when they don't. Per-player timer and clear count, live sidebar, per-lobby results screen (no global co-op leaderboard). Built on a new WebSocket session layer on top of the existing REST server. Design and phased implementation plan: [`docs/CoopRoadmap.md`](CoopRoadmap.md). Status: designed only, no phases merged yet.
 
 ### PvP
 
 Real-time garbage mechanics, matchmaking. The replay viewer is essentially a live opponent board — the framework from the replay and server work carries over directly.
+
+### Known limitations of the current online stack
+
+- **Bots/automation**: a bot could solve boards optimally. Pre-verification + account flagging cover casual cheaters; sophisticated bots are accepted as unstoppable. The leaderboard is friendly competition, not a ranked ladder. See `TechnicalDesign.md § Score Integrity` for the threat model.
+- **Timing manipulation**: client reports input timestamps. A modified client could lie. The pre-verification gate rejects implausibly fast inter-event gaps as a basic sanity check. Full solution would require server-witnessed timing (a WebSocket path), which is incompatible with async play across days/weeks and has been ruled out.
 
 ---
 
@@ -159,44 +166,54 @@ Real-time garbage mechanics, matchmaking. The replay viewer is essentially a liv
 ### High-Level Online Flow
 
 ```
-Client                              Server
-──────                              ──────
+Client                              API Server                       Worker
+──────                              ──────────                       ──────
 1. Generate board locally           (always local — no server round-trip)
-   from random seed
+   from random seed (PortableRandom xorshift32 — same on client and server)
 
 2. Play game, record input
-   events: [{ seq, t, posX, posY }]
+   events: [{ seq, type, posX, posY, timestamp }]
 
 3. [online only, if logged in
    and email verified]
-   Submit replay         ────────►  Regenerate board from seed + params
-   { replayJson }                   Simulate all clears in order
-                                    Verify: all clears valid, board empty,
-                                    timing within tolerance
-                         ◄────────  { verified, rank, isPersonalBest }
+   POST /api/scores      ────────►  Pre-verify (replay version, board
+   { replayJson }                   size, timing, seed dedup, account
+                                    flag, rate limit)
+                                    Enqueue to Redis verify:queue
+                         ◄────────  202 Accepted { gameId, status: "pending" }
+                                                                     │
+                                                                     ▼
+                                                                     BRPOP verify:queue
+                                                                     ReplayVerifier.Verify()
+                                                                     Persist score on success
+                                                                     Write result to
+                                                                     verify:result:{gameId}
 
-4. View leaderboards    ────────►   Query by board config
+4. GET /api/scores/      ────────►  Read verify:result:{gameId}
+   {gameId}/status       ◄────────  { status, rank, isPersonalBest, reason? }
+
+5. View leaderboards     ────────►  Query by board config (Redis-cached)
                          ◄────────  Return ranked entries (live display names)
 ```
 
 ### Why This Works
 
-- **Deterministic generation**: `Board` + `BoardGeneration` + seeded `Random` = identical boards on client and server. No board state needs to be streamed.
+- **Deterministic generation**: `Board` + `BoardGeneration` + `PortableRandom` (xorshift32) = byte-for-byte identical boards on Unity client and .NET server. No board state needs to be streamed.
 - **Minimal bandwidth**: Only seed + input events travel over the wire. A full game replay is ~50-200 input events (one per arrow cleared).
-- **Offline verification**: Server replays inputs asynchronously. No real-time connection needed.
-- **Cheat resistance**: Server is authoritative — it regenerates the board and simulates the solve. Fabricated replays that skip arrows or claim impossible clears are rejected. Timing is validated against input event timestamps.
-- **Shared code**: The domain layer (`Assets/Scripts/Domain/`) is already Unity-independent pure C#. The server references the same source files directly (shared project). Zero duplication of game logic.
+- **Async verification**: Pre-verification runs synchronously to reject obviously bad submissions; full verification (board regeneration + clear simulation) runs in a separate worker process so the API thread pool is never blocked by large boards.
+- **Cheat resistance**: Server is authoritative — it regenerates the board and simulates the solve. Fabricated replays that skip arrows or claim impossible clears are rejected. Casual cheaters get account-flagged.
+- **Shared code**: The domain layer (`Assets/Scripts/Domain/`) is Unity-independent pure C#. The server's `ArrowThing.Domain` (`netstandard2.1`) project references the same source files directly via wildcard `<Compile Include>`. Zero duplication of game logic.
 - **Offline-first**: The client can always generate boards locally. Server connection is a bonus (enables leaderboard submission), not a requirement. The game never blocks on network.
 
 ---
 
 ## Replay Format
 
-JSON. One file per game session.
+JSON. One file per game session. Current schema version: **4** (see `ReplayVersionPolicy.MinReplayVersion`). Replays from clients on schema < 4 are rejected up-front by the score endpoint with `426 Upgrade Required`.
 
 ```jsonc
 {
-  "version": 2,
+  "version": 4,
   "gameId": "uuid",
   "seed": 12345,
   "boardWidth": 20,
@@ -247,7 +264,7 @@ The first arrow clear also starts the solve timer (see `InputHandler` / `GameTim
 
 ```
 server/
-├── ArrowThing.Server/           # ASP.NET Core web API (net9.0)
+├── ArrowThing.Server/           # ASP.NET Core web API (net10.0)
 │   ├── Program.cs               # Minimal API endpoints, DB + JWT middleware wiring
 │   ├── Auth/                    # (implemented)
 │   │   ├── AuthService.cs       # All auth operations (register, login, verify, reset, email change, lock/unlock)
@@ -256,18 +273,25 @@ server/
 │   │   ├── JwtHelper.cs         # HMAC-SHA256 token generation + validation (SecurityStamp claim)
 │   │   ├── IEmailService.cs     # Email service interface
 │   │   └── EmailService.cs      # Resend HTTP API wrapper
-│   ├── Scores/                  # (done)
-│   │   └── ScoreService.cs      # Verify replay, upsert personal best, manage snapshot strategy
-│   ├── Leaderboards/            # (done)
-│   │   └── LeaderboardService.cs
+│   ├── Games/                   # (implemented)
+│   │   ├── ScoreService.cs              # Pre-verify + enqueue to Redis verify:queue
+│   │   ├── ScorePersistenceService.cs   # Worker-callable: persist verified score, manage snapshot strategy
+│   │   └── ReplayVersionPolicy.cs       # MinReplayVersion gate
+│   ├── Leaderboards/            # (implemented)
+│   │   ├── LeaderboardService.cs
+│   │   └── LeaderboardCache.cs          # Redis-backed
 │   ├── Data/                    # (implemented)
-│   │   ├── AppDbContext.cs      # EF Core context with User DbSet (unique email index)
-│   │   └── Migrations/          # CreateUsers, AddEmailAndTokens, AddPendingEmailChange, RemoveUsername
-│   └── Models/                  # (implemented for User, planned for Score)
-│       ├── User.cs              # Id, Email, DisplayName, PasswordHash, SecurityStamp, verification/reset/email-change code fields, lock fields
-│       └── Score.cs             # Id, UserId, GameId, Seed, BoardWidth, BoardHeight, MaxArrowLength, Time, ReplayJson, CreatedAt, UpdatedAt (done)
+│   │   ├── AppDbContext.cs      # EF Core context with Users, Scores, AuditLogs DbSets
+│   │   └── Migrations/          # CreateUsers, AddEmailAndTokens, AddPendingEmailChange, RemoveUsername, AddScores, AddFlagging, …
+│   └── Models/                  # (implemented)
+│       ├── User.cs              # Id, Email, DisplayName, PasswordHash, SecurityStamp, verification/reset/email-change code fields, lock fields, Flagged/FlagReason
+│       ├── Score.cs             # Id, UserId, GameId, Seed, BoardWidth, BoardHeight, MaxArrowLength, Time, ReplayJson, CreatedAt, UpdatedAt
+│       └── AuditLog.cs          # Auth event audit trail
+├── ArrowThing.Worker/           # Verification worker (net10.0, console)
+│   ├── Program.cs               # Host builder + worker registration
+│   └── VerificationWorker.cs    # BRPOP verify:queue → ReplayVerifier.Verify → persist → write result
 ├── ArrowThing.Domain/           # Shared domain code (netstandard2.1, C# 9)
-└── ArrowThing.Server.Tests/     # xUnit integration tests (37 auth + 1 health check)
+└── ArrowThing.Server.Tests/     # xUnit integration tests (auth, scores, leaderboards, replays, anti-cheat)
 ```
 
 ### API Endpoints
@@ -291,14 +315,19 @@ POST   /api/auth/confirm-email-change [auth] { email, code }         → { messa
 POST   /api/admin/lock-account   [admin] { email }                   → { message }                                     [implemented]
 POST   /api/admin/unlock-account [admin] { email }                   → { message }                                     [implemented]
 
-POST   /api/scores               [auth] { replayJson }              → { verified, rank, isPersonalBest, reason? }     [done]
+POST   /api/scores               [auth] { replayJson }              → 202 { gameId, status: "pending" }                [implemented]
+GET    /api/scores/{gameId}/status [auth]                            → { status, rank?, isPersonalBest?, reason? }      [implemented]
 
-GET    /api/leaderboards/{w}x{h} ?limit=50                          → { entries: [{ rank, displayName, time, gameId }] } [done]
-GET    /api/leaderboards/all     ?limit=50                          → { entries: [{ rank, displayName, time, gameId, boardWidth, boardHeight }] } [done]
-GET    /api/leaderboards/{w}x{h}/me [auth]                          → { rank, time, gameId } | 404                    [done]
-GET    /api/leaderboards/all/me     [auth]                          → { rank, time, gameId, boardWidth, boardHeight } | 404 [done]
+GET    /api/leaderboards/{w}x{h} ?limit=50                          → { entries: [{ rank, displayName, time, gameId }] } [implemented]
+GET    /api/leaderboards/all     ?limit=50                          → { entries: [{ rank, displayName, time, gameId, boardWidth, boardHeight }] } [implemented]
+GET    /api/leaderboards/{w}x{h}/me [auth]                          → { rank, time, gameId } | 404                    [implemented]
+GET    /api/leaderboards/all/me     [auth]                          → { rank, time, gameId, boardWidth, boardHeight } | 404 [implemented]
 
-GET    /api/replays/{gameId}                                         → { replayJson } | 404 (verified top-50 only have snapshot) [done]
+GET    /api/replays/{gameId}                                         → { replayJson } | 404 (verified top-50 only have snapshot) [implemented]
+
+GET    /api/admin/flagged-users          [admin]                     → list of flagged users with reasons              [implemented]
+POST   /api/admin/users/{id}/unflag      [admin]                     → { message }                                     [implemented]
+POST   /api/admin/scores/{id}/remove     [admin]                     → { message }                                     [implemented]
 ```
 
 ### Domain Code Sharing
@@ -314,13 +343,15 @@ arrow-thing/                              # monorepo root
 │   ├── ArrowThing.sln                    # solution file for all server projects
 │   ├── ArrowThing.Domain/
 │   │   └── ArrowThing.Domain.csproj      # netstandard2.1 C# 9, <Compile Include="../../Assets/Scripts/Domain/**/*.cs" />
-│   ├── ArrowThing.Server/                # ASP.NET Core net9.0, <ProjectReference> to Domain
+│   ├── ArrowThing.Server/                # ASP.NET Core net10.0, <ProjectReference> to Domain
 │   │   └── ArrowThing.Server.csproj
+│   ├── ArrowThing.Worker/                # net10.0 console worker, <ProjectReference> to Domain
+│   │   └── ArrowThing.Worker.csproj
 │   └── ArrowThing.Server.Tests/          # xUnit integration tests, <ProjectReference> to Server
 │       └── ArrowThing.Server.Tests.csproj
 ```
 
-The domain `.csproj` targets `netstandard2.1` with `LangVersion 9` for compatibility with Unity's C# 9 compiler. The server targets `net9.0`. No code duplication — one source of truth, two consumers.
+The domain `.csproj` targets `netstandard2.1` with `LangVersion 9` for compatibility with Unity's C# 9 compiler. The server and worker target `net10.0`. No code duplication — one source of truth, three consumers (Unity, server, worker).
 
 ---
 
@@ -332,6 +363,7 @@ One leaderboard per board configuration:
 - **Small** — 10×10
 - **Medium** — 20×20
 - **Large** — 40×40
+- **XLarge** — 100×100
 
 Future board sizes automatically create new partitions (no code change needed — partitioning is by `(width, height)` tuple).
 
@@ -343,26 +375,22 @@ Two contexts: dedicated leaderboard scene and victory screen inline.
 
 #### Dedicated Leaderboard Scene
 
-Accessed via a button in the **top-right of the mode select screen**.
+Accessed via a trophy button in the **top-right of the main menu and the solo size select screen**.
 
 - **Top 50** entries per partition, showing rank, display name, and time.
-- **Tabs** for each board size (Small / Medium / Large).
+- **Tabs** for each board size (Small / Medium / Large / XLarge / All), abbreviated to S/M/L/XL/All on narrow viewports.
 - **Toggle**: Local vs Global leaderboards.
-  - **Global**: fetched from server. Only verified online scores.
-  - **Local**: stored on-device via `PlayerPrefs` (backed by `IndexedDB` on WebGL). Includes both online and offline scores. Not synced to server. Capped at top 50 entries + replays per board size to keep storage bounded.
-- **Play replay button** on each entry — loads the replay for that score. Replays for local scores are stored locally alongside the leaderboard data. Global replays are fetched via `GET /api/replays/{gameId}`.
+  - **Global**: fetched from server. Only verified online scores. Top-3 entries get gold/silver/bronze tints.
+  - **Local**: stored on-device under `Application.persistentDataPath` (backed by `IndexedDB` on WebGL). Includes both online and offline scores. Not synced to server. Capped at top 50 entries + replays per board size to keep storage bounded.
+- **Play replay button** on each entry — loads the replay for that score. Replays for local scores are stored locally alongside the leaderboard data as GZip-compressed JSON. Global replays are fetched via `GET /api/replays/{gameId}` (top-50 carry an embedded board snapshot; entries outside top-50 regenerate the board from seed on demand).
 
-#### Victory Screen Leaderboard
+#### Victory Popup
 
-Shown inline within the victory modal. **Local only** — no global toggle here; global leaderboard is always the player's express navigation choice.
+Shown after the board-clear animation. The victory modal does **not** embed a leaderboard preview — players use the explicit "View Leaderboard" button to navigate to the dedicated scene (which auto-scrolls to the freshly recorded entry via `GameSettings.LeaderboardFocusGameId`).
 
-- **Top 10** (compact), local scores only.
 - If the score is a **new personal best** (compared against local scores):
   - Timer text turns **bright gold** during the board-clear sequence (before the modal appears).
-  - Personal best entry is **highlighted gold** in the leaderboard.
-  - Text indicator: "New Best!" next to the time.
-- Player's own entry is always visible (appended at bottom if outside top 10).
-- Score submission to the server happens silently in the background during the victory animation. No global rank is shown in the victory modal.
+- Score submission to the server happens silently in the background during the victory animation via the fire-and-forget `ScoreSubmitter`. On a transient failure (network, 5xx, 429) a toast appears in the top-right of the victory overlay with a Retry button. On 202 + still-pending status after polling, an info toast surfaces via `GlobalToast` and survives the scene transition.
 
 ### Score Model
 
@@ -386,6 +414,9 @@ User:
   PendingEmailCodeExpiresAt   DateTime?
   LockedAt                    DateTime? (non-null = locked, blocks login)
 
+  Flagged                     bool (default false; cheaters; excluded from leaderboards and blocked from submitting)
+  FlagReason                  string?
+
 Score:
   Id              GUID
   UserId          FK → User
@@ -396,45 +427,44 @@ Score:
   MaxArrowLength  int
   Time            double (seconds, server-verified)
   ReplayJson      TEXT  (full ReplayData; boardSnapshot gzip-base64 encoded if top-50, stripped otherwise)
+
+AuditLog:
+  Id          GUID
+  Timestamp   timestamptz
+  EventType   string  (14 types: register, login_success, login_failure, password_change, …)
+  UserId      GUID?
+  Email       string?
+  ClientIp    string?  (from X-Forwarded-For)
+  Detail      string?
 ```
 
-One row per `(UserId, BoardWidth, BoardHeight)` — the player's personal best for that size. Updated in-place when a better verified time is submitted. Top-50 scores carry a compressed board snapshot for instant replay loading; scores outside top-50 have the snapshot stripped (board is regenerated from seed+params on replay view). Scores displaced from top-50 have their snapshot immediately removed.
+One Score row per `(UserId, BoardWidth, BoardHeight)` — the player's personal best for that size. Updated in-place when a better verified time is submitted. Top-50 scores carry a compressed board snapshot for instant replay loading; scores outside top-50 have the snapshot stripped (board is regenerated from seed+params on replay view). Scores displaced from top-50 have their snapshot immediately removed.
 
 ---
 
-## New Scripts
+## Implemented Scripts
 
-| Script | Layer | Status | Purpose |
-|--------|-------|--------|---------|
-| `LeaderboardEntry` | Domain | Done | One leaderboard entry (metadata, no replay data) |
-| `LeaderboardStore` | Domain | Done | Pure C# leaderboard storage with caps, sorting, favorites |
-| `ReplayPlayer` | Domain | Done | Time-based replay playback engine with speed/seek |
-| `LeaderboardManager` | View | Done | Singleton persistence layer (file I/O, GZip replays) |
-| `LeaderboardScreenController` | View | Done | Dedicated leaderboard scene: tabs, sorts, context menu, auto-scroll |
-| `BoardSetupHelper` | View | Done | Shared board/view/camera setup (extracted from GameController) |
-| `ReplayViewController` | View | Done | Replay viewer scene: playback, seek, controls, highlighting |
-| `TapIndicator` | View | Done | Expanding/fading ring at tap position during replay |
-| `TapIndicatorPool` | View | Done | Object pool for tap indicators with procedural ring sprite |
-| `ReplayVerifier` | Domain | Done | Simulates replay for server-side verification (snapshot comparison, event validation, solve time computation) |
-| `VerificationResult` | Domain | Done | Result type for ReplayVerifier (validity, reason, verified time) |
-| `ApiClient` | View | Done | HTTP client, JWT attachment, all auth + leaderboard endpoints, token storage in PlayerPrefs |
-| `AccountManager` | View | Done | Account panel with 10 forms (login/register/verify code/forgot password/reset password/account info/change email/confirm email code/change password/change display name) |
-| `ConfirmModal` | View | Done | Reusable confirm modal wrapper (configures ConfirmModal.uxml template) |
-| `ScoreSubmitter` | View | Done | Static helper for score submission (checks login state, serializes, calls ApiClient) |
-| `ServerHealthCheck` | Editor | Done | Editor menu item (Tools > Arrow Thing) to test server connectivity |
+All listed scripts are implemented and shipping. Refer to `docs/TechnicalDesign.md` for the authoritative class roster — this list is kept for historical roadmap context.
 
-## Modified Scripts
-
-| Script | Changes |
-|--------|---------|
-| `InputHandler` | ~~Record events to `ReplayRecorder` on each tap~~ (done) |
-| `MainMenuController` | Trophy button on mode select (done). Account icon button (done). Reusable ConfirmModal for quit/clear-scores (done) |
-| `VictoryController` | Personal best gold timer, "View Leaderboard" button (done). Background score submission with toast retry on failure (done) |
-| `LeaderboardScreenController` | Global tab with server fetch, player panel, refresh button (done) |
-| `GameController` | Refactored to use `BoardSetupHelper` (done) |
-| `GameSettings` | `StartReplay`/`ClearReplay` for replay scene transition, `LeaderboardFocusGameId` for auto-scroll (done). Server `Seed` field (planned) |
-| `BoardView` | `ClearArrowAnimated`, `UpdateClearableHighlights`, `ClearAllHighlights` (done) |
-| `ArrowView` | `SetHighlight(bool)` for clearable highlighting (done) |
+| Script | Layer | Purpose |
+|--------|-------|---------|
+| `LeaderboardEntry` | Domain | One leaderboard entry (metadata, no replay data) |
+| `LeaderboardStore` | Domain | Pure C# leaderboard storage with caps, sorting, favorites |
+| `ReplayPlayer` | Domain | Time-based replay playback engine with speed/seek |
+| `ReplayVerifier` | Domain | Simulates replay for server-side verification (snapshot comparison, event validation, solve time computation) |
+| `VerificationResult` | Domain | Result type for ReplayVerifier (validity, reason, verified time) |
+| `ReplayVersionPolicy` | Domain (server) | `MinReplayVersion` gate for replay schema upgrades |
+| `LeaderboardManager` | View | Singleton persistence layer (file I/O, GZip replays) |
+| `LeaderboardScreenController` | View | Dedicated leaderboard scene: tabs, sorts, context menu, auto-scroll |
+| `BoardSetupHelper` | View | Shared board/view/camera setup (extracted from GameController) |
+| `ReplayViewController` | View | Replay viewer scene: playback, seek, controls, highlighting |
+| `TapIndicator` / `TapIndicatorPool` | View | Expanding/fading ring at tap position during replay |
+| `ApiClient` | View | HTTP client, JWT attachment, all auth + leaderboard endpoints, token storage in PlayerPrefs |
+| `AccountManager` | View | Account panel: login/register, verify, forgot/reset password, account info, change email, confirm email, change password, inline display name editing |
+| `ScoreSubmitter` | View | Fire-and-forget score submission helper (checks login state, serializes, polls 202 status, surfaces toasts on failure) |
+| `GlobalToast` | View | `DontDestroyOnLoad` toast singleton with retry/dismiss buttons |
+| `ConfirmModal` | View | Reusable confirm modal wrapper |
+| `ServerHealthCheck` | Editor | Editor menu item (Tools > Arrow Thing) to test server connectivity |
 
 ---
 
@@ -442,28 +472,31 @@ One row per `(UserId, BoardWidth, BoardHeight)` — the player's personal best f
 
 ### Automated (NUnit EditMode)
 - `ReplayVerifier`: valid replays pass, invalid replays (wrong cell, skipped arrow, bad order) fail
+- `GenerationFingerprintTests`: identical generated boards across Unity and .NET runtimes for the same seed (anti-regression for the `PortableRandom` requirement)
 
-### Automated (Server Integration — 61 tests)
+### Automated (Server Integration — xUnit, Testcontainers)
 - Auth: register, login (email-based), duplicate email rejection, validation errors
 - Auth: display name change (`PATCH /api/auth/me`), `GET /api/auth/me`
-- Email verification: verify token, resend with rate limiting
-- Password reset: forgot password, reset with token, expired token
-- Email change: request, confirm, wrong password, same email, invalid token, race condition (email taken)
+- Email verification: verify code, resend with rate limiting
+- Password reset: forgot password, reset with code, expired code
+- Email change: request, confirm, wrong password, same email, invalid code, race condition (email taken)
 - Account lock/unlock: lock invalidates sessions + blocks login, unlock sends reset email + allows recovery
 - Admin: valid/invalid/missing X-Admin-Key
-- Score submission: valid replay accepted, personal best upserted, rank returned
+- Score submission (pre-verify): replay version gate (426), board size, timing, seed dedup, account flag
+- Score submission (worker): valid replay accepted via async worker, personal best upserted, rank returned
 - Score submission: invalid replay rejected with reason (tampered events, tampered snapshot)
 - Score submission: slower time leaves existing record unchanged
 - Score submission: same gameId idempotent
-- Score submission: rate limit (10 updates/hour) enforced
-- Leaderboards: ranking correctness, partitioning by board size, personal best query
+- Score submission: rate limit enforced
+- Leaderboards: ranking correctness, partitioning by board size, personal best query, flagged users excluded
 - Replays: fetch returns JSON for verified score; 404 for unknown
 - Display name: rename reflected in leaderboard
+- E2E verification: end-to-end fingerprint tests for board sizes 5×5 through 50×50
 
 ### Manual
 - **Full online flow**: register → play → submit → see score on leaderboard → play replay
 - **Offline play**: server unreachable → game works normally → score appears on local leaderboard only → no errors
-- **Account UI**: account icon (top-right) → full-screen login/register → email verification → display name change → email change → logout
-- **Victory personal best**: gold timer during board-clear, gold highlight in inline leaderboard, "New Best!" text
-- **Leaderboard scene**: tabs, local/global toggle, top 50, replay playback
-- **Error handling**: server down mid-game, network timeout, expired token
+- **Account UI**: account section in Settings → login/register → email verification → display name change → email change → logout
+- **Victory personal best**: gold timer during board-clear sequence
+- **Leaderboard scene**: tabs, local/global toggle, top 50, replay playback (top-50 instant load, outside-top-50 regenerated from seed)
+- **Error handling**: server down mid-submission, network timeout, expired token, retry toast

@@ -87,7 +87,7 @@ Y-up coordinate convention: `Direction.Up → dy = +1`, `Direction.Down → dy =
 
 ## Public Entry Points
 
-### `FillBoardIncremental(Board board, int maxLength, Random random)`
+### `FillBoardIncremental(Board board, int maxLength, int seed)`
 
 - Coroutine (returns `IEnumerator`). Yields once per arrow placed, allowing the caller to drive frame budgeting.
 - Allocates a `NativeGenerationState` (plain managed arrays — see "Portability" below), calls `NativeGeneration.TryGenerateArrow` per candidate, and extracts cells from the scratch buffers to create managed `Arrow` objects.
@@ -95,7 +95,7 @@ Y-up coordinate convention: `Direction.Up → dy = +1`, `Direction.Down → dy =
 - Yields `GenerationPhase.Compacting`, then runs post-process compaction (see below), yielding per merge.
 - Yields `GenerationPhase.Finalizing`, then yields during `FinalizeGenerationIncremental` (builds HashSet dependency graph incrementally).
 - Used by `GameController.GenerateBoard` for incremental board display during generation, and by `ReplayVerifier.Verify` for server-side replay verification.
-- RNG: `PortableRandom` (xorshift32) seeded from the `System.Random` parameter. Same algorithm on Unity and server so seeds produce identical boards across platforms.
+- RNG: takes an `int seed` directly and derives all randomness via `PortableRandom` (xorshift32). `System.Random` is banned from any path that affects board layout — Mono (Unity) and .NET produce different sequences from the same seed, which previously caused server-side replay verification to always fail. Same algorithm on Unity and server so seeds produce identical boards across platforms.
 
 ### Portability (Unity + .NET server)
 
@@ -189,28 +189,22 @@ Compaction typically merges 15–25% of arrows on standard boards, reducing triv
 
 ## Performance
 
-Measured via `GenerationProfiler.cs` (PlayMode), single-threaded. These numbers predate the compaction pass; compaction adds negligible overhead (a few merge iterations on the already-placed arrow set).
-
-| Board | Unity (PlayMode, incl. ArrowView) |
-|-------|-----------------------------------|
-| 200×200 | ~2.7s |
-| 400×400 | ~68s |
-
-Unity overhead is ~3–4x vs. raw .NET due to ArrowView creation (~38% of work time) and frame yields/rendering (~30% of wall time). The domain algorithm itself accounts for ~62% of work time.
+Measured via `GenerationProfiler.cs` (PlayMode), single-threaded. Unity overhead vs. raw .NET is dominated by `ArrowView` creation and per-frame yields/rendering — the domain algorithm itself runs significantly faster on the server's plain .NET than in Unity. Re-run the profiler after touching any hot path; the absolute numbers shift with each generation algorithm change.
 
 Key optimisations applied (in order of impact):
 
-1. **Burst compilation** — the generation hot path (`NativeGeneration.TryGenerateArrow` and callees) runs as Burst-compiled native code via `[BurstCompile]` static methods on `NativeGeneration`. On WebGL this compiles to WASM SIMD; on desktop it uses SSE/AVX. All generation-time state is held in `NativeGenerationState` (NativeArrays) for Burst compatibility. The managed coroutine calls Burst per-candidate and yields per-arrow for progress reporting. `math.tzcnt` replaces the hand-rolled De Bruijn CTZ with a single hardware instruction.
-2. **Bitset-based reachability with early abort** — dependency graph stored as flat `ulong[]` bitsets (`_depsBitsFlat`). BFS processes 64 arrows per word via bitwise OR, replacing `HashSet<Arrow>` iteration with cache-friendly sequential memory access. Membership tests are single bit-checks instead of hash lookups. Cycle detection is integrated into the BFS via `ComputeReachableSetEarlyAbort`: each newly discovered arrow is immediately checked via flat geometry arrays (`genHeadX`, `genHeadY`, `genDir`), aborting early if a cycle is found rather than computing the full transitive closure first.
-3. **Greedy walk** — linear-time random walk replaces DFS+backtracking for tail construction. O(targetLength) per arrow instead of O(4^d) worst-case. Pre-marks ray cells in `visited` grid to eliminate per-step `IsInRay` checks.
-4. **Spatial ray index** — per-row/per-column flat arrays of arrow head indices grouped by direction. In the Burst path, stored as `NativeArray<int>` with per-row/col counts. Replaces O(N) full-arrow scans in cycle detection and reverse-dep computation with O(crossing) lookups.
-5. **Allocation pooling** — `NativeGenerationState` holds all working arrays (bitsets, frontier, visited grid, path scratch, direction shuffle). Allocated once at generation start, disposed in `finally` block. Zero per-candidate allocations.
-6. **Swap-and-pop candidate removal** — `NativeList<T>.RemoveAtSwapBack` for O(1) candidate pruning. Stale candidates are pruned lazily when encountered.
-7. **Empty-deps fast path** — when a candidate's forward ray is clear (common for edge-pointing arrows), the entire reachability computation and cycle check is skipped.
-8. **Leaf-deps fast path** — when all forward deps have no deps of their own (`hasAnyDeps` flag), the BFS is skipped and reachable set is just the forward deps.
-9. **Reachability set computed once per head candidate** — the BFS runs once, then each tail cell is checked against the fixed bitset via the ray index.
-10. **Generation-only fast path** — Burst path skips HashSet dependency tracking during generation; `FinalizeGenerationIncremental` builds it in one pass afterward.
-11. **O(1) arrow membership** — `HashSet<Arrow> _arrowSet` alongside the `List<Arrow>` for O(1) `Contains` checks in `AddArrow`/`RemoveArrow` validation.
+1. **Bitset-based reachability with early abort** — dependency graph stored as flat `ulong[]` bitsets (`_depsBitsFlat`). BFS processes 64 arrows per word via bitwise OR, replacing `HashSet<Arrow>` iteration with cache-friendly sequential memory access. Membership tests are single bit-checks instead of hash lookups. Cycle detection is integrated into the BFS via `ComputeReachableSetEarlyAbort`: each newly discovered arrow is immediately checked via flat geometry arrays (`genHeadX`, `genHeadY`, `genDir`), aborting early if a cycle is found rather than computing the full transitive closure first.
+2. **Greedy walk** — linear-time random walk replaces DFS+backtracking for tail construction. O(targetLength) per arrow instead of O(4^d) worst-case. Pre-marks ray cells in `visited` grid to eliminate per-step `IsInRay` checks.
+3. **Spatial ray index** — per-row/per-column flat arrays of arrow head indices grouped by direction. Replaces O(N) full-arrow scans in cycle detection and reverse-dep computation with O(crossing) lookups.
+4. **Allocation pooling** — `NativeGenerationState` holds all working arrays (bitsets, frontier, visited grid, path scratch, direction shuffle) as plain managed arrays. Allocated once at generation start, freed when the state goes out of scope. Zero per-candidate allocations.
+5. **Swap-and-pop candidate removal** — O(1) candidate pruning via swap-with-last. Stale candidates are pruned lazily when encountered.
+6. **Empty-deps fast path** — when a candidate's forward ray is clear (common for edge-pointing arrows), the entire reachability computation and cycle check is skipped.
+7. **Leaf-deps fast path** — when all forward deps have no deps of their own (`hasAnyDeps` flag), the BFS is skipped and reachable set is just the forward deps.
+8. **Reachability set computed once per head candidate** — the BFS runs once, then each tail cell is checked against the fixed bitset via the ray index.
+9. **Generation-only fast path** — `NativeGeneration` skips `HashSet<Arrow>` dependency tracking during generation; `FinalizeGenerationIncremental` builds it in one pass afterward.
+10. **O(1) arrow membership** — `HashSet<Arrow> _arrowSet` alongside the `List<Arrow>` for O(1) `Contains` checks in `AddArrow`/`RemoveArrow` validation.
+
+> **Burst was tried and dropped.** An earlier iteration ran the hot path under `[BurstCompile]` for a meaningful speedup on Unity WebGL, but Burst is Unity-only — it can't be referenced from `ArrowThing.Domain` (`netstandard2.1`), which is what the server uses for replay verification. The portable managed C# rewrite (with `[MethodImpl(AggressiveInlining)]`, an inlined De Bruijn CTZ table, and plain `ulong[]` bitsets) is the single source of truth for both Unity and the server, accepting some Unity-side throughput in exchange for byte-for-byte determinism across runtimes. See the `burst-optimization` branch (PR #78) for the rollback.
 
 ## Loading Progress Heuristic
 
