@@ -104,10 +104,10 @@ public class FontCoverageTests
             $"Failed to load font {fileName}: {result}"
         );
 
-        uint glyphIndex = FontEngine.GetGlyphIndex((uint)codePoint);
+        bool found = FontEngine.TryGetGlyphIndex((uint)codePoint, out uint glyphIndex);
         Assert.That(
-            glyphIndex,
-            Is.Not.EqualTo(0u),
+            found && glyphIndex != 0,
+            Is.True,
             $"{fileName} missing {description} (U+{codePoint:X4})"
         );
     }
