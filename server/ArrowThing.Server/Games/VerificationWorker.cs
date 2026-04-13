@@ -114,18 +114,21 @@ public class VerificationWorker : BackgroundService
 
         if (!verifyResult.IsValid)
         {
-            _logger.LogInformation(
-                "Verification failed for game {GameId}: {Reason}",
-                job.GameId,
-                verifyResult.Reason
-            );
-
             // Flag user account on verification failure
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var user = await db.Users.FindAsync(Guid.Parse(job.UserId));
             if (user != null)
             {
+                _logger.LogWarning(
+                    "Flagging user {UserId} for verification failure: {Reason} (seed={Seed}, board={W}x{H}, gameId={GameId})",
+                    job.UserId,
+                    verifyResult.Reason,
+                    replay.seed,
+                    replay.boardWidth,
+                    replay.boardHeight,
+                    job.GameId
+                );
                 user.Flagged = true;
                 user.FlagReason = $"verification_failed: {verifyResult.Reason}";
                 user.FlaggedAt = DateTime.UtcNow;

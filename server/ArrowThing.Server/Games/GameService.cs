@@ -82,6 +82,17 @@ public class GameService
         var preVerifyReason = ReplayVerifier.PreVerify(replay);
         if (preVerifyReason != null)
         {
+            _logger.LogWarning(
+                "Flagging user {UserId} for pre-verify failure: {Reason} (seed={Seed}, board={W}x{H}, gameId={GameId}, solveTime={SolveTime}, events={EventCount})",
+                userId,
+                preVerifyReason,
+                replay.seed,
+                replay.boardWidth,
+                replay.boardHeight,
+                replay.gameId,
+                replay.ComputedSolveElapsed,
+                replay.events?.Count ?? 0
+            );
             user.Flagged = true;
             user.FlagReason = preVerifyReason;
             user.FlaggedAt = DateTime.UtcNow;
@@ -120,14 +131,25 @@ public class GameService
         }
 
         // Seed duplicate detection: flag user and reject
-        var duplicate = await _db.Scores.AnyAsync(s =>
+        var duplicateScore = await _db.Scores.FirstOrDefaultAsync(s =>
             s.Seed == replay.seed
             && s.BoardWidth == replay.boardWidth
             && s.BoardHeight == replay.boardHeight
             && s.UserId != userId
         );
-        if (duplicate)
+        if (duplicateScore != null)
         {
+            _logger.LogWarning(
+                "Flagging user {UserId} for duplicate_seed: seed={Seed}, board={W}x{H}, gameId={GameId}. Colliding score: id={CollidingScoreId}, userId={CollidingUserId}, gameId={CollidingGameId}",
+                userId,
+                replay.seed,
+                replay.boardWidth,
+                replay.boardHeight,
+                replay.gameId,
+                duplicateScore.Id,
+                duplicateScore.UserId,
+                duplicateScore.GameId
+            );
             user.Flagged = true;
             user.FlagReason = "duplicate_seed";
             user.FlaggedAt = DateTime.UtcNow;
