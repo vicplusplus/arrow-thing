@@ -339,7 +339,7 @@ Each phase is a self-contained PR. Phases are intentionally ordered so every mer
 
 **Risk.** Low. Purely additive. If the font asset misconfigures, fallback is Unity's default — same as today.
 
-**Implementation notes.** Font files and glyph coverage tests committed. Font delivery uses `PanelTextSettings` (assigned to all 3 PanelSettings) instead of the originally proposed `Fonts.uss` — this is the standard Unity 6 approach and avoids per-UXML stylesheet includes. No CJK Bold (faux-bold acceptable for display names). No screenshot test — `FontEngine`-based glyph coverage test validates the raw `.ttf` files directly. See `docs/TODO.md` for remaining manual Editor configuration steps.
+**Implemented.** Font files and glyph coverage tests committed. Font delivery uses `PanelTextSettings` (assigned to all 3 PanelSettings) instead of the originally proposed `Fonts.uss` — this is the standard Unity 6 approach and avoids per-UXML stylesheet includes. No CJK Bold (faux-bold acceptable for display names). No screenshot test — `FontEngine`-based glyph coverage test validates the raw `.ttf` files directly.
 
 ### Phase 1 — Main menu restructure
 
