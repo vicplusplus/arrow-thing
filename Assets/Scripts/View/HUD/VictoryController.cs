@@ -40,6 +40,15 @@ public sealed class VictoryController : MonoBehaviour
         "Incredible.",
         "Clearly cheated.",
         "huh",
+        ":O",
+        "Not even a new best, come on",
+        "mm yumy arrw tast vry good",
+        "Hey, that's pretty good!",
+        "gnarly",
+        "too slow",
+        "Did you drink water today?",
+        "My god, go touch grass. Please.",
+        "SCREENSHOT THIS NOW",
     };
 
     private UIDocument _uiDocument;
