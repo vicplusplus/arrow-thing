@@ -232,6 +232,23 @@ All UI colors are CSS custom properties (USS variables) defined in `ThemeColors.
 - **`ThemeColors.uss`** — single source of truth for the entire UI palette (~90 variables). Groups: Text (`--text-white/primary/secondary/heading/dim/danger/success/gold/link`), Surfaces (`--bg-screen/overlay/panel/settings/entry/track/item-hover`), Buttons, Inputs, Navigation tabs/toggles/filters, Presets, Accents (blue/green/teal/danger/info/favorite/warning/progress), Toggle/slider controls, Borders, Scrollbars. Swapping this file (via `VisualSettings.themeUIStyleSheet`) changes the entire UI theme.
 - **`Shared.uss`** — shared component styles used across multiple screens: `screen--hidden`, `screen-title`, modal overlay/box/buttons, `confirm-btn--danger`, back-button, icon-button, settings section header, entry row, scrollbar skin, empty-state label, loading overlay. Each screen's USS imports only screen-specific overrides.
 
+### Fonts (`Assets/Fonts/`)
+
+Noto Sans font family (SIL OFL 1.1) provides broad Unicode coverage for display names and lobby names. Font files committed as raw `.ttf`/`.otf`; Font Assets created in-Editor with Dynamic atlas population mode (SDF, runtime-populated).
+
+| File | Coverage |
+|------|----------|
+| `NotoSans-Regular.ttf` | Latin, Greek, Cyrillic (primary) |
+| `NotoSans-Bold.ttf` | Latin, Greek, Cyrillic (bold variant) |
+| `NotoSansJP-Regular.otf` | CJK Japanese subset |
+| `NotoSansArabic-Regular.ttf` | Arabic |
+| `NotoSansHebrew-Regular.ttf` | Hebrew |
+| `NotoSansThai-Regular.ttf` | Thai |
+| `NotoSansDevanagari-Regular.ttf` | Devanagari |
+| `NotoEmoji-Regular.ttf` | Monochrome emoji |
+
+Configuration is via `PanelTextSettings` (not USS). The primary `NotoSans-Regular` Font Asset has a fallback chain containing all other Font Assets. `PanelTextSettings` references the primary Font Asset and is assigned to all three `PanelSettings` assets (main, settings overlay, global toast). No USS or UXML changes required — all UI text inherits the font automatically.
+
 ### Arrowhead Separation
 
 The arrowhead is a separate child GameObject with its own material instance, not part of the body mesh:
