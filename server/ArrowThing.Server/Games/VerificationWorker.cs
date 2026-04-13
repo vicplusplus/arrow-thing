@@ -16,7 +16,6 @@ public class VerificationWorker : BackgroundService
     private readonly LeaderboardCache _leaderboardCache;
     private readonly ILogger<VerificationWorker> _logger;
 
-    private const string QueueKey = "verify:queue";
     private const string ResultKeyPrefix = "verify:result:";
     private static readonly TimeSpan ResultTtl = TimeSpan.FromHours(1);
     private const int TopSnapshotCount = 50;
@@ -43,7 +42,11 @@ public class VerificationWorker : BackgroundService
         {
             try
             {
-                var result = await db.ListRightPopAsync(QueueKey);
+                // Poll standard queue first (small boards), then heavy queue.
+                var result = await db.ListRightPopAsync(GameService.StandardQueueKey);
+                if (result.IsNullOrEmpty)
+                    result = await db.ListRightPopAsync(GameService.HeavyQueueKey);
+
                 if (result.IsNullOrEmpty)
                 {
                     await Task.Delay(1000, stoppingToken);

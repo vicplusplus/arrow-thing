@@ -383,14 +383,13 @@ public class ApiClient
 
     public async Task<ApiResult<GlobalLeaderboardResponse>> GetLeaderboardAsync(
         int width,
-        int height,
-        int limit = 50
+        int height
     )
     {
         try
         {
             using var request = UnityWebRequest.Get(
-                $"{_baseUrl}/api/leaderboards/{width}x{height}?limit={limit}"
+                $"{_baseUrl}/api/leaderboards/{width}x{height}"
             );
             request.timeout = 10;
 
@@ -416,13 +415,11 @@ public class ApiClient
         }
     }
 
-    public async Task<ApiResult<GlobalLeaderboardResponse>> GetLeaderboardAllAsync(int limit = 50)
+    public async Task<ApiResult<GlobalLeaderboardResponse>> GetLeaderboardAllAsync()
     {
         try
         {
-            using var request = UnityWebRequest.Get(
-                $"{_baseUrl}/api/leaderboards/all?limit={limit}"
-            );
+            using var request = UnityWebRequest.Get($"{_baseUrl}/api/leaderboards/all");
             request.timeout = 10;
 
             var op = request.SendWebRequest();
@@ -806,7 +803,6 @@ public class PlayerEntryResponse
     public int boardWidth;
     public int boardHeight;
     public bool flagged;
-    public string flagReason;
 }
 
 [Serializable]

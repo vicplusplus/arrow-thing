@@ -14,7 +14,7 @@ public class LeaderboardService
         _cache = cache;
     }
 
-    public async Task<LeaderboardResponse> GetTopEntriesAsync(int width, int height, int limit = 50)
+    public async Task<LeaderboardResponse> GetTopEntriesAsync(int width, int height)
     {
         var cached = _cache.Get(width, height);
         if (cached != null)
@@ -27,13 +27,12 @@ public class LeaderboardService
         var entries = await _db
             .Scores.Where(s => s.BoardWidth == width && s.BoardHeight == height && !s.User.Flagged)
             .OrderBy(s => s.Time)
-            .Take(limit)
+            .Take(50)
             .Select(s => new LeaderboardEntryDto
             {
                 DisplayName = s.User.DisplayName,
                 Time = s.Time,
                 GameId = s.GameId.ToString(),
-                Id = s.Id,
             })
             .ToListAsync();
 
@@ -46,52 +45,64 @@ public class LeaderboardService
         return response;
     }
 
-    public async Task<LeaderboardResponse> GetTopEntriesAllAsync(int limit = 50)
+    public async Task<LeaderboardResponse> GetTopEntriesAllAsync()
     {
         var cached = _cache.Get(0, 0);
         if (cached != null)
             return cached;
 
-        // For each user, find their score with the largest board area, then fastest time.
-        // This uses a raw approach: get all scores grouped by user, pick representative.
-        var allScores = await _db
-            .Scores.Where(s => !s.User.Flagged)
-            .Include(s => s.User)
+        // For each user, pick their representative score (largest board area, then
+        // fastest time) and return the global top 50. Uses PostgreSQL DISTINCT ON
+        // to avoid loading all scores into memory.
+        var rows = await _db
+            .Database.SqlQueryRaw<AllLeaderboardRow>(
+                """
+                SELECT sub."DisplayName", sub."Time", sub."GameId",
+                       sub."BoardWidth", sub."BoardHeight"
+                FROM (
+                    SELECT DISTINCT ON (s."UserId")
+                        u."DisplayName", s."Time", s."GameId"::text AS "GameId",
+                        s."BoardWidth", s."BoardHeight"
+                    FROM "Scores" s
+                    INNER JOIN "Users" u ON s."UserId" = u."Id"
+                    WHERE NOT u."Flagged"
+                    ORDER BY s."UserId",
+                             (s."BoardWidth" * s."BoardHeight") DESC,
+                             s."Time" ASC
+                ) sub
+                ORDER BY (sub."BoardWidth" * sub."BoardHeight") DESC,
+                         sub."Time" ASC
+                LIMIT 50
+                """
+            )
             .ToListAsync();
 
-        var byUser = allScores
-            .GroupBy(s => s.UserId)
-            .Select(g =>
-            {
-                // Representative: max area, then min time
-                return g.OrderByDescending(s => s.BoardWidth * s.BoardHeight)
-                    .ThenBy(s => s.Time)
-                    .First();
-            })
-            .OrderByDescending(s => s.BoardWidth * s.BoardHeight)
-            .ThenBy(s => s.Time)
-            .ToList();
+        var totalCount = await _db
+            .Database.SqlQueryRaw<int>(
+                """
+                SELECT COUNT(DISTINCT s."UserId")::int AS "Value"
+                FROM "Scores" s
+                INNER JOIN "Users" u ON s."UserId" = u."Id"
+                WHERE NOT u."Flagged"
+                """
+            )
+            .SingleAsync();
 
-        var totalEntries = byUser.Count;
-
-        var entries = byUser
-            .Take(limit)
-            .Select(
-                (s, i) =>
+        var entries = rows.Select(
+                (r, i) =>
                     new LeaderboardEntryDto
                     {
                         Rank = i + 1,
-                        DisplayName = s.User.DisplayName,
-                        Time = s.Time,
-                        GameId = s.GameId.ToString(),
-                        BoardWidth = s.BoardWidth,
-                        BoardHeight = s.BoardHeight,
-                        Id = s.Id,
+                        DisplayName = r.DisplayName,
+                        Time = r.Time,
+                        GameId = r.GameId,
+                        BoardWidth = r.BoardWidth,
+                        BoardHeight = r.BoardHeight,
                     }
             )
             .ToList();
 
-        var response = new LeaderboardResponse { TotalEntries = totalEntries, Entries = entries };
+        var response = new LeaderboardResponse { TotalEntries = totalCount, Entries = entries };
         _cache.Set(0, 0, response);
         return response;
     }
@@ -126,53 +137,69 @@ public class LeaderboardService
             Time = score.Time,
             GameId = score.GameId.ToString(),
             Flagged = score.User.Flagged,
-            FlagReason = score.User.FlagReason,
         };
     }
 
     public async Task<PlayerEntryDto?> GetPlayerEntryAllAsync(Guid userId)
     {
-        var userScores = await _db
+        // Find user's representative score (largest board area, then fastest time).
+        // Only loads this user's scores — small set.
+        var representative = await _db
             .Scores.Include(s => s.User)
             .Where(s => s.UserId == userId)
-            .ToListAsync();
-
-        if (userScores.Count == 0)
-            return null;
-
-        // User's representative score: largest area, then fastest time
-        var representative = userScores
             .OrderByDescending(s => s.BoardWidth * s.BoardHeight)
             .ThenBy(s => s.Time)
-            .First();
+            .FirstOrDefaultAsync();
 
-        // Compute rank among all users' representative scores
-        var allScores = await _db.Scores.Where(s => !s.User.Flagged).ToListAsync();
-        var allRepresentatives = allScores
-            .GroupBy(s => s.UserId)
-            .Select(g =>
-                g.OrderByDescending(s => s.BoardWidth * s.BoardHeight).ThenBy(s => s.Time).First()
-            )
-            .ToList();
+        if (representative == null)
+            return null;
 
         var repArea = representative.BoardWidth * representative.BoardHeight;
-        var rank =
-            allRepresentatives.Count(r =>
-            {
-                var rArea = r.BoardWidth * r.BoardHeight;
-                return rArea > repArea || (rArea == repArea && r.Time < representative.Time);
-            }) + 1;
+
+        // Compute rank and total via SQL using DISTINCT ON — avoids loading all scores.
+        var rankResult = await _db
+            .Database.SqlQueryRaw<int>(
+                """
+                WITH representatives AS (
+                    SELECT DISTINCT ON (s."UserId")
+                        (s."BoardWidth" * s."BoardHeight") AS area,
+                        s."Time"
+                    FROM "Scores" s
+                    INNER JOIN "Users" u ON s."UserId" = u."Id"
+                    WHERE NOT u."Flagged"
+                    ORDER BY s."UserId",
+                             (s."BoardWidth" * s."BoardHeight") DESC,
+                             s."Time" ASC
+                )
+                SELECT COUNT(*)::int AS "Value"
+                FROM representatives
+                WHERE area > {0} OR (area = {0} AND "Time" < {1})
+                """,
+                repArea,
+                representative.Time
+            )
+            .SingleAsync();
+
+        var totalEntries = await _db
+            .Database.SqlQueryRaw<int>(
+                """
+                SELECT COUNT(DISTINCT s."UserId")::int AS "Value"
+                FROM "Scores" s
+                INNER JOIN "Users" u ON s."UserId" = u."Id"
+                WHERE NOT u."Flagged"
+                """
+            )
+            .SingleAsync();
 
         return new PlayerEntryDto
         {
-            Rank = rank,
-            TotalEntries = allRepresentatives.Count,
+            Rank = rankResult + 1,
+            TotalEntries = totalEntries,
             Time = representative.Time,
             GameId = representative.GameId.ToString(),
             BoardWidth = representative.BoardWidth,
             BoardHeight = representative.BoardHeight,
             Flagged = representative.User.Flagged,
-            FlagReason = representative.User.FlagReason,
         };
     }
 
@@ -198,7 +225,6 @@ public class LeaderboardEntryDto
     public string DisplayName { get; set; } = "";
     public double Time { get; set; }
     public string GameId { get; set; } = "";
-    public Guid Id { get; set; }
     public int? BoardWidth { get; set; }
     public int? BoardHeight { get; set; }
 }
@@ -212,5 +238,14 @@ public class PlayerEntryDto
     public int? BoardWidth { get; set; }
     public int? BoardHeight { get; set; }
     public bool Flagged { get; set; }
-    public string? FlagReason { get; set; }
+}
+
+/// <summary>Row type for the raw SQL global leaderboard query.</summary>
+public class AllLeaderboardRow
+{
+    public string DisplayName { get; set; } = "";
+    public double Time { get; set; }
+    public string GameId { get; set; } = "";
+    public int BoardWidth { get; set; }
+    public int BoardHeight { get; set; }
 }

@@ -2,8 +2,11 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ArrowThing.Server.Data;
 using ArrowThing.Server.Games;
 using ArrowThing.Server.Leaderboards;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArrowThing.Server.Tests;
 
@@ -803,9 +806,15 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         var entry2 = lb2.Entries.Find(e => e.GameId != gameId);
         Assert.NotNull(entry2);
 
-        // Remove using the score ID from the entry
+        // Look up the score's database ID via the DB context
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var entry2GameId = Guid.Parse(entry2!.GameId);
+        var score = await db.Scores.FirstAsync(s => s.GameId == entry2GameId);
+
+        // Remove using the score ID
         _client.DefaultRequestHeaders.Add("X-Admin-Key", "test-admin-key");
-        var removeResp = await _client.PostAsync($"/api/admin/scores/{entry2!.Id}/remove", null);
+        var removeResp = await _client.PostAsync($"/api/admin/scores/{score.Id}/remove", null);
         Assert.Equal(HttpStatusCode.OK, removeResp.StatusCode);
 
         // Leaderboard should now have 1 entry
