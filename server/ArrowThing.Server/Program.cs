@@ -415,6 +415,11 @@ app.MapGet(
                 u.Email,
                 u.DisplayName,
                 u.FlagReason,
+                u.FlaggedAt,
+                u.FlagTriggerSeed,
+                u.FlagTriggerBoardWidth,
+                u.FlagTriggerBoardHeight,
+                u.FlagTriggerGameId,
                 u.CreatedAt,
             })
             .ToListAsync();
@@ -436,6 +441,11 @@ app.MapPost(
 
         user.Flagged = false;
         user.FlagReason = null;
+        user.FlaggedAt = null;
+        user.FlagTriggerSeed = null;
+        user.FlagTriggerBoardWidth = null;
+        user.FlagTriggerBoardHeight = null;
+        user.FlagTriggerGameId = null;
         await db.SaveChangesAsync();
         return Results.Ok(new { message = "User unflagged." });
     }

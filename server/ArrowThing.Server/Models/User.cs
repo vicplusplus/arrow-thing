@@ -35,6 +35,11 @@ public class User
     // Anti-cheat flagging
     public bool Flagged { get; set; }
     public string? FlagReason { get; set; }
+    public DateTime? FlaggedAt { get; set; }
+    public int? FlagTriggerSeed { get; set; }
+    public int? FlagTriggerBoardWidth { get; set; }
+    public int? FlagTriggerBoardHeight { get; set; }
+    public string? FlagTriggerGameId { get; set; }
 
     public bool IsLocked => LockedAt.HasValue;
     public bool IsEmailVerified => EmailVerifiedAt.HasValue;

@@ -697,7 +697,13 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
 
         var flagged = await response.Content.ReadFromJsonAsync<List<FlaggedUserDto>>();
         Assert.True(flagged!.Count >= 1);
-        Assert.True(flagged.Exists(u => u.Email == "admflag1@test.com"));
+        var flaggedUser = flagged.Find(u => u.Email == "admflag1@test.com");
+        Assert.NotNull(flaggedUser);
+        Assert.NotNull(flaggedUser!.FlaggedAt);
+        Assert.Equal(888, flaggedUser.FlagTriggerSeed);
+        Assert.Equal(6, flaggedUser.FlagTriggerBoardWidth);
+        Assert.Equal(6, flaggedUser.FlagTriggerBoardHeight);
+        Assert.NotNull(flaggedUser.FlagTriggerGameId);
 
         _client.DefaultRequestHeaders.Remove("X-Admin-Key");
     }
@@ -1021,7 +1027,17 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
 
 file record AuthResponse(string Token, string DisplayName);
 
-file record FlaggedUserDto(Guid Id, string Email, string DisplayName, string FlagReason);
+file record FlaggedUserDto(
+    Guid Id,
+    string Email,
+    string DisplayName,
+    string FlagReason,
+    DateTime? FlaggedAt,
+    int? FlagTriggerSeed,
+    int? FlagTriggerBoardWidth,
+    int? FlagTriggerBoardHeight,
+    string? FlagTriggerGameId
+);
 
 record AcceptedResponse(string GameId, string Status);
 

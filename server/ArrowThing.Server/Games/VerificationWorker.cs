@@ -128,6 +128,11 @@ public class VerificationWorker : BackgroundService
             {
                 user.Flagged = true;
                 user.FlagReason = $"verification_failed: {verifyResult.Reason}";
+                user.FlaggedAt = DateTime.UtcNow;
+                user.FlagTriggerSeed = replay.seed;
+                user.FlagTriggerBoardWidth = replay.boardWidth;
+                user.FlagTriggerBoardHeight = replay.boardHeight;
+                user.FlagTriggerGameId = job.GameId;
                 await db.SaveChangesAsync();
             }
 
