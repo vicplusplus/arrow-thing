@@ -1,28 +1,88 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <ui:VisualElement class="screen">
-        <ui:VisualElement class="icon-row icon-row--top-left">
-            <ui:Button name="quit-btn" class="icon-btn">
-                <ui:VisualElement class="icon-btn__icon icon--close" />
-            </ui:Button>
-        </ui:VisualElement>
-        <ui:VisualElement class="icon-row icon-row--top-right">
-            <ui:Button name="leaderboard-btn" class="icon-btn icon-btn--gold">
-                <ui:VisualElement class="icon-btn__icon icon--trophy" />
-            </ui:Button>
+
+        <!-- Root menu -->
+        <ui:VisualElement name="menu-root" class="menu-panel">
+            <ui:VisualElement class="icon-row icon-row--top-left">
+                <ui:Button name="quit-btn" class="icon-btn">
+                    <ui:VisualElement class="icon-btn__icon icon--close" />
+                </ui:Button>
+            </ui:VisualElement>
+
+            <ui:VisualElement class="title" />
+            <ui:Button name="play-btn" class="menu-btn start-btn" text="Play" />
+            <ui:Button name="settings-btn" class="menu-btn" text="Settings" />
+
+            <ui:VisualElement class="icon-row icon-row--bottom-left">
+                <ui:Button name="link-github-btn" class="icon-btn">
+                    <ui:VisualElement class="icon-btn__icon icon--github" />
+                </ui:Button>
+                <ui:Button name="link-discord-btn" class="icon-btn">
+                    <ui:VisualElement class="icon-btn__icon icon--discord" />
+                </ui:Button>
+            </ui:VisualElement>
         </ui:VisualElement>
 
-        <ui:VisualElement class="title" />
-        <ui:Button name="play-btn" class="menu-btn start-btn" text="Play" />
-        <ui:Button name="continue-btn" class="menu-btn continue-btn screen--hidden" text="Continue" />
-        <ui:Button name="settings-btn" class="menu-btn" text="Settings" />
+        <!-- Play sub-menu (Singleplayer / Multiplayer choice) -->
+        <ui:VisualElement name="menu-play" class="menu-panel screen--hidden">
+            <ui:VisualElement class="icon-row icon-row--top-left">
+                <ui:Button name="back-play-btn" class="icon-btn">
+                    <ui:VisualElement class="icon-btn__icon icon--close" />
+                </ui:Button>
+            </ui:VisualElement>
 
-        <ui:VisualElement class="icon-row icon-row--bottom-left">
-            <ui:Button name="link-github-btn" class="icon-btn">
-                <ui:VisualElement class="icon-btn__icon icon--github" />
-            </ui:Button>
-            <ui:Button name="link-discord-btn" class="icon-btn">
-                <ui:VisualElement class="icon-btn__icon icon--discord" />
-            </ui:Button>
+            <ui:VisualElement class="title" />
+            <ui:VisualElement class="play-choice-row">
+                <ui:Button name="singleplayer-btn" class="menu-btn play-choice-btn" text="Singleplayer" />
+                <ui:Button name="multiplayer-btn" class="menu-btn play-choice-btn" text="Multiplayer" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <!-- Singleplayer sub-menu (size select + continue) -->
+        <ui:VisualElement name="menu-singleplayer" class="menu-panel screen--hidden">
+            <ui:VisualElement class="icon-row icon-row--top-left">
+                <ui:Button name="back-sp-btn" class="icon-btn">
+                    <ui:VisualElement class="icon-btn__icon icon--arrow-back" />
+                </ui:Button>
+            </ui:VisualElement>
+            <ui:VisualElement class="icon-row icon-row--top-right">
+                <ui:Button name="leaderboard-btn" class="icon-btn icon-btn--gold">
+                    <ui:VisualElement class="icon-btn__icon icon--trophy" />
+                </ui:Button>
+            </ui:VisualElement>
+            <ui:Label class="section-label" text="Select Board Size" />
+            <ui:VisualElement class="preset-grid">
+                <ui:Button name="preset-small"  class="preset-btn" text="Small&#10;10 × 10" />
+                <ui:Button name="preset-medium" class="preset-btn" text="Medium&#10;20 × 20" />
+                <ui:Button name="preset-large"  class="preset-btn" text="Large&#10;40 × 40" />
+                <ui:Button name="preset-xlarge" class="preset-btn" text="XLarge&#10;100 × 100" />
+                <ui:Button name="preset-custom" class="preset-btn" text="Custom" />
+            </ui:VisualElement>
+            <ui:VisualElement name="custom-panel" class="custom-panel screen--hidden">
+                <ui:VisualElement name="custom-width-row" class="preset-custom-row">
+                    <ui:Label class="preset-custom-dim-label" text="W" />
+                </ui:VisualElement>
+                <ui:VisualElement name="custom-height-row" class="preset-custom-row">
+                    <ui:Label class="preset-custom-dim-label" text="H" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+            <ui:VisualElement name="start-row" class="play-choice-row">
+                <ui:Button name="start-btn" class="menu-btn start-btn play-choice-btn" text="Start" />
+                <ui:Button name="continue-btn" class="menu-btn continue-btn play-choice-btn screen--hidden" text="Continue" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <!-- Multiplayer sub-menu -->
+        <ui:VisualElement name="menu-multiplayer" class="menu-panel screen--hidden">
+            <ui:VisualElement class="icon-row icon-row--top-left">
+                <ui:Button name="back-mp-btn" class="icon-btn">
+                    <ui:VisualElement class="icon-btn__icon icon--close" />
+                </ui:Button>
+            </ui:VisualElement>
+
+            <ui:VisualElement class="title" />
+            <ui:Button name="coop-btn" class="menu-btn" text="Co-op" />
+            <ui:Label class="coming-soon-text" text="Coming soon" />
         </ui:VisualElement>
 
     </ui:VisualElement>

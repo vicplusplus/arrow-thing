@@ -70,10 +70,7 @@ done
 # 4. Meta file sync (every added/removed Asset needs its .meta paired)
 # ---------------------------------------------------------------------------
 
-staged_added=$(git diff --cached --name-only --diff-filter=A) || true
-staged_deleted=$(git diff --cached --name-only --diff-filter=D) || true
-
-for file in $staged_added; do
+while IFS= read -r file; do
     case "$file" in
         Assets/*) ;;
         *) continue ;;
@@ -83,7 +80,7 @@ for file in $staged_added; do
     esac
 
     meta="$file.meta"
-    if ! git diff --cached --name-only | grep -qx "$meta"; then
+    if ! git diff --cached --name-only | grep -qFx "$meta"; then
         # Auto-generate the missing .meta file with a random GUID.
         guid=$(python3 -c "import uuid; print(uuid.uuid4().hex)" 2>/dev/null \
             || head -c 16 /dev/urandom | xxd -p | tr -d ' \n')
@@ -91,9 +88,9 @@ for file in $staged_added; do
         git add "$meta"
         echo "Generated missing .meta: $meta"
     fi
-done
+done < <(git diff --cached --name-only --diff-filter=A)
 
-for file in $staged_deleted; do
+while IFS= read -r file; do
     case "$file" in
         Assets/*) ;;
         *) continue ;;
@@ -103,11 +100,11 @@ for file in $staged_deleted; do
     esac
 
     meta="$file.meta"
-    if ! git diff --cached --name-only --diff-filter=D | grep -qx "$meta"; then
+    if ! git diff --cached --name-only --diff-filter=D | grep -qFx "$meta"; then
         echo "ERROR: $file removed but its .meta file ($meta) was not removed"
         errors=1
     fi
-done
+done < <(git diff --cached --name-only --diff-filter=D)
 
 # ---------------------------------------------------------------------------
 

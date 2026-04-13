@@ -362,6 +362,8 @@ Each phase is a self-contained PR. Phases are intentionally ordered so every mer
 
 **Risk.** Low. Pure UX change, no gameplay impact.
 
+**Implemented.** Four-state menu (`Root`, `Play`, `Singleplayer`, `Multiplayer`) in `MainMenuController` with `screen--hidden` panel toggling and `RebuildNavigator()` per state. Size Select folded into the Singleplayer panel (the former `Solo Size Select` scene and `SoloSizeSelectController` were removed). Static `_persistedState` preserves the active sub-menu across scene reloads. Co-op button is disabled with a "Coming soon" label. Singleplayer and Multiplayer are side-by-side in the Play sub-menu. Start and Continue are side-by-side in the Singleplayer panel. 6 NavigationCoverage states, 21 manual test cases passed.
+
 ### Phase 2 — Viewport culling in BoardView
 
 **Goal.** Make `BoardView` render correctly on boards too large for one-GameObject-per-arrow. This unblocks all future large-board work (co-op 200×200, future 1000×1000, and any solo board sizes past the current practical limit).
