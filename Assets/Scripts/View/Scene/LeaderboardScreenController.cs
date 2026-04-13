@@ -936,7 +936,7 @@ public sealed class LeaderboardScreenController : NavigableScene
         int tabAtFetch = _activeTabIndex;
 
         // Fetch leaderboard and player entry in parallel
-        var lbTask = isAllTab ? api.GetLeaderboardAllAsync(50) : api.GetLeaderboardAsync(w, h, 50);
+        var lbTask = isAllTab ? api.GetLeaderboardAllAsync() : api.GetLeaderboardAsync(w, h);
         System.Threading.Tasks.Task<ApiResult<PlayerEntryResponse>> meTask = null;
         if (api.IsLoggedIn)
             meTask = isAllTab ? api.GetPlayerEntryAllAsync() : api.GetPlayerEntryAsync(w, h);
@@ -1110,10 +1110,7 @@ public sealed class LeaderboardScreenController : NavigableScene
 
         if (me.flagged)
         {
-            var reason = string.IsNullOrEmpty(me.flagReason)
-                ? "flagged"
-                : me.flagReason.Replace("_", " ");
-            _playerPanelLabel.text = $"Account flagged: {reason}. Contact support.";
+            _playerPanelLabel.text = "Account flagged. Contact support.";
             ShowElement(_playerPlayBtn, false);
             return;
         }

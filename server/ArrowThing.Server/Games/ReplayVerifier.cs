@@ -62,9 +62,9 @@ public static class ReplayVerifier
         {
             return VerifyInternal(replay);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            return VerificationResult.Invalid("Unexpected error: " + ex.Message);
+            return VerificationResult.Invalid("Verification failed.");
         }
     }
 

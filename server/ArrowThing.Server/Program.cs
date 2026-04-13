@@ -507,18 +507,20 @@ app.MapGet(
 // Leaderboards
 app.MapGet(
     "/api/leaderboards/{w:int}x{h:int}",
-    async (int w, int h, LeaderboardService leaderboards, int? limit) =>
+    async (int w, int h, LeaderboardService leaderboards) =>
     {
-        var result = await leaderboards.GetTopEntriesAsync(w, h, limit ?? 50);
+        if (w < 2 || h < 2 || w > 400 || h > 400)
+            return Results.Ok(new LeaderboardResponse());
+        var result = await leaderboards.GetTopEntriesAsync(w, h);
         return Results.Ok(result);
     }
 );
 
 app.MapGet(
     "/api/leaderboards/all",
-    async (LeaderboardService leaderboards, int? limit) =>
+    async (LeaderboardService leaderboards) =>
     {
-        var result = await leaderboards.GetTopEntriesAllAsync(limit ?? 50);
+        var result = await leaderboards.GetTopEntriesAllAsync();
         return Results.Ok(result);
     }
 );

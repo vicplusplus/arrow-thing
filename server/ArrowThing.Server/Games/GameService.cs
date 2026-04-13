@@ -16,7 +16,11 @@ public class GameService
     private readonly IConnectionMultiplexer? _redis;
 
     private const int RateLimitPerHour = 10;
-    private const string QueueKey = "verify:queue";
+    private const int HeavyBoardAreaThreshold = 2500; // ~50x50
+    private const int MaxStandardQueueDepth = 100;
+    private const int MaxHeavyQueueDepth = 20;
+    internal const string StandardQueueKey = "verify:queue:standard";
+    internal const string HeavyQueueKey = "verify:queue:heavy";
 
     public GameService(
         AppDbContext db,
@@ -137,6 +141,16 @@ public class GameService
         if (_redis == null)
             return (null, 503, "Verification service unavailable.");
 
+        var area = replay.boardWidth * replay.boardHeight;
+        var isHeavy = area > HeavyBoardAreaThreshold;
+        var queueKey = isHeavy ? HeavyQueueKey : StandardQueueKey;
+        var maxDepth = isHeavy ? MaxHeavyQueueDepth : MaxStandardQueueDepth;
+
+        var redisDb = _redis.GetDatabase();
+        var queueLength = await redisDb.ListLengthAsync(queueKey);
+        if (queueLength >= maxDepth)
+            return (null, 503, "Server busy, try again later.");
+
         var job = new
         {
             UserId = userId.ToString(),
@@ -145,8 +159,7 @@ public class GameService
             EnqueuedAt = DateTime.UtcNow.ToString("O"),
         };
 
-        var db = _redis.GetDatabase();
-        await db.ListLeftPushAsync(QueueKey, System.Text.Json.JsonSerializer.Serialize(job));
+        await redisDb.ListLeftPushAsync(queueKey, System.Text.Json.JsonSerializer.Serialize(job));
 
         return (
             new SubmitAcceptedResponse { GameId = gameId.ToString(), Status = "pending" },
