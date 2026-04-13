@@ -179,6 +179,7 @@ public sealed class ReplayViewController : MonoBehaviour
         );
 
         _camCtrl = BoardSetupHelper.SetupCamera(mainCamera, _board);
+        _boardView.SetCameraController(_camCtrl);
 
         // Restore board from snapshot, or regenerate from seed if snapshot is absent
         _boardSnapshot = _replayData.boardSnapshot;
@@ -843,6 +844,8 @@ public sealed class ReplayViewController : MonoBehaviour
         var snapshotArrows = new List<Arrow>(_boardSnapshot.Count);
         foreach (var cells in _boardSnapshot)
             snapshotArrows.Add(new Arrow(cells));
+
+        _boardView.SetCameraController(_camCtrl);
 
         // Exhaust the incremental restorer synchronously
         var restorer = _board.RestoreArrowsIncremental(snapshotArrows);
