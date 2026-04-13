@@ -419,9 +419,7 @@ public class ApiClient
     {
         try
         {
-            using var request = UnityWebRequest.Get(
-                $"{_baseUrl}/api/leaderboards/all"
-            );
+            using var request = UnityWebRequest.Get($"{_baseUrl}/api/leaderboards/all");
             request.timeout = 10;
 
             var op = request.SendWebRequest();

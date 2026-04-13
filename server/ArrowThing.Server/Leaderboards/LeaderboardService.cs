@@ -88,8 +88,7 @@ public class LeaderboardService
             )
             .SingleAsync();
 
-        var entries = rows
-            .Select(
+        var entries = rows.Select(
                 (r, i) =>
                     new LeaderboardEntryDto
                     {
