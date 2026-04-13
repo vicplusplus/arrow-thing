@@ -25,7 +25,7 @@ public sealed class VictoryController : MonoBehaviour
         "Victory Message.",
         "woa",
         "Where did my arrows go????? :(",
-        "mmm im hungy. macdonel..",
+        "yippe",
         "WHAT???",
         "Congrat.",
         "[object Object]",
