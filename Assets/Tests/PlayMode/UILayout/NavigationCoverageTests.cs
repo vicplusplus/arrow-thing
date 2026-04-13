@@ -167,26 +167,82 @@ public class NavigationCoverageTests : UILayoutTestBase
 
     // ── MainMenu ────────────────────────────────────────────────────
 
-    private static readonly string[] MainMenuButtons =
+    // Root-level buttons (Play, Settings, Quit, links)
+    private static readonly string[] MainMenuRootButtons =
     {
         "quit-btn",
-        "leaderboard-btn",
         "play-btn",
         "settings-btn",
         "link-github-btn",
         "link-discord-btn",
     };
 
-    private static readonly UIState MainMenu_Default = new UIState(
-        "MainMenu/Default",
+    private static readonly UIState MainMenu_Root = new UIState(
+        "MainMenu/Root",
         setup: root => { },
-        navigable: MainMenuButtons
+        navigable: MainMenuRootButtons
     );
 
-    private static readonly UIState MainMenu_WithContinue = new UIState(
-        "MainMenu/WithContinue",
-        setup: root => root.Q<Button>("continue-btn").RemoveFromClassList("screen--hidden"),
-        navigable: MainMenuButtons.Concat(new[] { "continue-btn" }).ToArray()
+    private static readonly UIState MainMenu_Play = new UIState(
+        "MainMenu/Play",
+        setup: root =>
+        {
+            root.Q("menu-root").AddToClassList("screen--hidden");
+            root.Q("menu-play").RemoveFromClassList("screen--hidden");
+        },
+        navigable: new[] { "back-play-btn", "singleplayer-btn", "multiplayer-btn" }
+    );
+
+    private static readonly UIState MainMenu_Singleplayer = new UIState(
+        "MainMenu/Singleplayer",
+        setup: root =>
+        {
+            root.Q("menu-root").AddToClassList("screen--hidden");
+            root.Q("menu-singleplayer").RemoveFromClassList("screen--hidden");
+        },
+        navigable: new[]
+        {
+            "back-sp-btn",
+            "leaderboard-btn",
+            "preset-small",
+            "preset-medium",
+            "preset-large",
+            "preset-xlarge",
+            "preset-custom",
+            "start-btn",
+        }
+    );
+
+    private static readonly UIState MainMenu_Singleplayer_WithContinue = new UIState(
+        "MainMenu/Singleplayer+Continue",
+        setup: root =>
+        {
+            root.Q("menu-root").AddToClassList("screen--hidden");
+            root.Q("menu-singleplayer").RemoveFromClassList("screen--hidden");
+            root.Q<Button>("continue-btn").RemoveFromClassList("screen--hidden");
+        },
+        navigable: new[]
+        {
+            "back-sp-btn",
+            "leaderboard-btn",
+            "preset-small",
+            "preset-medium",
+            "preset-large",
+            "preset-xlarge",
+            "preset-custom",
+            "start-btn",
+            "continue-btn",
+        }
+    );
+
+    private static readonly UIState MainMenu_Multiplayer = new UIState(
+        "MainMenu/Multiplayer",
+        setup: root =>
+        {
+            root.Q("menu-root").AddToClassList("screen--hidden");
+            root.Q("menu-multiplayer").RemoveFromClassList("screen--hidden");
+        },
+        navigable: new[] { "back-mp-btn", "coop-btn" }
     );
 
     private static readonly UIState MainMenu_QuitModal = new UIState(
@@ -198,13 +254,16 @@ public class NavigationCoverageTests : UILayoutTestBase
             modal.Q(className: "modal-overlay").RemoveFromClassList("screen--hidden");
         },
         navigable: new[] { "modal-confirm-btn", "modal-cancel-btn" },
-        background: MainMenuButtons
+        background: MainMenuRootButtons
     );
 
     private static IEnumerable<UIState> MainMenuStates()
     {
-        yield return MainMenu_Default;
-        yield return MainMenu_WithContinue;
+        yield return MainMenu_Root;
+        yield return MainMenu_Play;
+        yield return MainMenu_Singleplayer;
+        yield return MainMenu_Singleplayer_WithContinue;
+        yield return MainMenu_Multiplayer;
         yield return MainMenu_QuitModal;
     }
 
@@ -224,49 +283,6 @@ public class NavigationCoverageTests : UILayoutTestBase
         var root = SetUpDocument(MainMenuUxmlPath, StandardRatio);
         yield return UILayoutTestHelper.WaitForLayoutResolve();
         AssertAllButtonsCovered(root, "MainMenu", MainMenuStates().ToArray());
-    }
-
-    // ── SoloSizeSelect ──────────────────────────────────────────────
-
-    private static readonly UIState SoloSizeSelect_Default = new UIState(
-        "SoloSizeSelect/Default",
-        setup: root => { },
-        navigable: new[]
-        {
-            "back-btn",
-            "trophy-btn",
-            "preset-small",
-            "preset-medium",
-            "preset-large",
-            "preset-xlarge",
-            "preset-custom",
-            "start-btn",
-        }
-    );
-
-    private static IEnumerable<UIState> SoloSizeSelectStates()
-    {
-        yield return SoloSizeSelect_Default;
-    }
-
-    [UnityTest]
-    public IEnumerator SoloSizeSelect_StateNavigation(
-        [ValueSource(nameof(SoloSizeSelectStates))] UIState state
-    )
-    {
-        var root = SetUpDocument(SoloSizeSelectUxmlPath, StandardRatio);
-        yield return UILayoutTestHelper.WaitForLayoutResolve();
-        state.Setup(root);
-        yield return UILayoutTestHelper.WaitForLayoutResolve();
-        AssertStateNavigation(root, state);
-    }
-
-    [UnityTest]
-    public IEnumerator SoloSizeSelect_AllButtonsCovered()
-    {
-        var root = SetUpDocument(SoloSizeSelectUxmlPath, StandardRatio);
-        yield return UILayoutTestHelper.WaitForLayoutResolve();
-        AssertAllButtonsCovered(root, "SoloSizeSelect", SoloSizeSelectStates().ToArray());
     }
 
     // ── GameHud ──────────────────────────────────────────────────────

@@ -16,97 +16,148 @@ public class MainMenuLayoutTests : UILayoutTestBase
         yield return UILayoutTestHelper.WaitForLayoutResolve();
 
         var mainMenu = root.Q("main-menu");
+        var menuRoot = mainMenu.Q("menu-root");
         var panelBounds = root.worldBound;
         string ctx = $"MainMenu @ {ratio.Name}";
         bool warn = IsKnownIssueRatio(ratio);
 
         AssertElements(
-            mainMenu,
+            menuRoot,
             panelBounds,
             ctx,
             warn,
-            mainMenu.Q(className: "title"),
-            mainMenu.Q<Button>("play-btn"),
-            mainMenu.Q<Button>("settings-btn"),
-            mainMenu.Q<Button>("quit-btn"),
-            mainMenu.Q<Button>("link-github-btn"),
-            mainMenu.Q<Button>("link-discord-btn")
+            menuRoot.Q(className: "title"),
+            menuRoot.Q<Button>("play-btn"),
+            menuRoot.Q<Button>("settings-btn"),
+            menuRoot.Q<Button>("quit-btn"),
+            menuRoot.Q<Button>("link-github-btn"),
+            menuRoot.Q<Button>("link-discord-btn")
         );
     }
 
     [UnityTest]
-    public IEnumerator MainMenu_WithSave_AllElementsVisible(
+    public IEnumerator MainMenu_Play_AllElementsVisible(
         [ValueSource(typeof(UILayoutTestHelper), nameof(UILayoutTestHelper.StandardAspectRatios))]
             UILayoutTestHelper.AspectRatio ratio
     )
     {
         var root = SetUpDocument(MainMenuUxmlPath, ratio);
 
+        // Switch to play sub-menu
+        root.Q("menu-root").AddToClassList("screen--hidden");
+        root.Q("menu-play").RemoveFromClassList("screen--hidden");
+
+        yield return UILayoutTestHelper.WaitForLayoutResolve();
+
+        var play = root.Q("menu-play");
+        var panelBounds = root.worldBound;
+        string ctx = $"MainMenu_Play @ {ratio.Name}";
+        bool warn = IsKnownIssueRatio(ratio);
+
+        AssertElements(
+            play,
+            panelBounds,
+            ctx,
+            warn,
+            play.Q(className: "title"),
+            play.Q<Button>("back-play-btn"),
+            play.Q<Button>("singleplayer-btn"),
+            play.Q<Button>("multiplayer-btn")
+        );
+    }
+
+    [UnityTest]
+    public IEnumerator MainMenu_Singleplayer_AllElementsVisible(
+        [ValueSource(typeof(UILayoutTestHelper), nameof(UILayoutTestHelper.StandardAspectRatios))]
+            UILayoutTestHelper.AspectRatio ratio
+    )
+    {
+        var root = SetUpDocument(MainMenuUxmlPath, ratio);
+
+        root.Q("menu-root").AddToClassList("screen--hidden");
+        root.Q("menu-singleplayer").RemoveFromClassList("screen--hidden");
+
+        yield return UILayoutTestHelper.WaitForLayoutResolve();
+
+        var sp = root.Q("menu-singleplayer");
+        var panelBounds = root.worldBound;
+        string ctx = $"MainMenu_Singleplayer @ {ratio.Name}";
+        bool warn = IsKnownIssueRatio(ratio);
+
+        AssertElements(
+            sp,
+            panelBounds,
+            ctx,
+            warn,
+            sp.Q<Label>(className: "section-label"),
+            sp.Q<Button>("back-sp-btn"),
+            sp.Q<Button>("leaderboard-btn"),
+            sp.Q<Button>("preset-small"),
+            sp.Q<Button>("preset-medium"),
+            sp.Q<Button>("preset-large"),
+            sp.Q<Button>("preset-xlarge"),
+            sp.Q<Button>("preset-custom"),
+            sp.Q<Button>("start-btn")
+        );
+    }
+
+    [UnityTest]
+    public IEnumerator MainMenu_Singleplayer_WithSave_AllElementsVisible(
+        [ValueSource(typeof(UILayoutTestHelper), nameof(UILayoutTestHelper.StandardAspectRatios))]
+            UILayoutTestHelper.AspectRatio ratio
+    )
+    {
+        var root = SetUpDocument(MainMenuUxmlPath, ratio);
+
+        root.Q("menu-root").AddToClassList("screen--hidden");
+        root.Q("menu-singleplayer").RemoveFromClassList("screen--hidden");
         root.Q<Button>("continue-btn").RemoveFromClassList("screen--hidden");
 
         yield return UILayoutTestHelper.WaitForLayoutResolve();
 
-        var mainMenu = root.Q("main-menu");
+        var sp = root.Q("menu-singleplayer");
         var panelBounds = root.worldBound;
-        string ctx = $"MainMenu_WithSave @ {ratio.Name}";
+        string ctx = $"MainMenu_Singleplayer_WithSave @ {ratio.Name}";
         bool warn = IsKnownIssueRatio(ratio);
 
         AssertElements(
-            mainMenu,
+            sp,
             panelBounds,
             ctx,
             warn,
-            mainMenu.Q<Button>("play-btn"),
-            mainMenu.Q<Button>("continue-btn"),
-            mainMenu.Q<Button>("settings-btn")
+            sp.Q<Button>("start-btn"),
+            sp.Q<Button>("continue-btn")
         );
     }
 
     [UnityTest]
-    public IEnumerator ModeSelect_AllElementsVisible(
+    public IEnumerator MainMenu_Multiplayer_AllElementsVisible(
         [ValueSource(typeof(UILayoutTestHelper), nameof(UILayoutTestHelper.StandardAspectRatios))]
             UILayoutTestHelper.AspectRatio ratio
     )
     {
-        var root = SetUpDocument(SoloSizeSelectUxmlPath, ratio);
+        var root = SetUpDocument(MainMenuUxmlPath, ratio);
+
+        root.Q("menu-root").AddToClassList("screen--hidden");
+        root.Q("menu-multiplayer").RemoveFromClassList("screen--hidden");
 
         yield return UILayoutTestHelper.WaitForLayoutResolve();
 
+        var mp = root.Q("menu-multiplayer");
         var panelBounds = root.worldBound;
-        string ctx = $"ModeSelect @ {ratio.Name}";
+        string ctx = $"MainMenu_Multiplayer @ {ratio.Name}";
         bool warn = IsKnownIssueRatio(ratio);
 
         AssertElements(
-            root,
+            mp,
             panelBounds,
             ctx,
             warn,
-            root.Q<Label>(className: "section-label"),
-            root.Q<Button>("preset-small"),
-            root.Q<Button>("preset-medium"),
-            root.Q<Button>("preset-large"),
-            root.Q<Button>("preset-xlarge"),
-            root.Q<Button>("preset-custom"),
-            root.Q<Button>("start-btn"),
-            root.Q<Button>("back-btn")
+            mp.Q(className: "title"),
+            mp.Q<Button>("back-mp-btn"),
+            mp.Q<Button>("coop-btn"),
+            mp.Q<Label>(className: "coming-soon-text")
         );
-    }
-
-    [UnityTest]
-    public IEnumerator ModeSelect_TrophyButtonVisible(
-        [ValueSource(typeof(UILayoutTestHelper), nameof(UILayoutTestHelper.StandardAspectRatios))]
-            UILayoutTestHelper.AspectRatio ratio
-    )
-    {
-        var root = SetUpDocument(SoloSizeSelectUxmlPath, ratio);
-
-        yield return UILayoutTestHelper.WaitForLayoutResolve();
-
-        var panelBounds = root.worldBound;
-        string ctx = $"ModeSelect_Trophy @ {ratio.Name}";
-        bool warn = IsKnownIssueRatio(ratio);
-
-        AssertElements(root, panelBounds, ctx, warn, root.Q<Button>("trophy-btn"));
     }
 
     [UnityTest]

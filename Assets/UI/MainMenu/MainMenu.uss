@@ -17,10 +17,15 @@
 /* Root containers */
 .screen {
     flex-grow: 1;
+    background-color: var(--bg-screen);
+}
+
+/* Menu panel — one per menu state, toggleable via screen--hidden */
+.menu-panel {
+    flex-grow: 1;
     align-items: center;
     justify-content: center;
     padding: 24px 0;
-    background-color: var(--bg-screen);
 }
 
 /* Title */
@@ -154,6 +159,25 @@
     background-color: var(--accent-confirm-active);
 }
 
+/* Play choice row — side-by-side Singleplayer / Multiplayer */
+.play-choice-row {
+    flex-direction: row;
+    justify-content: center;
+    margin-bottom: 6px;
+}
+
+.play-choice-btn {
+    width: 180px;
+    margin: 0 6px;
+}
+
+/* Coming soon stub label (multiplayer sub-menu) */
+.coming-soon-text {
+    margin-top: 8px;
+    font-size: 18px;
+    color: var(--text-secondary);
+    -unity-text-align: middle-center;
+}
 
 /* Info panel (anchored above the info button) */
 .info-panel {

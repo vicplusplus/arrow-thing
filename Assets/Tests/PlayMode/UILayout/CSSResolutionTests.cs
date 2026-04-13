@@ -63,14 +63,6 @@ public class CSSResolutionTests : UILayoutTestBase
     }
 
     [UnityTest]
-    public IEnumerator SoloSizeSelect_ScreenHidden_Resolves()
-    {
-        var root = SetUpDocument(SoloSizeSelectUxmlPath, StandardRatio);
-        yield return UILayoutTestHelper.WaitForLayoutResolve();
-        AssertHiddenClassResolves(root, "screen--hidden", "SoloSizeSelect");
-    }
-
-    [UnityTest]
     public IEnumerator GameHud_ScreenHidden_Resolves()
     {
         var root = SetUpDocument(GameHudUxmlPath, StandardRatio);
