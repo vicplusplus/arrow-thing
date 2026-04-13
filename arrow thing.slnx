@@ -1,6 +1,6 @@
 ﻿<Solution>
   <Project Path="ArrowThing.csproj" />
-  <Project Path="ArrowThing.Tests.PlayMode.csproj" />
   <Project Path="ArrowThing.Tests.EditMode.csproj" />
+  <Project Path="ArrowThing.Tests.PlayMode.csproj" />
   <Project Path="Assembly-CSharp-Editor.csproj" />
 </Solution>
