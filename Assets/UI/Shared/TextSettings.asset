@@ -13,14 +13,21 @@ MonoBehaviour:
   m_Name: TextSettings
   m_EditorClassIdentifier: UnityEngine.dll::UnityEngine.UIElements.PanelTextSettings
   m_Version: 
-  m_DefaultFontAsset: {fileID: 0}
+  m_DefaultFontAsset: {fileID: 11400000, guid: 2595c00362b9d8749bbdc376e144bc51, type: 2}
   m_DefaultFontAssetPath: Fonts & Materials/
-  m_FallbackFontAssets: []
+  m_FallbackFontAssets:
+  - {fileID: 11400000, guid: 13c6cacaa3ac1bd488163c4328219d93, type: 2}
+  - {fileID: 11400000, guid: 13c6cacaa3ac1bd488163c4328219d93, type: 2}
+  - {fileID: 11400000, guid: 65e59eb71a4f0c644b41306f9f852d32, type: 2}
+  - {fileID: 11400000, guid: ef58d255609170548b26d487be4b2a64, type: 2}
+  - {fileID: 11400000, guid: 35b2f3d43b6937e4b962aae25b894f00, type: 2}
+  - {fileID: 11400000, guid: 42f0c9aecb537784c87e506084195582, type: 2}
   m_MatchMaterialPreset: 0
   m_MissingCharacterUnicode: 0
   m_ClearDynamicDataOnBuild: 1
   m_EnableEmojiSupport: 0
-  m_EmojiFallbackTextAssets: []
+  m_EmojiFallbackTextAssets:
+  - {fileID: 11400000, guid: eb092b0afb8448040818079cb8907bd6, type: 2}
   m_DefaultSpriteAsset: {fileID: 0}
   m_DefaultSpriteAssetPath: Sprite Assets/
   m_FallbackSpriteAssets: []
