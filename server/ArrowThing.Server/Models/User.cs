@@ -41,6 +41,9 @@ public class User
     public int? FlagTriggerBoardHeight { get; set; }
     public string? FlagTriggerGameId { get; set; }
 
+    // Co-op preferences
+    public string? CoopColor { get; set; }
+
     public bool IsLocked => LockedAt.HasValue;
     public bool IsEmailVerified => EmailVerifiedAt.HasValue;
 }

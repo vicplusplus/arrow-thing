@@ -640,6 +640,139 @@ public class ApiClient
         }
     }
 
+    // -- Co-op lobbies (Phase 3) ---------------------------------------------
+
+    public async Task<ApiResult<LobbyResponse>> CreateLobbyAsync(string name)
+    {
+        var body = JsonUtility.ToJson(new CreateLobbyRequestDto { name = name });
+        try
+        {
+            using var request = new UnityWebRequest($"{_baseUrl}/api/lobbies", "POST");
+            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+            request.SetRequestHeader("Authorization", $"Bearer {Token}");
+            request.timeout = 10;
+
+            var op = request.SendWebRequest();
+            while (!op.isDone)
+                await Task.Yield();
+
+            if (request.result == UnityWebRequest.Result.Success || request.responseCode == 201)
+            {
+                var response = JsonUtility.FromJson<LobbyResponse>(request.downloadHandler.text);
+                return ApiResult<LobbyResponse>.Ok(response);
+            }
+
+            var error = TryParseError(request.downloadHandler.text);
+            return ApiResult<LobbyResponse>.Fail(request.responseCode, error);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] CreateLobby failed: {e.Message}");
+            return ApiResult<LobbyResponse>.Fail(0, "Network error");
+        }
+    }
+
+    public async Task<ApiResult<LobbyListResponse>> ListMyLobbiesAsync(
+        string filter = null,
+        string sort = null,
+        int page = 0
+    )
+    {
+        var query = $"?page={page}";
+        if (!string.IsNullOrEmpty(filter))
+            query += $"&filter={UnityWebRequest.EscapeURL(filter)}";
+        if (!string.IsNullOrEmpty(sort))
+            query += $"&sort={UnityWebRequest.EscapeURL(sort)}";
+
+        try
+        {
+            using var request = UnityWebRequest.Get($"{_baseUrl}/api/lobbies/me{query}");
+            request.SetRequestHeader("Authorization", $"Bearer {Token}");
+            request.timeout = 10;
+
+            var op = request.SendWebRequest();
+            while (!op.isDone)
+                await Task.Yield();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var response = JsonUtility.FromJson<LobbyListResponse>(
+                    request.downloadHandler.text
+                );
+                return ApiResult<LobbyListResponse>.Ok(response);
+            }
+
+            var error = TryParseError(request.downloadHandler.text);
+            return ApiResult<LobbyListResponse>.Fail(request.responseCode, error);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] ListMyLobbies failed: {e.Message}");
+            return ApiResult<LobbyListResponse>.Fail(0, "Network error");
+        }
+    }
+
+    public async Task<ApiResult<LobbyResponse>> GetLobbyAsync(string code)
+    {
+        try
+        {
+            using var request = UnityWebRequest.Get(
+                $"{_baseUrl}/api/lobbies/{UnityWebRequest.EscapeURL(code)}"
+            );
+            request.SetRequestHeader("Authorization", $"Bearer {Token}");
+            request.timeout = 10;
+
+            var op = request.SendWebRequest();
+            while (!op.isDone)
+                await Task.Yield();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var response = JsonUtility.FromJson<LobbyResponse>(request.downloadHandler.text);
+                return ApiResult<LobbyResponse>.Ok(response);
+            }
+
+            var error = TryParseError(request.downloadHandler.text);
+            return ApiResult<LobbyResponse>.Fail(request.responseCode, error);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] GetLobby failed: {e.Message}");
+            return ApiResult<LobbyResponse>.Fail(0, "Network error");
+        }
+    }
+
+    public async Task<ApiResult<MessageResponse>> DeleteLobbyAsync(string lobbyId)
+    {
+        try
+        {
+            using var request = UnityWebRequest.Delete($"{_baseUrl}/api/lobbies/{lobbyId}");
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Authorization", $"Bearer {Token}");
+            request.timeout = 10;
+
+            var op = request.SendWebRequest();
+            while (!op.isDone)
+                await Task.Yield();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var response = JsonUtility.FromJson<MessageResponse>(request.downloadHandler.text);
+                return ApiResult<MessageResponse>.Ok(response);
+            }
+
+            var error = TryParseError(request.downloadHandler.text);
+            return ApiResult<MessageResponse>.Fail(request.responseCode, error);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] DeleteLobby failed: {e.Message}");
+            return ApiResult<MessageResponse>.Fail(0, "Network error");
+        }
+    }
+
     // DTOs (JsonUtility requires serializable classes with public fields)
 
     [Serializable]
@@ -715,6 +848,12 @@ public class ApiClient
     private class SubmitScoreRequestDto
     {
         public string replayJson;
+    }
+
+    [Serializable]
+    private class CreateLobbyRequestDto
+    {
+        public string name;
     }
 
     [Serializable]
@@ -809,6 +948,44 @@ public class PlayerEntryResponse
 public class ReplayFetchResponse
 {
     public string replayJson;
+}
+
+[Serializable]
+public class LobbyResponse
+{
+    public string id;
+    public string code;
+    public string name;
+    public string ownerUserId;
+    public string ownerDisplayName;
+    public int width;
+    public int height;
+    public short status;
+    public string createdAt;
+    public string lastActivityAt;
+    public string shareUrl;
+}
+
+[Serializable]
+public class LobbyListEntryDto
+{
+    public string id;
+    public string code;
+    public string name;
+    public string ownerDisplayName;
+    public int width;
+    public int height;
+    public short status;
+    public string createdAt;
+    public string lastActivityAt;
+}
+
+[Serializable]
+public class LobbyListResponse
+{
+    public LobbyListEntryDto[] entries;
+    public int page;
+    public bool hasMore;
 }
 
 public class ApiResult<T>
