@@ -11,6 +11,10 @@ public class AppDbContext : DbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Score> Scores => Set<Score>();
+    public DbSet<Lobby> Lobbies => Set<Lobby>();
+    public DbSet<LobbyRegistration> LobbyRegistrations => Set<LobbyRegistration>();
+    public DbSet<LobbyEvent> LobbyEvents => Set<LobbyEvent>();
+    public DbSet<LobbySnapshot> LobbySnapshots => Set<LobbySnapshot>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -71,6 +75,46 @@ public class AppDbContext : DbContext
             entity.HasIndex(e => e.Timestamp);
             entity.HasIndex(e => e.Event);
             entity.HasIndex(e => e.UserId);
+        });
+
+        modelBuilder.Entity<Lobby>(entity =>
+        {
+            entity.HasKey(l => l.Id);
+            entity.Property(l => l.Code).HasMaxLength(6).IsRequired();
+            entity.Property(l => l.Name).HasMaxLength(40).IsRequired();
+            entity.Property(l => l.OwnerUserId).IsRequired();
+            entity.Property(l => l.CreatedAt).IsRequired();
+            entity.Property(l => l.LastActivityAt).IsRequired();
+
+            entity.HasIndex(l => l.Code).IsUnique();
+            entity.HasIndex(l => new { l.OwnerUserId, l.Status });
+            entity.HasIndex(l => l.LastActivityAt);
+        });
+
+        modelBuilder.Entity<LobbyRegistration>(entity =>
+        {
+            entity.HasKey(r => new { r.LobbyId, r.UserId });
+            entity.Property(r => r.DisplayNameAtJoin).HasMaxLength(24).IsRequired();
+            entity.Property(r => r.ColorAtJoin).HasMaxLength(7).IsRequired();
+            entity.Property(r => r.JoinedAt).IsRequired();
+            entity.Property(r => r.LastActivityAt).IsRequired();
+
+            entity.HasIndex(r => r.UserId);
+        });
+
+        modelBuilder.Entity<LobbyEvent>(entity =>
+        {
+            entity.HasKey(e => new { e.LobbyId, e.Seq });
+            entity.Property(e => e.Type).IsRequired();
+            entity.Property(e => e.CreatedAt).IsRequired();
+        });
+
+        modelBuilder.Entity<LobbySnapshot>(entity =>
+        {
+            entity.HasKey(s => s.LobbyId);
+            entity.Property(s => s.Format).IsRequired();
+            entity.Property(s => s.Data).IsRequired();
+            entity.Property(s => s.UpdatedAt).IsRequired();
         });
     }
 }

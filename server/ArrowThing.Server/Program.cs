@@ -1,5 +1,7 @@
+using System.Net.WebSockets;
 using System.Security.Claims;
 using ArrowThing.Server.Auth;
+using ArrowThing.Server.Coop;
 using ArrowThing.Server.Data;
 using ArrowThing.Server.Games;
 using ArrowThing.Server.Leaderboards;
@@ -128,6 +130,8 @@ builder.Services.AddScoped<AuditLogService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<GameService>();
 builder.Services.AddScoped<LeaderboardService>();
+builder.Services.AddScoped<LobbyService>();
+builder.Services.AddSingleton<CoopHub>();
 builder.Services.AddSingleton<LeaderboardCache>(sp => new LeaderboardCache(
     sp.GetService<IConnectionMultiplexer>()
 ));
@@ -154,7 +158,15 @@ using (var scope = app.Services.CreateScope())
     db.Database.Migrate();
 }
 
-app.UseSerilogRequestLogging();
+app.UseSerilogRequestLogging(opts =>
+{
+    // Don't log full URLs for /ws/coop/ — they contain JWTs in the query string.
+    opts.GetLevel = (httpCtx, _, _) =>
+        httpCtx.Request.Path.StartsWithSegments("/ws/coop")
+            ? Serilog.Events.LogEventLevel.Verbose
+            : Serilog.Events.LogEventLevel.Information;
+});
+app.UseWebSockets();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -564,6 +576,108 @@ app.MapGet(
     {
         var replayJson = await leaderboards.GetReplayAsync(gameId);
         return replayJson != null ? Results.Ok(new { replayJson }) : Results.NotFound();
+    }
+);
+
+// -- Co-op lobbies (Phase 3) -------------------------------------------------
+
+app.MapPost(
+        "/api/lobbies",
+        async (CreateLobbyRequest request, LobbyService lobbies, ClaimsPrincipal user) =>
+        {
+            var userId = Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var (response, status, error) = await lobbies.CreateAsync(userId, request);
+            return response != null
+                ? Results.Json(response, statusCode: status)
+                : Results.Json(new { error }, statusCode: status);
+        }
+    )
+    .RequireAuthorization();
+
+app.MapGet(
+        "/api/lobbies/me",
+        async (
+            LobbyService lobbies,
+            ClaimsPrincipal user,
+            string? filter,
+            string? sort,
+            int? page
+        ) =>
+        {
+            var userId = Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var (response, status, error) = await lobbies.ListMineAsync(
+                userId,
+                filter,
+                sort,
+                page ?? 0
+            );
+            return response != null
+                ? Results.Ok(response)
+                : Results.Json(new { error }, statusCode: status);
+        }
+    )
+    .RequireAuthorization();
+
+app.MapGet(
+        "/api/lobbies/{code}",
+        async (string code, LobbyService lobbies) =>
+        {
+            var (response, status, error) = await lobbies.GetByCodeAsync(code);
+            return response != null
+                ? Results.Ok(response)
+                : Results.Json(new { error }, statusCode: status);
+        }
+    )
+    .RequireAuthorization();
+
+app.MapDelete(
+        "/api/lobbies/{id:guid}",
+        async (Guid id, LobbyService lobbies, ClaimsPrincipal user) =>
+        {
+            var userId = Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var (response, status, error) = await lobbies.SoftDeleteAsync(id, userId);
+            return response != null
+                ? Results.Ok(response)
+                : Results.Json(new { error }, statusCode: status);
+        }
+    )
+    .RequireAuthorization();
+
+// WebSocket: /ws/coop/{code}?token={jwt}
+app.MapGet(
+    "/ws/coop/{code}",
+    async (
+        HttpContext ctx,
+        string code,
+        CoopHub hub,
+        LobbyService lobbies,
+        JwtHelper jwtHelper,
+        AppDbContext db,
+        ILoggerFactory loggerFactory
+    ) =>
+    {
+        if (!ctx.WebSockets.IsWebSocketRequest)
+            return Results.BadRequest(new { error = "WebSocket request expected." });
+
+        var token = ctx.Request.Query["token"].FirstOrDefault();
+        var hubLogger = loggerFactory.CreateLogger("CoopHub");
+        var userId = await CoopHub.ValidateTokenAsync(token, jwtHelper, db, hubLogger);
+        if (userId == null)
+        {
+            ctx.Response.StatusCode = 401;
+            return Results.Empty;
+        }
+
+        var lobby = await lobbies.FindActiveByCodeAsync(code);
+        if (lobby == null)
+        {
+            ctx.Response.StatusCode = 404;
+            return Results.Empty;
+        }
+
+        using var socket = await ctx.WebSockets.AcceptWebSocketAsync();
+        await hub.HandleConnectionAsync(socket, lobby, userId.Value, ctx.RequestAborted);
+        return Results.Empty;
     }
 );
 
