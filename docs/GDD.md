@@ -3,11 +3,11 @@
 ## Metadata
 - Working Title: Arrow Thing
 - Genre: Minimalist puzzle, speed-clearing, competitive PvP (planned)
-- Platform(s): WebGL (primary, deployed via Cloudflare Pages); mobile gameplay works (touch/pinch) but UI needs a responsive scaling pass before shipping
+- Platform(s): WebGL (primary, deployed via Cloudflare Pages); mobile gameplay works (touch/pinch) but menu UI needs a responsive scaling pass before shipping
 - Target Audience: Puzzle players who enjoy speed, pattern recognition, and competitive pressure
-- Current Version: v0.5
+- Current Version: v0.7.4
 - Status: Active development. Playable at https://arrow-thing.com/
-- Last Updated: 2026-04-01
+- Last Updated: 2026-04-12
 
 ## High Concept
 - One-sentence pitch: Clear winding grid-based arrows as fast as possible, then weaponize your speed against opponents by sending garbage.
@@ -80,13 +80,16 @@
   - Static framing is avoided for larger boards to reduce visual overload.
 
 ## Game States
-- Main menu (mode select, settings, account panel)
-- In-game (with loading overlay, HUD, leave/save modals)
-- Clear/victory screen (personal best detection, leaderboard link)
-- Leaderboard (local/global, size tabs, sort modes, replay launch)
-- Replay viewer (seek, speed control, clearable highlighting)
+- Main menu (Play, Continue when save exists, Settings, Leaderboard, Quit on desktop)
+- Solo size select (preset grid Small/Medium/Large/XLarge/Custom)
+- In-game (loading overlay with progress bar during generation/restore, HUD with timer + trail toggle + quick reset, leave/save modals)
+- Clear/victory screen (personal best detection, randomized message, Play Again / Menu / View Leaderboard, background score submission)
+- Leaderboard (local/global toggle, 5 size tabs + All, sort modes, scrollable list with context menu, replay launch)
+- Replay viewer (seek, speed control 0.5×–10×, play/pause, clearable highlighting with trail lanes)
+- Settings (cross-scene singleton overlay; Account, Gameplay, Keybinds, Data, About sections)
 - Planned later:
-  - PvP match countdown/start
+  - Co-op lobbies (see [`docs/CoopRoadmap.md`](CoopRoadmap.md))
+  - PvP match countdown / start
   - Match result screen
   - Optional pause
 
@@ -198,35 +201,39 @@
 ## Production Scope
 
 ### Implemented
-  - Main menu (UI Toolkit: Play/Mode Select/Settings, board-size presets).
-  - Procedural arrow generation with solvability guarantee.
+  - Main menu (UI Toolkit: Play, Continue, Settings, Leaderboard, Quit on desktop). Solo size select in its own scene.
+  - Procedural arrow generation with solvability guarantee. Post-process compaction merges trivial collinear chains for cleaner boards.
+  - Cross-platform deterministic generation via `PortableRandom` (xorshift32) — same seed produces identical boards on Unity client and .NET server.
   - Core click/tap clear loop with success/fail animations.
   - Timer UI (inspection countdown + solve timer with input-precision final time).
-  - Victory screen (grid fade + victory popup with randomized messages, personal best detection, Play Again / Menu / View Leaderboard).
-  - WebGL deployment via Cloudflare Pages with CD pipeline.
-  - Server deployment via Docker to VPS with CD pipeline.
-  - Discord release announcements via CD pipeline.
+  - Victory screen (grid fade + victory popup with randomized messages, personal best detection, Play Again / Menu / View Leaderboard, keyboard shortcuts R/L/Escape).
   - Map-coloring arrow tinting (graph coloring for adjacent arrow readability).
-  - XLarge preset (100×100) and custom board sizes (2–400).
-  - Loading progress bar with percentage for large board generation.
-  - Preset grid layout (replacing column layout).
-  - Save/resume with initial board snapshot (no re-generation on resume).
-  - Autosave every 10 clears. Leave-game modal with save/discard options.
-  - Cancel generation confirmation modal.
-  - Trajectory highlight toggle for large boards.
+  - Board size presets Small (10×10), Medium (20×20), Large (40×40), XLarge (100×100), and custom 2–400.
+  - Loading progress bar with three-phase model (generation → compaction → finalization).
+  - Save/resume with initial board snapshot (no re-generation on resume). Autosave every 10 clears. Leave-game modal with save/discard options. Cancel-generation confirmation modal.
+  - Trajectory highlight toggle for large boards (with optional "keep trail after clear" setting).
   - Incremental board display during generation and restore.
-  - Local leaderboards and personal best tracking with replay storage.
-  - Replay viewer with seek, speed control, and clearable highlighting.
-  - CSS variable theming with runtime theme switching (4 themes).
-  - Shared UI component library (ConfirmModal, EditableLabel, LabeledField, SnapSlider, CustomDropdown, ExternalLinks).
-  - Settings panel as standalone component (reusable across scenes).
-  - Account system: email-based auth (register, login, verify, forgot/reset password, change email/password).
-  - ASP.NET Core server with shared domain code, JWT auth, PostgreSQL.
+  - Local leaderboards and personal best tracking with GZip-compressed replay storage.
+  - Global leaderboards backed by server (per-size and cross-size "All" tab, top-50 + player rank context, refresh button).
+  - Replay viewer with seek, speed control (0.5×–10×), clearable highlighting with trail lanes, tap indicators.
+  - Full keyboard navigation across every UI screen (arrow keys, Enter, Escape, Tab) with rebindable keybinds and conflict detection.
+  - Gameplay shortcuts (R reset, T trail, Space click hovered, S save) and leaderboard shortcuts (1–5 size tabs, F favorites, L global toggle, R refresh).
+  - Quick retry button on the in-game HUD (mobile-friendly).
+  - CSS variable theming with runtime theme switching (4 themes: Dark, Light, Dark Monochrome, Light Monochrome).
+  - Shared UI component library (ConfirmModal, EditableLabel, LabeledField, SnapSlider, CustomDropdown, ExternalLinks, GlobalToast).
+  - Settings panel as a cross-scene singleton (Account, Gameplay, Keybinds, Data, About).
+  - Account system: email-based auth (register, login, verify, forgot/reset password, change email, change password, display name editing). 6-digit codes entered in-app.
+  - ASP.NET Core server (.NET 10 Minimal API) with shared domain code, JWT auth + SecurityStamp, PostgreSQL, Resend email.
+  - Server-side replay verification with score integrity safeguards (pre-verification gate, async Redis-queued worker, account flagging for casual cheaters).
+  - WebGL deployment via Cloudflare Pages with CD pipeline. Server deployment via Docker to VPS with CD pipeline. Discord release announcements.
+  - Observability stack: Serilog → Loki, OpenTelemetry → Prometheus, Grafana dashboards (logs, metrics, audit SQL).
+  - Global toast singleton (`DontDestroyOnLoad`) for cross-scene error/info notifications with retry buttons.
 
 ### Planned
-  - Audio feedback for success/fail/clear.
-  - Online features (see [`docs/OnlineRoadmap.md`](OnlineRoadmap.md)): global leaderboards, server-side replay verification.
+  - Audio feedback for success / fail / clear / board complete.
+  - Co-op boards: persistent shared puzzles with WebSocket sessions, per-player attribution, results screen. See [`docs/CoopRoadmap.md`](CoopRoadmap.md) (designed; phased implementation not started).
   - PvP: real-time garbage mechanics, matchmaking.
+  - Mobile menu UI responsive scaling pass.
 
 ### Non-goals (current)
   - Controller support.
@@ -253,3 +260,4 @@
 - 2026-03-16: MVP declared complete. Online roadmap documented in `OnlineRoadmap.md`.
 - 2026-03-19: Replaced version-based production scope with implemented/planned lists. Added save/resume, autosave, cancel generation modal, trajectory highlights, incremental board display to implemented list.
 - 2026-04-01: Updated implemented list with account system, server deployment, theme system, shared UI components, settings panel extraction, Discord announcements. Updated game states and scene structure to reflect current 4-scene layout. Updated planned list (accounts moved to implemented).
+- 2026-04-12: Synced GDD to v0.7.4. Added global leaderboards (server-side replay verification), full keyboard navigation with rebindable keybinds, post-generation compaction, cross-platform deterministic generation (`PortableRandom`), score integrity (pre-verification + async worker + account flagging), observability stack, global toast singleton, quick retry button, and replay viewer enhancements (10× speed, trail lanes) to the implemented list. Promoted co-op (designed only) to the planned list and refreshed game states to reflect the current 6-scene layout (Main Menu, Solo Size Select, Game, Leaderboard, Replay, plus Settings overlay).

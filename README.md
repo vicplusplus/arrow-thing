@@ -21,8 +21,9 @@ Free to play at **https://arrow-thing.com/**
 ## Tech Stack
 
 - Unity `6000.3.8f1`
-- C# domain logic under `Assets/Scripts/Domain`
-- ASP.NET Core server under `server/` (shared domain code via monorepo)
+- C# domain logic under `Assets/Scripts/Domain` (cross-platform; deterministic via `PortableRandom`)
+- ASP.NET Core server (`.NET 10`) under `server/` — shared domain code via monorepo, plus a standalone verification worker (`ArrowThing.Worker`) consuming a Redis queue
+- PostgreSQL + Redis behind Nginx + Cloudflare; Serilog/OpenTelemetry/Grafana observability stack
 - NUnit tests via Unity Test Framework in `Assets/Tests/EditMode` and `Assets/Tests/PlayMode`
 - xUnit server integration tests in `server/ArrowThing.Server.Tests`
 
