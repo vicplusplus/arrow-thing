@@ -9,8 +9,8 @@ public class VictoryLayoutTests : UILayoutTestBase
     private const string ShortMessage = "Nice!";
     private const string MediumMessage = "Where did my arrows go????? :(";
     private const string LongMessage =
-        "DONT PRESS THAT BUTTON DOWN THERE ITS A TRAP IT WILL MAKE YOU PLAY A DIFFERENT "
-        + "LEVEL ENTIRELY ITS DANGEROUS DONT DO IT NO!!!!!!!!!";
+        "This is a deliberately long victory message used to exercise the "
+        + "smallest font-size bucket and verify layout stays within bounds.";
 
     [UnityTest]
     public IEnumerator VictoryShort_AllElementsVisible(
