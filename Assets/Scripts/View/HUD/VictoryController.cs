@@ -20,7 +20,7 @@ public sealed class VictoryController : MonoBehaviour
         "Clean sweep!",
         "Not a scratch.",
         "Speedrun certified.",
-        "buff CE",
+        "Unstoppable.",
         "GOAT",
         "Victory Message.",
         "woa",
