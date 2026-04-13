@@ -84,6 +84,11 @@ public class GameService
         {
             user.Flagged = true;
             user.FlagReason = preVerifyReason;
+            user.FlaggedAt = DateTime.UtcNow;
+            user.FlagTriggerSeed = replay.seed;
+            user.FlagTriggerBoardWidth = replay.boardWidth;
+            user.FlagTriggerBoardHeight = replay.boardHeight;
+            user.FlagTriggerGameId = replay.gameId;
             await _db.SaveChangesAsync();
             return (null, 403, "Account is flagged. Contact support.");
         }
@@ -125,6 +130,11 @@ public class GameService
         {
             user.Flagged = true;
             user.FlagReason = "duplicate_seed";
+            user.FlaggedAt = DateTime.UtcNow;
+            user.FlagTriggerSeed = replay.seed;
+            user.FlagTriggerBoardWidth = replay.boardWidth;
+            user.FlagTriggerBoardHeight = replay.boardHeight;
+            user.FlagTriggerGameId = replay.gameId;
             await _db.SaveChangesAsync();
             return (null, 403, "Account is flagged. Contact support.");
         }
