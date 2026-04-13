@@ -45,8 +45,10 @@ public sealed class ArrowView : MonoBehaviour
         _bodyWidth = settings.arrowBodyWidth;
 
         // Body mesh
-        _meshFilter = gameObject.AddComponent<MeshFilter>();
-        _meshRenderer = gameObject.AddComponent<MeshRenderer>();
+        if (_meshFilter == null)
+            _meshFilter = gameObject.AddComponent<MeshFilter>();
+        if (_meshRenderer == null)
+            _meshRenderer = gameObject.AddComponent<MeshRenderer>();
 
         _meshRenderer.material = settings.arrowBodyMaterial;
         _materialInstance = _meshRenderer.material;
@@ -222,6 +224,37 @@ public sealed class ArrowView : MonoBehaviour
     {
         if (_trailLine != null)
             _trailLine.SetActive(visible);
+    }
+
+    // ---- Pooling support --------------------------------------------------
+
+    /// <summary>
+    /// Reinitializes this view to represent a different arrow, reusing the
+    /// existing GameObject and components. Destroys old child objects and
+    /// rebuilds geometry. Used by the viewport-culling ArrowView pool.
+    /// </summary>
+    public void Reinit(Arrow arrow, int boardWidth, int boardHeight, VisualSettings settings)
+    {
+        StopAllCoroutines();
+        gameObject.SetActive(true);
+
+        // Destroy old child objects (arrowhead, trail)
+        if (_arrowHead != null)
+            Destroy(_arrowHead);
+        if (_trailLine != null)
+            Destroy(_trailLine);
+
+        Init(arrow, boardWidth, boardHeight, settings);
+    }
+
+    /// <summary>
+    /// Deactivates this view for return to the pool. Stops animations and
+    /// hides the GameObject.
+    /// </summary>
+    public void Deactivate()
+    {
+        StopAllCoroutines();
+        gameObject.SetActive(false);
     }
 
     // ---- Animation helpers ------------------------------------------------

@@ -24,6 +24,11 @@ public sealed class CameraController : MonoBehaviour
     private float _maxOrthoSize;
     private Vector3 _initialPosition;
 
+    /// <summary>
+    /// Fired when the camera position or zoom changes (pan, zoom, pinch, ZoomToFit).
+    /// </summary>
+    public event System.Action CameraChanged;
+
     public Camera Cam => _cam;
     public float ZoomSpeed
     {
@@ -60,6 +65,17 @@ public sealed class CameraController : MonoBehaviour
     }
 
     /// <summary>
+    /// Returns the camera's visible world-space rectangle.
+    /// </summary>
+    public Rect GetVisibleWorldRect()
+    {
+        float h = _cam.orthographicSize * 2f;
+        float w = h * _cam.aspect;
+        Vector3 p = transform.position;
+        return new Rect(p.x - w * 0.5f, p.y - h * 0.5f, w, h);
+    }
+
+    /// <summary>
     /// Pans the camera by a world-space delta, clamped to board bounds.
     /// </summary>
     public void Pan(Vector3 worldDelta)
@@ -69,6 +85,7 @@ public sealed class CameraController : MonoBehaviour
         newPos.y = Mathf.Clamp(newPos.y, _panBounds.yMin, _panBounds.yMax);
         newPos.z = transform.position.z;
         transform.position = newPos;
+        CameraChanged?.Invoke();
     }
 
     /// <summary>
@@ -84,6 +101,7 @@ public sealed class CameraController : MonoBehaviour
             minOrthoSize,
             _maxOrthoSize
         );
+        CameraChanged?.Invoke();
     }
 
     /// <summary>
@@ -96,6 +114,7 @@ public sealed class CameraController : MonoBehaviour
             minOrthoSize,
             _maxOrthoSize
         );
+        CameraChanged?.Invoke();
     }
 
     /// <summary>
@@ -119,6 +138,7 @@ public sealed class CameraController : MonoBehaviour
             float t = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(elapsed / duration));
             _cam.orthographicSize = Mathf.Lerp(startSize, _initialOrthoSize, t);
             transform.position = Vector3.Lerp(startPos, targetPos, t);
+            CameraChanged?.Invoke();
             yield return null;
         }
 

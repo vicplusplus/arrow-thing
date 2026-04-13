@@ -389,6 +389,8 @@ Each phase is a self-contained PR. Phases are intentionally ordered so every mer
 
 **Risk.** Medium. Touches the core render path used by solo today. Mitigation: the threshold keeps small boards on the unchanged code path, so solo play is unaffected until someone picks a large board.
 
+**Implemented.** Final approach pivoted from "ArrowView pool" to **chunked combined meshes** for draw-call optimization. `BoardSpatialIndex` (16×16 buckets) ships as planned but is now used only for chunk grid math. Each visible chunk renders one combined mesh containing all arrows touching that chunk (bodies + heads, vertex colors per arrow). New `BoardChunkRenderer` MonoBehaviour owns the mesh per chunk; new `ArrowBodyBatched` shader reads vertex color (manually linear-converted) and disables the dome highlight for a flat solid look — applied to interaction views too for consistency. Individual `ArrowView` instances are only spawned for click interactions (clear/blocked animations) and rendered above chunks via bumped `sortingOrder`. `ClearPreviousTints` demotes blocked-feedback views back to chunks. `BoardView.Update()` re-evaluates visible chunks each frame, handling both pan/zoom and arrows added mid-frame during generation. Trails are not rendered in culling mode (chunk meshes don't include trail geometry — acceptable since they're rarely used at large scale). Threshold is `Width*Height >= 3600` (60×60) — smaller boards keep the unchanged per-arrow path.
+
 ### Phase 3 — Server lobby CRUD + WebSocket plumbing
 
 **Goal.** Add the server-side lobby model, REST endpoints for create/list/get/delete, and a bare WebSocket hub that authenticates, tracks connected players, and broadcasts test messages. No generation yet, no gameplay.

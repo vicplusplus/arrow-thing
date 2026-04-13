@@ -236,6 +236,7 @@ public sealed class GameController : MonoBehaviour
 
         CreateBoardAndView();
         SetupCamera();
+        _boardView.SetCameraController(_camCtrl);
 
         if (hasSnapshot)
         {
