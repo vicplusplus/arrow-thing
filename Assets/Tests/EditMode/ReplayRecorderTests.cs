@@ -181,10 +181,11 @@ public class ReplayRecorderTests
         var data = rec.ToReplayData("g", 1, 5, 5, 10, 15f, boardSnapshot: snapshot);
 
         Assert.IsNotNull(data.boardSnapshot);
-        Assert.AreEqual(2, data.boardSnapshot.Count);
-        Assert.AreEqual(new Cell(0, 0), data.boardSnapshot[0][0]);
-        Assert.AreEqual(new Cell(0, 1), data.boardSnapshot[0][1]);
-        Assert.AreEqual(3, data.boardSnapshot[1].Count);
+        var arrows = data.GetSnapshotArrows();
+        Assert.AreEqual(2, arrows.Count);
+        Assert.AreEqual(new Cell(0, 0), arrows[0][0]);
+        Assert.AreEqual(new Cell(0, 1), arrows[0][1]);
+        Assert.AreEqual(3, arrows[1].Count);
     }
 
     [Test]
@@ -196,7 +197,7 @@ public class ReplayRecorderTests
             new List<Cell> { new Cell(0, 0), new Cell(1, 0) },
         };
         var data = rec.ToReplayData("g", 0, 5, 5, 10, 15f, boardSnapshot: snapshot);
-        Assert.AreEqual(4, data.version);
+        Assert.AreEqual(5, data.version);
     }
 
     [Test]
