@@ -25,7 +25,12 @@ public static class BinarySnapshot
     private const uint Magic = 0x42535441; // 'ATSB' little-endian: A=0x41, T=0x54, S=0x53, B=0x42
     private const ushort FormatVersion = 1;
     private const ushort FlagGzipped = 1 << 1;
-    private const int HeaderSize = 32;
+
+    // Header layout (28 bytes total):
+    //   u32 magic, u16 version, u16 flags, u16 width, u16 height,
+    //   i32 seed,  u16 maxArrowLength, u16 reserved,
+    //   u32 arrowCount, u32 eventSeqHigh
+    private const int HeaderSize = 28;
 
     // ─── Arrow data layer (no header) ──────────────────────────────────────
 
@@ -122,7 +127,9 @@ public static class BinarySnapshot
         var header = ReadHeader(br);
         var board = new Board(header.Width, header.Height);
 
-        int payloadLength = data.Length - HeaderSize;
+        // Use the reader's actual position so the payload boundary stays
+        // correct even if the header layout changes.
+        int payloadLength = data.Length - (int)ms.Position;
         var rawPayload = br.ReadBytes(payloadLength);
         byte[] arrowData = (header.Flags & FlagGzipped) != 0 ? Gunzip(rawPayload) : rawPayload;
 
