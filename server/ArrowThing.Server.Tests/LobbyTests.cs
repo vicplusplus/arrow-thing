@@ -80,8 +80,9 @@ public class LobbyTests : IClassFixture<TestFactory>, IDisposable
         Assert.NotNull(body);
         Assert.Equal(6, body!.Code.Length);
         Assert.Equal("My First Lobby", body.Name);
-        Assert.Equal(200, body.Width);
-        Assert.Equal(200, body.Height);
+        // TestFactory overrides LobbyOptions to 20x20 for fast generation in tests.
+        Assert.Equal(20, body.Width);
+        Assert.Equal(20, body.Height);
         Assert.Contains(body.Code, body.ShareUrl);
     }
 

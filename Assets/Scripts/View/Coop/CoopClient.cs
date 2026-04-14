@@ -25,6 +25,7 @@ public class CoopClient : IDisposable
 {
     public event Action Connected;
     public event Action<CoopMessage> MessageReceived;
+    public event Action<byte[]> BinaryReceived;
     public event Action<string> Disconnected;
 
     private readonly ConcurrentQueue<Action> _mainThreadQueue = new ConcurrentQueue<Action>();
@@ -115,6 +116,12 @@ public class CoopClient : IDisposable
                 {
                     EnqueueDisconnected("server closed");
                     break;
+                }
+
+                if (result.MessageType == WebSocketMessageType.Binary)
+                {
+                    EnqueueBinary(ms.ToArray());
+                    continue;
                 }
 
                 var json = Encoding.UTF8.GetString(ms.ToArray());
@@ -230,6 +237,22 @@ public class CoopClient : IDisposable
         }
     }
 
+    public static void OnJsBinary(int handle, string base64)
+    {
+        if (_instances.TryGetValue(handle, out var inst))
+        {
+            try
+            {
+                var bytes = Convert.FromBase64String(base64);
+                inst.EnqueueBinary(bytes);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[CoopClient] Bad binary from JS: {e.Message}");
+            }
+        }
+    }
+
     public static void OnJsClose(int handle, string reason)
     {
         if (_instances.TryRemove(handle, out var inst))
@@ -262,6 +285,9 @@ public class CoopClient : IDisposable
 
     private void EnqueueReceived(CoopMessage msg) =>
         _mainThreadQueue.Enqueue(() => MessageReceived?.Invoke(msg));
+
+    private void EnqueueBinary(byte[] data) =>
+        _mainThreadQueue.Enqueue(() => BinaryReceived?.Invoke(data));
 
     private void EnqueueDisconnected(string reason) =>
         _mainThreadQueue.Enqueue(() => Disconnected?.Invoke(reason));

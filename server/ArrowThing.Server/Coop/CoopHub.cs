@@ -14,23 +14,183 @@ namespace ArrowThing.Server.Coop;
 
 /// <summary>
 /// WebSocket hub for co-op lobbies. Singleton — owns the per-lobby in-memory
-/// session state. Phase 3 implements the bare wiring: JWT auth via query
-/// string, hello/welcome handshake, heartbeat, goodbye, and a debug echo
-/// handler for verification. No gameplay logic yet.
+/// session state. Dispatches messages by type and broadcasts progress /
+/// completion events from the generation worker via Redis pub/sub.
 /// </summary>
 public class CoopHub
 {
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly GenerationProgressBus _progressBus;
     private readonly ILogger<CoopHub> _logger;
     private readonly ConcurrentDictionary<string, LobbyRoom> _rooms = new();
+    private bool _busSubscribed;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    public CoopHub(ILogger<CoopHub> logger)
+    public CoopHub(
+        IServiceScopeFactory scopeFactory,
+        GenerationProgressBus progressBus,
+        ILogger<CoopHub> logger
+    )
     {
+        _scopeFactory = scopeFactory;
+        _progressBus = progressBus;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Subscribes to the generation progress bus. Call once at startup.
+    /// Safe to call multiple times — only the first call subscribes.
+    /// </summary>
+    public async Task EnsureSubscribedAsync()
+    {
+        if (_busSubscribed)
+            return;
+        _busSubscribed = true;
+        await _progressBus.SubscribeAsync(OnBusMessageAsync);
+    }
+
+    private async Task OnBusMessageAsync(string lobbyCode, GenerationProgressBus.BusMessage msg)
+    {
+        var code = NormalizeCode(lobbyCode);
+        if (!_rooms.TryGetValue(code, out var room))
+            return;
+
+        CoopMessage? envelope = msg.Type switch
+        {
+            "gen_progress" => new CoopMessage
+            {
+                Type = "gen_progress",
+                Payload = ToJsonElement(new GenProgressPayload(msg.Pct ?? 0)),
+            },
+            "gen_complete" => new CoopMessage { Type = "gen_complete" },
+            "lobby_failed" => new CoopMessage
+            {
+                Type = "lobby_failed",
+                Payload = ToJsonElement(new DisconnectPayload(msg.Reason ?? "unknown")),
+            },
+            _ => null,
+        };
+        if (envelope == null)
+            return;
+
+        await BroadcastAsync(code, envelope);
+
+        // On gen_complete, push the snapshot to all connected clients so they
+        // don't have to manually re-send hello.
+        if (msg.Type == "gen_complete")
+        {
+            await SendSnapshotToRoomAsync(room);
+        }
+    }
+
+    private async Task SendSnapshotToRoomAsync(LobbyRoom room)
+    {
+        Lobby? lobby;
+        byte[]? snapshotBytes;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            lobby = await db.Lobbies.FirstOrDefaultAsync(l => l.Code == room.Code);
+            if (lobby == null)
+                return;
+            var snapRepo = scope.ServiceProvider.GetRequiredService<LobbySnapshotRepository>();
+            var snap = await snapRepo.LoadAsync(lobby.Id);
+            snapshotBytes = snap?.Data;
+        }
+
+        if (snapshotBytes == null)
+            return;
+
+        var meta = new CoopMessage
+        {
+            Type = "snapshot",
+            Payload = ToJsonElement(new SnapshotMetaPayload(1, snapshotBytes.Length)),
+        };
+
+        foreach (var kvp in room.Connections)
+        {
+            var entry = kvp.Value;
+            if (!entry.Ready)
+                continue;
+            try
+            {
+                await entry.WriteLock.WaitAsync();
+                try
+                {
+                    await SendRawAsync(entry.Socket, meta, CancellationToken.None);
+                    await SendBinaryRawAsync(entry.Socket, snapshotBytes, CancellationToken.None);
+                }
+                finally
+                {
+                    entry.WriteLock.Release();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "[CoopHub] Failed to send snapshot to user {UserId}",
+                    kvp.Key
+                );
+            }
+        }
+    }
+
+    private async Task BroadcastAsync(string normalizedCode, CoopMessage msg)
+    {
+        if (!_rooms.TryGetValue(normalizedCode, out var room))
+            return;
+        foreach (var kvp in room.Connections)
+        {
+            var entry = kvp.Value;
+            if (!entry.Ready)
+                continue;
+            try
+            {
+                await SendAsync(entry, msg, CancellationToken.None);
+            }
+            catch
+            {
+                // Failed sockets get cleaned up by their own receive loops.
+            }
+        }
+    }
+
+    private static async Task SendBinaryRawAsync(
+        WebSocket socket,
+        byte[] data,
+        CancellationToken ct
+    )
+    {
+        if (socket.State != WebSocketState.Open)
+            return;
+        await socket.SendAsync(
+            new ArraySegment<byte>(data),
+            WebSocketMessageType.Binary,
+            endOfMessage: true,
+            ct
+        );
+    }
+
+    private static async Task SendBinaryAsync(
+        ConnectionEntry entry,
+        byte[] data,
+        CancellationToken ct
+    )
+    {
+        await entry.WriteLock.WaitAsync(ct);
+        try
+        {
+            await SendBinaryRawAsync(entry.Socket, data, ct);
+        }
+        finally
+        {
+            entry.WriteLock.Release();
+        }
     }
 
     /// <summary>Total active rooms (for diagnostics/tests).</summary>
@@ -53,7 +213,8 @@ public class CoopHub
     {
         var code = NormalizeCode(lobby.Code);
         var room = _rooms.GetOrAdd(code, _ => new LobbyRoom(code));
-        room.Connections[userId] = socket;
+        var entry = new ConnectionEntry(socket);
+        room.Connections[userId] = entry;
 
         _logger.LogInformation(
             "[CoopHub] User {UserId} connected to lobby {Code} (now {Count} connected)",
@@ -103,7 +264,7 @@ public class CoopHub
                 if (msg == null || string.IsNullOrEmpty(msg.Type))
                     continue;
 
-                await HandleMessageAsync(msg, socket, lobby, userId, ct);
+                await HandleMessageAsync(msg, entry, lobby, userId, ct);
             }
         }
         catch (OperationCanceledException) { }
@@ -132,7 +293,7 @@ public class CoopHub
 
     private async Task HandleMessageAsync(
         CoopMessage msg,
-        WebSocket socket,
+        ConnectionEntry entry,
         Lobby lobby,
         Guid userId,
         CancellationToken ct
@@ -141,18 +302,7 @@ public class CoopHub
         switch (msg.Type)
         {
             case "hello":
-                await SendAsync(
-                    socket,
-                    new CoopMessage
-                    {
-                        Type = "welcome",
-                        Seq = 0,
-                        Payload = ToJsonElement(
-                            new WelcomePayload(userId, lobby.Code, lobby.Name, (short)lobby.Status)
-                        ),
-                    },
-                    ct
-                );
+                await HandleHelloAsync(entry, lobby, userId, ct);
                 break;
 
             case "heartbeat":
@@ -162,7 +312,7 @@ public class CoopHub
             case "echo":
                 // Debug round-trip — returns the same payload tagged echo_reply.
                 await SendAsync(
-                    socket,
+                    entry,
                     new CoopMessage
                     {
                         Type = "echo_reply",
@@ -174,7 +324,7 @@ public class CoopHub
                 break;
 
             case "goodbye":
-                await socket.CloseAsync(
+                await entry.Socket.CloseAsync(
                     WebSocketCloseStatus.NormalClosure,
                     "goodbye",
                     CancellationToken.None
@@ -191,7 +341,153 @@ public class CoopHub
         }
     }
 
-    private static async Task SendAsync(WebSocket socket, CoopMessage msg, CancellationToken ct)
+    private async Task HandleHelloAsync(
+        ConnectionEntry entry,
+        Lobby lobbyAtConnect,
+        Guid userId,
+        CancellationToken ct
+    )
+    {
+        // Refetch current lobby state — it may have transitioned (Generating
+        // → Active, etc.) since the connection was accepted.
+        Lobby? current;
+        byte[]? snapshotBytes = null;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            current = await db.Lobbies.FindAsync(lobbyAtConnect.Id);
+            if (current == null)
+            {
+                await SendAsync(
+                    entry,
+                    new CoopMessage
+                    {
+                        Type = "disconnect",
+                        Payload = ToJsonElement(new DisconnectPayload("lobby_not_found")),
+                    },
+                    ct
+                );
+                await entry.Socket.CloseAsync(
+                    WebSocketCloseStatus.NormalClosure,
+                    "lobby_not_found",
+                    CancellationToken.None
+                );
+                return;
+            }
+            if (current.Status == LobbyStatus.Active)
+            {
+                var snapRepo = scope.ServiceProvider.GetRequiredService<LobbySnapshotRepository>();
+                var snap = await snapRepo.LoadAsync(current.Id);
+                snapshotBytes = snap?.Data;
+            }
+        }
+
+        // Hold the per-connection write lock for the whole handshake so a
+        // concurrent bus broadcast can't interleave between welcome and the
+        // snapshot frames. While Ready == false, BroadcastAsync skips this
+        // connection entirely — the lock only becomes contended after Ready
+        // flips below.
+        await entry.WriteLock.WaitAsync(ct);
+        try
+        {
+            await SendRawAsync(
+                entry.Socket,
+                new CoopMessage
+                {
+                    Type = "welcome",
+                    Seq = 0,
+                    Payload = ToJsonElement(
+                        new WelcomePayload(
+                            userId,
+                            current.Code,
+                            current.Name,
+                            (short)current.Status
+                        )
+                    ),
+                },
+                ct
+            );
+
+            switch (current.Status)
+            {
+                case LobbyStatus.Generating:
+                    // Subscriber will deliver progress events via the bus.
+                    break;
+
+                case LobbyStatus.Active:
+                    if (snapshotBytes != null)
+                    {
+                        await SendRawAsync(
+                            entry.Socket,
+                            new CoopMessage
+                            {
+                                Type = "snapshot",
+                                Payload = ToJsonElement(
+                                    new SnapshotMetaPayload(1, snapshotBytes.Length)
+                                ),
+                            },
+                            ct
+                        );
+                        await SendBinaryRawAsync(entry.Socket, snapshotBytes, ct);
+                    }
+                    break;
+
+                case LobbyStatus.GenerationFailed:
+                    await SendRawAsync(
+                        entry.Socket,
+                        new CoopMessage
+                        {
+                            Type = "lobby_failed",
+                            Payload = ToJsonElement(new DisconnectPayload("generation_failed")),
+                        },
+                        ct
+                    );
+                    break;
+
+                case LobbyStatus.Completed:
+                    await SendRawAsync(
+                        entry.Socket,
+                        new CoopMessage
+                        {
+                            Type = "disconnect",
+                            Payload = ToJsonElement(new DisconnectPayload("lobby_completed")),
+                        },
+                        ct
+                    );
+                    await entry.Socket.CloseAsync(
+                        WebSocketCloseStatus.NormalClosure,
+                        "completed",
+                        CancellationToken.None
+                    );
+                    break;
+
+                case LobbyStatus.Deleted:
+                    await SendRawAsync(
+                        entry.Socket,
+                        new CoopMessage
+                        {
+                            Type = "disconnect",
+                            Payload = ToJsonElement(new DisconnectPayload("lobby_deleted")),
+                        },
+                        ct
+                    );
+                    await entry.Socket.CloseAsync(
+                        WebSocketCloseStatus.NormalClosure,
+                        "deleted",
+                        CancellationToken.None
+                    );
+                    break;
+            }
+        }
+        finally
+        {
+            entry.WriteLock.Release();
+        }
+
+        entry.Ready = true;
+    }
+
+    private static async Task SendRawAsync(WebSocket socket, CoopMessage msg, CancellationToken ct)
     {
         if (socket.State != WebSocketState.Open)
             return;
@@ -202,6 +498,23 @@ public class CoopHub
             endOfMessage: true,
             ct
         );
+    }
+
+    private static async Task SendAsync(
+        ConnectionEntry entry,
+        CoopMessage msg,
+        CancellationToken ct
+    )
+    {
+        await entry.WriteLock.WaitAsync(ct);
+        try
+        {
+            await SendRawAsync(entry.Socket, msg, ct);
+        }
+        finally
+        {
+            entry.WriteLock.Release();
+        }
     }
 
     private static JsonElement ToJsonElement<T>(T value)
@@ -262,10 +575,28 @@ public class CoopHub
 internal class LobbyRoom
 {
     public string Code { get; }
-    public ConcurrentDictionary<Guid, WebSocket> Connections { get; } = new();
+    public ConcurrentDictionary<Guid, ConnectionEntry> Connections { get; } = new();
 
     public LobbyRoom(string code)
     {
         Code = code;
+    }
+}
+
+internal class ConnectionEntry
+{
+    public WebSocket Socket { get; }
+    public SemaphoreSlim WriteLock { get; } = new(1, 1);
+
+    /// <summary>
+    /// Set to true after the initial hello → welcome handshake completes.
+    /// Bus broadcasts skip connections that aren't ready, so a broadcast
+    /// can't race with the welcome write to the same socket.
+    /// </summary>
+    public bool Ready { get; set; }
+
+    public ConnectionEntry(WebSocket socket)
+    {
+        Socket = socket;
     }
 }

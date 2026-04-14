@@ -52,7 +52,7 @@ public class ReplayVerifierTests
         t += 0.5;
         while (board.Arrows.Count > 0)
         {
-            Arrow toClear = null;
+            Arrow? toClear = null;
             foreach (var arrow in board.Arrows)
             {
                 if (board.IsClearable(arrow))
@@ -62,7 +62,7 @@ public class ReplayVerifierTests
                 }
             }
 
-            var head = toClear.HeadCell;
+            var head = toClear!.HeadCell;
             events.Add(
                 new ReplayEvent
                 {
@@ -86,7 +86,7 @@ public class ReplayVerifierTests
             }
         );
 
-        return new ReplayData
+        var replay = new ReplayData
         {
             version = 4,
             gameId = Guid.NewGuid().ToString(),
@@ -95,10 +95,11 @@ public class ReplayVerifierTests
             boardHeight = height,
             maxArrowLength = maxArrowLength,
             inspectionDuration = 0f,
-            boardSnapshot = snapshot,
             events = events,
             finalTime = t - 1.0,
         };
+        replay.SetSnapshotArrows(snapshot);
+        return replay;
     }
 
     [Fact]
@@ -127,7 +128,9 @@ public class ReplayVerifierTests
     public void Verify_SnapshotMismatch_ReturnsInvalid()
     {
         var replay = MakeValidReplay();
-        replay.boardSnapshot.RemoveAt(0);
+        var arrows = replay.GetSnapshotArrows();
+        arrows.RemoveAt(0);
+        replay.SetSnapshotArrows(arrows);
 
         var result = ReplayVerifier.Verify(replay);
 
@@ -139,8 +142,11 @@ public class ReplayVerifierTests
     public void Verify_SnapshotArrowCellsTampered_ReturnsInvalid()
     {
         var replay = MakeValidReplay();
-        var firstArrow = replay.boardSnapshot[0];
-        firstArrow[0] = new Cell(firstArrow[0].X + 99, firstArrow[0].Y + 99);
+        var arrows = replay.GetSnapshotArrows();
+        // Replace the first arrow with a valid-but-different orthogonal arrow
+        // that almost certainly won't match the regenerated board.
+        arrows[0] = new List<Cell> { new Cell(0, 0), new Cell(0, 1), new Cell(0, 2) };
+        replay.SetSnapshotArrows(arrows);
 
         var result = ReplayVerifier.Verify(replay);
 
@@ -158,7 +164,7 @@ public class ReplayVerifierTests
         foreach (var arrow in board.Arrows)
             snapshot.Add(new List<Cell>(arrow.Cells));
 
-        Arrow nonClearable = null;
+        Arrow? nonClearable = null;
         foreach (var arrow in board.Arrows)
         {
             if (!board.IsClearable(arrow))
@@ -204,10 +210,10 @@ public class ReplayVerifierTests
             boardWidth = Width,
             boardHeight = Height,
             maxArrowLength = MaxArrowLength,
-            boardSnapshot = snapshot,
             events = events,
             finalTime = 1.0,
         };
+        replay.SetSnapshotArrows(snapshot);
 
         var result = ReplayVerifier.Verify(replay);
 
@@ -332,7 +338,7 @@ public class ReplayVerifierTests
     [Fact]
     public void Verify_NullReplay_ReturnsInvalid()
     {
-        var result = ReplayVerifier.Verify(null);
+        var result = ReplayVerifier.Verify(null!);
 
         Assert.False(result.IsValid);
         Assert.Contains("null", result.Reason);
@@ -456,7 +462,7 @@ public class ReplayVerifierTests
         );
         while (board.Arrows.Count > 0)
         {
-            Arrow toClear = null;
+            Arrow? toClear = null;
             foreach (var arrow in board.Arrows)
                 if (board.IsClearable(arrow))
                 {
@@ -468,7 +474,7 @@ public class ReplayVerifierTests
                 {
                     seq = seq++,
                     type = ReplayEventType.Clear,
-                    posX = toClear.HeadCell.X,
+                    posX = toClear!.HeadCell.X,
                     posY = toClear.HeadCell.Y,
                     timestamp = baseTime.AddSeconds(1).ToString("O"),
                 }
@@ -492,10 +498,10 @@ public class ReplayVerifierTests
             boardWidth = 3,
             boardHeight = 3,
             maxArrowLength = 3,
-            boardSnapshot = snapshot,
             events = events,
             finalTime = 0,
         };
+        replay.SetSnapshotArrows(snapshot);
 
         Assert.Null(ReplayVerifier.PreVerify(replay));
     }
@@ -510,7 +516,7 @@ public class ReplayVerifierTests
     [Fact]
     public void PreVerify_NullReplay_ReturnsReason()
     {
-        Assert.Contains("null", ReplayVerifier.PreVerify(null));
+        Assert.Contains("null", ReplayVerifier.PreVerify(null!));
     }
 
     [Fact]

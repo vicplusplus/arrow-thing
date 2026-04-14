@@ -1,4 +1,5 @@
 using ArrowThing.Server.Auth;
+using ArrowThing.Server.Coop;
 using ArrowThing.Server.Data;
 using ArrowThing.Server.Games;
 using DotNet.Testcontainers.Builders;
@@ -8,6 +9,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 using Testcontainers.PostgreSql;
 using Testcontainers.Redis;
@@ -83,6 +85,18 @@ public class TestFactory : WebApplicationFactory<Program>, IAsyncLifetime
 
             // Run verification worker in-process so tests can exercise the full async flow
             services.AddHostedService<VerificationWorker>();
+
+            // Co-op generation worker — also in-process for tests.
+            services.AddHostedService<LobbyGenerationWorker>();
+
+            // Override LobbyOptions so generation completes within test timeouts
+            // (default is 200x200 which takes ~10s+; tests use 20x20).
+            services.Configure<LobbyOptions>(o =>
+            {
+                o.DefaultWidth = 20;
+                o.DefaultHeight = 20;
+                o.MaxArrowLength = 10;
+            });
         });
     }
 }

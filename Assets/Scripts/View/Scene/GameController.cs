@@ -229,10 +229,7 @@ public sealed class GameController : MonoBehaviour
         }
 
         ResolveSeed(priorData);
-        bool hasSnapshot =
-            priorData != null
-            && priorData.boardSnapshot != null
-            && priorData.boardSnapshot.Count > 0;
+        bool hasSnapshot = priorData != null && !string.IsNullOrEmpty(priorData.boardSnapshot);
 
         CreateBoardAndView();
         SetupCamera();
@@ -240,7 +237,7 @@ public sealed class GameController : MonoBehaviour
 
         if (hasSnapshot)
         {
-            _initialBoardSnapshot = priorData.boardSnapshot;
+            _initialBoardSnapshot = priorData.GetSnapshotArrows();
             yield return RestoreBoard(priorData);
         }
         else
@@ -379,13 +376,14 @@ public sealed class GameController : MonoBehaviour
 
     private IEnumerator RestoreBoard(ReplayData priorData)
     {
-        int totalArrows = priorData.boardSnapshot.Count;
+        // _initialBoardSnapshot was populated from priorData.GetSnapshotArrows() in GenerateAndSetup.
+        int totalArrows = _initialBoardSnapshot.Count;
         Debug.Log($"[GameController] RestoreBoard: restoring {totalArrows} arrows from snapshot");
         int totalSteps = totalArrows * 2;
         var restorer = BoardSetupHelper.RestoreBoardFromSnapshot(
             _board,
             _boardView,
-            priorData.boardSnapshot,
+            _initialBoardSnapshot,
             FrameBudgetMs
         );
 

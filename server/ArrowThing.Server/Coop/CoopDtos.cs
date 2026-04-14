@@ -52,3 +52,13 @@ public class CoopMessage
 public record WelcomePayload(Guid YourUserId, string LobbyCode, string LobbyName, short Status);
 
 public record EchoPayload(string Message);
+
+// -- Phase 4 payloads --------------------------------------------------------
+
+public record GenProgressPayload(int Pct);
+
+public record GenCompletePayload();
+
+public record SnapshotMetaPayload(int Version, int SizeBytes);
+
+public record DisconnectPayload(string Reason);

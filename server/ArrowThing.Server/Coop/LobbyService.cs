@@ -1,13 +1,18 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using ArrowThing.Server.Auth;
 using ArrowThing.Server.Data;
 using ArrowThing.Server.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using StackExchange.Redis;
 
 namespace ArrowThing.Server.Coop;
 
 public class LobbyService
 {
+    public const string GenerationQueueKey = "coop:gen:queue";
+
     private const int MaxActiveLobbiesPerOwner = 5;
     private const int CodeLength = 6;
 
@@ -20,11 +25,20 @@ public class LobbyService
     private const string ShareUrlBase = "https://arrow-thing.com/?lobby=";
 
     private readonly AppDbContext _db;
+    private readonly LobbyOptions _options;
+    private readonly IConnectionMultiplexer? _redis;
     private readonly ILogger<LobbyService> _logger;
 
-    public LobbyService(AppDbContext db, ILogger<LobbyService> logger)
+    public LobbyService(
+        AppDbContext db,
+        IOptions<LobbyOptions> options,
+        ILogger<LobbyService> logger,
+        IConnectionMultiplexer? redis = null
+    )
     {
         _db = db;
+        _options = options.Value;
+        _redis = redis;
         _logger = logger;
     }
 
@@ -76,10 +90,10 @@ public class LobbyService
             Code = code,
             Name = name,
             OwnerUserId = ownerUserId,
-            Width = 200,
-            Height = 200,
+            Width = _options.DefaultWidth,
+            Height = _options.DefaultHeight,
             Seed = GenerateSeed(),
-            MaxArrowLength = 40,
+            MaxArrowLength = _options.MaxArrowLength,
             Status = LobbyStatus.Generating,
             CreatedAt = now,
             LastActivityAt = now,
@@ -88,7 +102,60 @@ public class LobbyService
         _db.Lobbies.Add(lobby);
         await _db.SaveChangesAsync();
 
+        await EnqueueGenerationJobAsync(lobby);
+
         return (BuildResponse(lobby, owner.DisplayName), 201, null);
+    }
+
+    /// <summary>
+    /// Re-enqueues a failed lobby's generation job. Owner-only.
+    /// Resets status from <see cref="LobbyStatus.GenerationFailed"/> back to
+    /// <see cref="LobbyStatus.Generating"/>.
+    /// </summary>
+    public async Task<(
+        MessageResponse? Response,
+        int StatusCode,
+        string? Error
+    )> RetryGenerationAsync(Guid lobbyId, Guid requesterUserId)
+    {
+        var lobby = await _db.Lobbies.FindAsync(lobbyId);
+        if (lobby == null || lobby.Status == LobbyStatus.Deleted)
+            return (null, 404, "Lobby not found.");
+        if (lobby.OwnerUserId != requesterUserId)
+            return (null, 403, "Only the owner can retry generation.");
+        if (lobby.Status != LobbyStatus.GenerationFailed)
+            return (null, 400, "Lobby is not in a failed state.");
+
+        lobby.Status = LobbyStatus.Generating;
+        lobby.LastActivityAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        await EnqueueGenerationJobAsync(lobby);
+
+        return (new MessageResponse("Generation re-enqueued."), 200, null);
+    }
+
+    private async Task EnqueueGenerationJobAsync(Lobby lobby)
+    {
+        if (_redis == null)
+        {
+            _logger.LogWarning(
+                "Redis not configured — generation job for lobby {Id} will not be processed.",
+                lobby.Id
+            );
+            return;
+        }
+
+        var job = new GenerationJob
+        {
+            LobbyId = lobby.Id,
+            OwnerUserId = lobby.OwnerUserId,
+            Code = lobby.Code,
+            EnqueuedAt = DateTime.UtcNow.ToString("O"),
+        };
+        var json = JsonSerializer.Serialize(job);
+        var db = _redis.GetDatabase();
+        await db.ListLeftPushAsync(GenerationQueueKey, json);
     }
 
     public async Task<(LobbyResponse? Response, int StatusCode, string? Error)> GetByCodeAsync(
@@ -226,4 +293,13 @@ public class LobbyService
         var chars = s.Where(c => !char.IsControl(c) || c == ' ').ToArray();
         return new string(chars);
     }
+}
+
+/// <summary>Payload pushed to the <c>coop:gen:queue</c> Redis list.</summary>
+public class GenerationJob
+{
+    public Guid LobbyId { get; set; }
+    public Guid OwnerUserId { get; set; }
+    public string Code { get; set; } = "";
+    public string EnqueuedAt { get; set; } = "";
 }

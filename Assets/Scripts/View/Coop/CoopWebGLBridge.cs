@@ -39,6 +39,18 @@ public class CoopWebGLBridge : MonoBehaviour
         CoopClient.OnJsMessage(handle, json);
     }
 
+    public void JsOnBinary(string payload)
+    {
+        // Format: "{handle}|{base64}"
+        var sepIdx = payload.IndexOf('|');
+        if (sepIdx < 0)
+            return;
+        if (!int.TryParse(payload.Substring(0, sepIdx), out var handle))
+            return;
+        var base64 = payload.Substring(sepIdx + 1);
+        CoopClient.OnJsBinary(handle, base64);
+    }
+
     public void JsOnClose(string payload)
     {
         var sepIdx = payload.IndexOf('|');
