@@ -2,8 +2,7 @@
     "name": "ArrowThing.Tests.EditMode",
     "rootNamespace": "",
     "references": [
-        "ArrowThing",
-        "Newtonsoft.Json"
+        "ArrowThing"
     ],
     "includePlatforms": [
         "Editor"
@@ -12,7 +11,8 @@
     "allowUnsafeCode": false,
     "overrideReferences": true,
     "precompiledReferences": [
-        "nunit.framework.dll"
+        "nunit.framework.dll",
+        "Newtonsoft.Json.dll"
     ],
     "autoReferenced": false,
     "defineConstraints": [
