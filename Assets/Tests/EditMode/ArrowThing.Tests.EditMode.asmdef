@@ -2,7 +2,8 @@
     "name": "ArrowThing.Tests.EditMode",
     "rootNamespace": "",
     "references": [
-        "ArrowThing"
+        "ArrowThing",
+        "Newtonsoft.Json"
     ],
     "includePlatforms": [
         "Editor"
