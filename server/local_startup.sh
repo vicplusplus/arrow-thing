@@ -41,12 +41,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Build solution once so both processes can use --no-build (avoids file-lock
+# collisions on the shared Server output directory now that Worker references
+# Server).
+echo "Building solution..."
+dotnet build ArrowThing.sln
+
 # Run the worker in the background
 ConnectionStrings__Default="$LOCAL_CONN" \
 Redis__ConnectionString="localhost:6379" \
-dotnet run --project ArrowThing.Worker &
+dotnet run --no-build --project ArrowThing.Worker &
 WORKER_PID=$!
 echo "Worker started (PID $WORKER_PID)."
 
 # Run the API in the foreground (applies migrations on startup)
-dotnet run --project ArrowThing.Server
+dotnet run --no-build --project ArrowThing.Server

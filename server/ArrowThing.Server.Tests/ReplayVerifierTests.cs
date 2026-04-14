@@ -52,7 +52,7 @@ public class ReplayVerifierTests
         t += 0.5;
         while (board.Arrows.Count > 0)
         {
-            Arrow toClear = null;
+            Arrow? toClear = null;
             foreach (var arrow in board.Arrows)
             {
                 if (board.IsClearable(arrow))
@@ -62,7 +62,7 @@ public class ReplayVerifierTests
                 }
             }
 
-            var head = toClear.HeadCell;
+            var head = toClear!.HeadCell;
             events.Add(
                 new ReplayEvent
                 {
@@ -164,7 +164,7 @@ public class ReplayVerifierTests
         foreach (var arrow in board.Arrows)
             snapshot.Add(new List<Cell>(arrow.Cells));
 
-        Arrow nonClearable = null;
+        Arrow? nonClearable = null;
         foreach (var arrow in board.Arrows)
         {
             if (!board.IsClearable(arrow))
@@ -338,7 +338,7 @@ public class ReplayVerifierTests
     [Fact]
     public void Verify_NullReplay_ReturnsInvalid()
     {
-        var result = ReplayVerifier.Verify(null);
+        var result = ReplayVerifier.Verify(null!);
 
         Assert.False(result.IsValid);
         Assert.Contains("null", result.Reason);
@@ -462,7 +462,7 @@ public class ReplayVerifierTests
         );
         while (board.Arrows.Count > 0)
         {
-            Arrow toClear = null;
+            Arrow? toClear = null;
             foreach (var arrow in board.Arrows)
                 if (board.IsClearable(arrow))
                 {
@@ -474,7 +474,7 @@ public class ReplayVerifierTests
                 {
                     seq = seq++,
                     type = ReplayEventType.Clear,
-                    posX = toClear.HeadCell.X,
+                    posX = toClear!.HeadCell.X,
                     posY = toClear.HeadCell.Y,
                     timestamp = baseTime.AddSeconds(1).ToString("O"),
                 }
@@ -516,7 +516,7 @@ public class ReplayVerifierTests
     [Fact]
     public void PreVerify_NullReplay_ReturnsReason()
     {
-        Assert.Contains("null", ReplayVerifier.PreVerify(null));
+        Assert.Contains("null", ReplayVerifier.PreVerify(null!));
     }
 
     [Fact]
