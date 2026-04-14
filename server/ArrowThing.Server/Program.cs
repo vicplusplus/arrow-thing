@@ -131,7 +131,11 @@ builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<GameService>();
 builder.Services.AddScoped<LeaderboardService>();
 builder.Services.AddScoped<LobbyService>();
+builder.Services.AddScoped<LobbySnapshotRepository>();
+builder.Services.AddSingleton<AccountConcurrencyLimiter>();
+builder.Services.AddSingleton<GenerationProgressBus>();
 builder.Services.AddSingleton<CoopHub>();
+builder.Services.Configure<LobbyOptions>(builder.Configuration.GetSection("Lobby"));
 builder.Services.AddSingleton<LeaderboardCache>(sp => new LeaderboardCache(
     sp.GetService<IConnectionMultiplexer>()
 ));
@@ -156,6 +160,12 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.Migrate();
+}
+
+// Subscribe CoopHub to the generation progress bus.
+{
+    var hub = app.Services.GetRequiredService<CoopHub>();
+    await hub.EnsureSubscribedAsync();
 }
 
 app.UseSerilogRequestLogging(opts =>
@@ -636,6 +646,19 @@ app.MapDelete(
         {
             var userId = Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
             var (response, status, error) = await lobbies.SoftDeleteAsync(id, userId);
+            return response != null
+                ? Results.Ok(response)
+                : Results.Json(new { error }, statusCode: status);
+        }
+    )
+    .RequireAuthorization();
+
+app.MapPost(
+        "/api/lobbies/{id:guid}/retry-gen",
+        async (Guid id, LobbyService lobbies, ClaimsPrincipal user) =>
+        {
+            var userId = Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var (response, status, error) = await lobbies.RetryGenerationAsync(id, userId);
             return response != null
                 ? Results.Ok(response)
                 : Results.Json(new { error }, statusCode: status);

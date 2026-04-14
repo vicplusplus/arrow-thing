@@ -1131,7 +1131,7 @@ public sealed class LeaderboardScreenController : NavigableScene
         if (manager != null)
         {
             var local = manager.LoadReplay(gameId);
-            if (local != null && local.boardSnapshot != null && local.boardSnapshot.Count > 0)
+            if (local != null && !string.IsNullOrEmpty(local.boardSnapshot))
             {
                 GameSettings.StartReplay(local);
                 SceneNav.Push("ReplayViewer");

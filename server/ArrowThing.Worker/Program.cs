@@ -1,3 +1,4 @@
+using ArrowThing.Server.Coop;
 using ArrowThing.Server.Data;
 using ArrowThing.Server.Games;
 using ArrowThing.Server.Leaderboards;
@@ -40,7 +41,13 @@ builder.Services.AddSingleton<LeaderboardCache>(sp => new LeaderboardCache(
     sp.GetService<IConnectionMultiplexer>()
 ));
 
+// Co-op generation worker dependencies
+builder.Services.AddSingleton<AccountConcurrencyLimiter>();
+builder.Services.AddSingleton<GenerationProgressBus>();
+builder.Services.AddScoped<LobbySnapshotRepository>();
+
 builder.Services.AddHostedService<VerificationWorker>();
+builder.Services.AddHostedService<LobbyGenerationWorker>();
 
 var host = builder.Build();
 

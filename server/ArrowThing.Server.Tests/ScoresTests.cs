@@ -179,10 +179,10 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             boardHeight = height,
             maxArrowLength = maxArrowLength,
             inspectionDuration = 0f,
-            boardSnapshot = snapshot,
             events = events,
             finalTime = t - 1.0,
         };
+        replay.SetSnapshotArrows(snapshot);
 
         return replay.ToJson();
     }
@@ -263,10 +263,10 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             boardWidth = width,
             boardHeight = height,
             maxArrowLength = maxArrowLength,
-            boardSnapshot = snapshot,
             events = events,
             finalTime = t - 1.0,
         };
+        replay.SetSnapshotArrows(snapshot);
 
         return replay.ToJson();
     }
@@ -557,7 +557,6 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             boardWidth = 10,
             boardHeight = 10,
             maxArrowLength = 5,
-            boardSnapshot = snapshot,
             events = events,
             finalTime = 1.0,
         };
@@ -582,7 +581,9 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
         var replayJson = MakeValidReplayJson(seed: 106);
         var replay = Newtonsoft.Json.JsonConvert.DeserializeObject<ReplayData>(replayJson)!;
         // Tamper: remove an arrow from the snapshot
-        replay.boardSnapshot.RemoveAt(0);
+        var arrows = replay.GetSnapshotArrows();
+        arrows.RemoveAt(0);
+        replay.SetSnapshotArrows(arrows);
 
         var (response, status) = await SubmitAndWaitAsync(replay.ToJson());
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
@@ -609,7 +610,6 @@ public class ScoresTests : IClassFixture<TestFactory>, IDisposable
             boardWidth = 500,
             boardHeight = 500,
             maxArrowLength = 5,
-            boardSnapshot = new List<List<Cell>>(),
             events = new List<ReplayEvent>
             {
                 new ReplayEvent

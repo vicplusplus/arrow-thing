@@ -2,8 +2,10 @@
 //
 // Exposes three Unity-callable functions and dispatches connection events
 // back into Unity via SendMessage on a hidden GameObject named "CoopBridge"
-// (created on-demand from C#) — handlers are CoopClient.OnJsOpen / OnJsMessage
-// / OnJsClose. Each connection is keyed by an integer handle.
+// (created on-demand from C#) — handlers are CoopClient.OnJsOpen /
+// OnJsMessage / OnJsBinary / OnJsClose. Each connection is keyed by an
+// integer handle. Binary frames are base64-encoded for SendMessage transport
+// (which only accepts strings) and decoded back to bytes on the C# side.
 
 mergeInto(LibraryManager.library, {
     $CoopWS_State: {
@@ -18,6 +20,7 @@ mergeInto(LibraryManager.library, {
 
         try {
             var ws = new WebSocket(url);
+            ws.binaryType = 'arraybuffer';
             CoopWS_State.sockets[handle] = ws;
 
             ws.onopen = function () {
@@ -25,8 +28,31 @@ mergeInto(LibraryManager.library, {
             };
 
             ws.onmessage = function (e) {
-                // Format the payload as "{handle}|{json}" so the C# side can split.
-                SendMessage(CoopWS_State.bridgeObject, 'JsOnMessage', handle + '|' + e.data);
+                if (typeof e.data === 'string') {
+                    // Format the payload as "{handle}|{json}" so the C# side can split.
+                    SendMessage(
+                        CoopWS_State.bridgeObject,
+                        'JsOnMessage',
+                        handle + '|' + e.data
+                    );
+                } else {
+                    // ArrayBuffer — base64-encode for SendMessage (which only accepts strings).
+                    var bytes = new Uint8Array(e.data);
+                    var binary = '';
+                    var chunkSize = 0x8000;
+                    for (var i = 0; i < bytes.length; i += chunkSize) {
+                        binary += String.fromCharCode.apply(
+                            null,
+                            bytes.subarray(i, i + chunkSize)
+                        );
+                    }
+                    var base64 = btoa(binary);
+                    SendMessage(
+                        CoopWS_State.bridgeObject,
+                        'JsOnBinary',
+                        handle + '|' + base64
+                    );
+                }
             };
 
             ws.onclose = function (e) {

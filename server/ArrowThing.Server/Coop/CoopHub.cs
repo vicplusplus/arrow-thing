@@ -14,23 +14,148 @@ namespace ArrowThing.Server.Coop;
 
 /// <summary>
 /// WebSocket hub for co-op lobbies. Singleton — owns the per-lobby in-memory
-/// session state. Phase 3 implements the bare wiring: JWT auth via query
-/// string, hello/welcome handshake, heartbeat, goodbye, and a debug echo
-/// handler for verification. No gameplay logic yet.
+/// session state. Dispatches messages by type and broadcasts progress /
+/// completion events from the generation worker via Redis pub/sub.
 /// </summary>
 public class CoopHub
 {
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly GenerationProgressBus _progressBus;
     private readonly ILogger<CoopHub> _logger;
     private readonly ConcurrentDictionary<string, LobbyRoom> _rooms = new();
+    private bool _busSubscribed;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    public CoopHub(ILogger<CoopHub> logger)
+    public CoopHub(
+        IServiceScopeFactory scopeFactory,
+        GenerationProgressBus progressBus,
+        ILogger<CoopHub> logger
+    )
     {
+        _scopeFactory = scopeFactory;
+        _progressBus = progressBus;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Subscribes to the generation progress bus. Call once at startup.
+    /// Safe to call multiple times — only the first call subscribes.
+    /// </summary>
+    public async Task EnsureSubscribedAsync()
+    {
+        if (_busSubscribed)
+            return;
+        _busSubscribed = true;
+        await _progressBus.SubscribeAsync(OnBusMessageAsync);
+    }
+
+    private async Task OnBusMessageAsync(string lobbyCode, GenerationProgressBus.BusMessage msg)
+    {
+        var code = NormalizeCode(lobbyCode);
+        if (!_rooms.TryGetValue(code, out var room))
+            return;
+
+        CoopMessage? envelope = msg.Type switch
+        {
+            "gen_progress" => new CoopMessage
+            {
+                Type = "gen_progress",
+                Payload = ToJsonElement(new GenProgressPayload(msg.Pct ?? 0)),
+            },
+            "gen_complete" => new CoopMessage { Type = "gen_complete" },
+            "lobby_failed" => new CoopMessage
+            {
+                Type = "lobby_failed",
+                Payload = ToJsonElement(new DisconnectPayload(msg.Reason ?? "unknown")),
+            },
+            _ => null,
+        };
+        if (envelope == null)
+            return;
+
+        await BroadcastAsync(code, envelope);
+
+        // On gen_complete, push the snapshot to all connected clients so they
+        // don't have to manually re-send hello.
+        if (msg.Type == "gen_complete")
+        {
+            await SendSnapshotToRoomAsync(room);
+        }
+    }
+
+    private async Task SendSnapshotToRoomAsync(LobbyRoom room)
+    {
+        Lobby? lobby;
+        byte[]? snapshotBytes;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            lobby = await db.Lobbies.FirstOrDefaultAsync(l => l.Code == room.Code);
+            if (lobby == null)
+                return;
+            var snapRepo = scope.ServiceProvider.GetRequiredService<LobbySnapshotRepository>();
+            var snap = await snapRepo.LoadAsync(lobby.Id);
+            snapshotBytes = snap?.Data;
+        }
+
+        if (snapshotBytes == null)
+            return;
+
+        var meta = new CoopMessage
+        {
+            Type = "snapshot",
+            Payload = ToJsonElement(new SnapshotMetaPayload(1, snapshotBytes.Length)),
+        };
+
+        foreach (var kvp in room.Connections)
+        {
+            try
+            {
+                await SendAsync(kvp.Value, meta, CancellationToken.None);
+                await SendBinaryAsync(kvp.Value, snapshotBytes, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "[CoopHub] Failed to send snapshot to user {UserId}",
+                    kvp.Key
+                );
+            }
+        }
+    }
+
+    private async Task BroadcastAsync(string normalizedCode, CoopMessage msg)
+    {
+        if (!_rooms.TryGetValue(normalizedCode, out var room))
+            return;
+        foreach (var kvp in room.Connections)
+        {
+            try
+            {
+                await SendAsync(kvp.Value, msg, CancellationToken.None);
+            }
+            catch
+            {
+                // Failed sockets get cleaned up by their own receive loops.
+            }
+        }
+    }
+
+    private static async Task SendBinaryAsync(WebSocket socket, byte[] data, CancellationToken ct)
+    {
+        if (socket.State != WebSocketState.Open)
+            return;
+        await socket.SendAsync(
+            new ArraySegment<byte>(data),
+            WebSocketMessageType.Binary,
+            endOfMessage: true,
+            ct
+        );
     }
 
     /// <summary>Total active rooms (for diagnostics/tests).</summary>
@@ -141,18 +266,7 @@ public class CoopHub
         switch (msg.Type)
         {
             case "hello":
-                await SendAsync(
-                    socket,
-                    new CoopMessage
-                    {
-                        Type = "welcome",
-                        Seq = 0,
-                        Payload = ToJsonElement(
-                            new WelcomePayload(userId, lobby.Code, lobby.Name, (short)lobby.Status)
-                        ),
-                    },
-                    ct
-                );
+                await HandleHelloAsync(socket, lobby, userId, ct);
                 break;
 
             case "heartbeat":
@@ -186,6 +300,133 @@ public class CoopHub
                     "[CoopHub] Unknown message type {Type} from user {UserId}",
                     msg.Type,
                     userId
+                );
+                break;
+        }
+    }
+
+    private async Task HandleHelloAsync(
+        WebSocket socket,
+        Lobby lobbyAtConnect,
+        Guid userId,
+        CancellationToken ct
+    )
+    {
+        // Refetch current lobby state — it may have transitioned (Generating
+        // → Active, etc.) since the connection was accepted.
+        Lobby? current;
+        byte[]? snapshotBytes = null;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            current = await db.Lobbies.FindAsync(lobbyAtConnect.Id);
+            if (current == null)
+            {
+                await SendAsync(
+                    socket,
+                    new CoopMessage
+                    {
+                        Type = "disconnect",
+                        Payload = ToJsonElement(new DisconnectPayload("lobby_not_found")),
+                    },
+                    ct
+                );
+                await socket.CloseAsync(
+                    WebSocketCloseStatus.NormalClosure,
+                    "lobby_not_found",
+                    CancellationToken.None
+                );
+                return;
+            }
+            if (current.Status == LobbyStatus.Active)
+            {
+                var snapRepo = scope.ServiceProvider.GetRequiredService<LobbySnapshotRepository>();
+                var snap = await snapRepo.LoadAsync(current.Id);
+                snapshotBytes = snap?.Data;
+            }
+        }
+
+        // Always send welcome first.
+        await SendAsync(
+            socket,
+            new CoopMessage
+            {
+                Type = "welcome",
+                Seq = 0,
+                Payload = ToJsonElement(
+                    new WelcomePayload(userId, current.Code, current.Name, (short)current.Status)
+                ),
+            },
+            ct
+        );
+
+        switch (current.Status)
+        {
+            case LobbyStatus.Generating:
+                // Subscriber will deliver progress events via the bus.
+                break;
+
+            case LobbyStatus.Active:
+                if (snapshotBytes != null)
+                {
+                    await SendAsync(
+                        socket,
+                        new CoopMessage
+                        {
+                            Type = "snapshot",
+                            Payload = ToJsonElement(
+                                new SnapshotMetaPayload(1, snapshotBytes.Length)
+                            ),
+                        },
+                        ct
+                    );
+                    await SendBinaryAsync(socket, snapshotBytes, ct);
+                }
+                break;
+
+            case LobbyStatus.GenerationFailed:
+                await SendAsync(
+                    socket,
+                    new CoopMessage
+                    {
+                        Type = "lobby_failed",
+                        Payload = ToJsonElement(new DisconnectPayload("generation_failed")),
+                    },
+                    ct
+                );
+                break;
+
+            case LobbyStatus.Completed:
+                await SendAsync(
+                    socket,
+                    new CoopMessage
+                    {
+                        Type = "disconnect",
+                        Payload = ToJsonElement(new DisconnectPayload("lobby_completed")),
+                    },
+                    ct
+                );
+                await socket.CloseAsync(
+                    WebSocketCloseStatus.NormalClosure,
+                    "completed",
+                    CancellationToken.None
+                );
+                break;
+
+            case LobbyStatus.Deleted:
+                await SendAsync(
+                    socket,
+                    new CoopMessage
+                    {
+                        Type = "disconnect",
+                        Payload = ToJsonElement(new DisconnectPayload("lobby_deleted")),
+                    },
+                    ct
+                );
+                await socket.CloseAsync(
+                    WebSocketCloseStatus.NormalClosure,
+                    "deleted",
+                    CancellationToken.None
                 );
                 break;
         }

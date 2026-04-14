@@ -163,14 +163,14 @@ public sealed class ReplayRecorder
         int boardHeight,
         int maxArrowLength,
         float inspectionDuration,
-        List<List<Cell>> boardSnapshot = null,
+        IReadOnlyList<IReadOnlyList<Cell>> boardSnapshot = null,
         double finalTime = -1.0,
         string gameVersion = null
     )
     {
-        return new ReplayData
+        var data = new ReplayData
         {
-            version = 4,
+            version = 5,
             gameId = gameId,
             seed = seed,
             boardWidth = boardWidth,
@@ -178,9 +178,11 @@ public sealed class ReplayRecorder
             maxArrowLength = maxArrowLength,
             inspectionDuration = inspectionDuration,
             gameVersion = gameVersion,
-            boardSnapshot = boardSnapshot,
             events = new List<ReplayEvent>(_events),
             finalTime = finalTime,
         };
+        if (boardSnapshot != null)
+            data.SetSnapshotArrows(boardSnapshot);
+        return data;
     }
 }

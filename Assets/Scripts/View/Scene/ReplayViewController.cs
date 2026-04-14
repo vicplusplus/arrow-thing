@@ -182,7 +182,7 @@ public sealed class ReplayViewController : MonoBehaviour
         _boardView.SetCameraController(_camCtrl);
 
         // Restore board from snapshot, or regenerate from seed if snapshot is absent
-        _boardSnapshot = _replayData.boardSnapshot;
+        _boardSnapshot = _replayData.GetSnapshotArrows();
         if (_boardSnapshot == null || _boardSnapshot.Count == 0)
         {
             Debug.Log(
@@ -208,7 +208,7 @@ public sealed class ReplayViewController : MonoBehaviour
                 _boardSnapshot.Add(new List<Cell>(arrow.Cells));
 
             // Persist the replay with snapshot locally so subsequent views load instantly
-            _replayData.boardSnapshot = _boardSnapshot;
+            _replayData.SetSnapshotArrows(_boardSnapshot);
             var lbManager = LeaderboardManager.Instance;
             if (lbManager != null)
             {

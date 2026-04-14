@@ -73,7 +73,8 @@ public static class ReplayVerifier
         if (replay == null)
             return VerificationResult.Invalid("Replay is null.");
 
-        if (replay.boardSnapshot == null || replay.boardSnapshot.Count == 0)
+        var snapshotArrows = replay.GetSnapshotArrows();
+        if (snapshotArrows == null || snapshotArrows.Count == 0)
             return VerificationResult.Invalid("Replay has no board snapshot.");
 
         if (replay.events == null || replay.events.Count == 0)
@@ -84,7 +85,7 @@ public static class ReplayVerifier
         var gen = BoardGeneration.FillBoardIncremental(board, replay.maxArrowLength, replay.seed);
         while (gen.MoveNext()) { }
 
-        var snapshotError = CompareSnapshot(board, replay.boardSnapshot);
+        var snapshotError = CompareSnapshot(board, snapshotArrows);
         if (snapshotError != null)
             return VerificationResult.Invalid(snapshotError);
 
