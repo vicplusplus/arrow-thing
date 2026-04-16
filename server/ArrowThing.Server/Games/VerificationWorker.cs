@@ -53,7 +53,16 @@ public class VerificationWorker : BackgroundService
                     continue;
                 }
 
-                await ProcessJob(db, (string)result!);
+                var job = DeserializeJob((string)result!);
+                try
+                {
+                    await ProcessJob(db, (string)result!);
+                }
+                finally
+                {
+                    if (job?.GameId is { Length: > 0 } gameId)
+                        await db.KeyDeleteAsync($"{GameService.LockKeyPrefix}{gameId}");
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -69,20 +78,28 @@ public class VerificationWorker : BackgroundService
         _logger.LogInformation("Verification worker stopped");
     }
 
-    private async Task ProcessJob(IDatabase redis, string jobJson)
+    private static VerificationJob? DeserializeJob(string jobJson)
     {
-        VerificationJob? job;
         try
         {
-            job = System.Text.Json.JsonSerializer.Deserialize<VerificationJob>(jobJson);
+            return System.Text.Json.JsonSerializer.Deserialize<VerificationJob>(jobJson);
         }
-        catch (Exception ex)
+        catch
         {
-            _logger.LogWarning(ex, "Failed to deserialize verification job: {Json}", jobJson);
+            return null;
+        }
+    }
+
+    private async Task ProcessJob(IDatabase redis, string jobJson)
+    {
+        var job = DeserializeJob(jobJson);
+        if (job == null)
+        {
+            _logger.LogWarning("Failed to deserialize verification job: {Json}", jobJson);
             return;
         }
 
-        if (job == null || string.IsNullOrEmpty(job.GameId))
+        if (string.IsNullOrEmpty(job.GameId))
         {
             _logger.LogWarning("Deserialized verification job is null or missing GameId");
             return;

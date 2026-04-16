@@ -25,6 +25,10 @@ public class CoopHub
     private readonly ConcurrentDictionary<string, LobbyRoom> _rooms = new();
     private bool _busSubscribed;
 
+    // Upper bound on a single inbound message. Coop traffic is small game-state
+    // deltas; anything larger is abusive and must not be buffered in memory.
+    internal const int MaxMessageBytes = 256 * 1024;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -230,13 +234,35 @@ public class CoopHub
             {
                 var ms = new MemoryStream();
                 WebSocketReceiveResult result;
+                var overflow = false;
                 do
                 {
                     result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
                     if (result.MessageType == WebSocketMessageType.Close)
                         break;
+                    if (ms.Length + result.Count > MaxMessageBytes)
+                    {
+                        overflow = true;
+                        break;
+                    }
                     ms.Write(buffer, 0, result.Count);
                 } while (!result.EndOfMessage);
+
+                if (overflow)
+                {
+                    _logger.LogWarning(
+                        "[CoopHub] Closing socket for user {UserId} on lobby {Code}: message exceeded {Max} bytes",
+                        userId,
+                        code,
+                        MaxMessageBytes
+                    );
+                    await socket.CloseAsync(
+                        WebSocketCloseStatus.MessageTooBig,
+                        "message too large",
+                        CancellationToken.None
+                    );
+                    break;
+                }
 
                 if (result.MessageType == WebSocketMessageType.Close)
                 {
