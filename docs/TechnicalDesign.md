@@ -289,11 +289,22 @@ This approach is necessary because arrows are polylines with bends — a rigid `
 
 ## Server Auth (`server/ArrowThing.Server/Auth/`)
 
-- **`AuthService`** — all auth operations. Returns `(Response?, StatusCode, Error?)` tuples. Endpoints mapped in `Program.cs`. Methods: `RegisterAsync`, `LoginAsync`, `GetMeAsync`, `UpdateDisplayNameAsync`, `VerifyCodeAsync`, `ResendVerificationAsync`, `ForgotPasswordAsync`, `ResetPasswordAsync`, `ChangePasswordAsync`, `ChangeEmailAsync`, `ConfirmEmailChangeAsync`, `LockAccountAsync`, `UnlockAccountAsync`. All email flows use 6-digit codes entered in-app (no browser pages).
+- **`AuthService`** — all auth operations. Returns `(Response?, StatusCode, Error?)` tuples. Endpoints mapped in `Program.cs`. Methods: `RegisterAsync`, `LoginAsync`, `GetMeAsync`, `UpdateDisplayNameAsync`, `VerifyCodeAsync`, `ResendVerificationAsync`, `ForgotPasswordAsync`, `ResetPasswordAsync`, `ChangePasswordAsync`, `ChangeEmailAsync`, `ConfirmEmailChangeAsync`, `VerifyDeviceAsync`, `LockAccountAsync`, `UnlockAccountAsync`. All email flows use 6-digit codes entered in-app (no browser pages).
 - **`JwtHelper`** — HMAC-SHA256 JWT generation (30-day expiry) with `sub` (user ID), `display_name`, and `security_stamp` claims. Validation parameters exposed for middleware.
 - **`PasswordHasher`** — static BCrypt hash/verify wrapper.
-- **`IEmailService` / `EmailService`** — transactional email via Resend HTTP API. Five methods: verification code, already-registered notification, password reset code, email change code, email change notification. API key stored in user secrets (`Resend:ApiKey`).
+- **`IEmailService` / `EmailService`** — transactional email via Resend HTTP API. Six methods: verification code, already-registered notification, password reset code, email change code, email change notification, new-device OTP code. API key stored in user secrets (`Resend:ApiKey`).
 - **`AuthDtos`** — C# records for all request/response types. JSON property names are camelCase via ASP.NET defaults.
+- **`UserDevice`** — table of trusted device fingerprints per user. Each row stores a bcrypt hash of the client's `X-Device-Id` header plus first/last-seen timestamps and the UA string. Rows older than 90 days (`LastSeenAt`) are treated as unknown.
+
+### New-device OTP
+
+On successful password verification, `LoginAsync` looks up the `X-Device-Id` header against the user's `UserDevices` (90-day `LastSeenAt` window, in-memory bcrypt scan — device count per user is expected to be single digits). Unknown device → generate a 6-digit code, email it, persist `DeviceOtpCode` / `DeviceOtpCodeExpiresAt` / `DeviceOtpPendingDeviceIdHash` on the user, return `{ requiresDeviceOtp: true }` without issuing a JWT. Same device → bump `LastSeenAt` and return the normal `{ token, displayName }`.
+
+The pending OTP is bound to the specific device id that requested it, so a concurrent login attempt from a different device can't invalidate Alice's code by triggering a new one. Rate-limited by `LastDeviceOtpEmailAt` with the 5-minute `EmailCooldown`.
+
+`VerifyDeviceAsync` (`POST /api/auth/verify-device`) re-verifies the password (defense in depth — the email code alone can't grant access), checks the OTP hash, and requires the same `X-Device-Id` that requested the code. On success it inserts the `UserDevice` row and issues a JWT. `VerifyCodeAsync` (the post-registration email verification) also auto-trusts the current device so the very first login after registration doesn't hit a second OTP round-trip. The `Phase 1B` migration adds the `UserDevices` table and four OTP columns on `Users`; existing users hit the OTP challenge on their next login.
+
+Client-side, `ApiClient.GetOrCreateDeviceId` generates a 256-bit random token, persists it in `PlayerPrefs` under `auth_device_id`, and attaches it as `X-Device-Id` to every auth request. `AccountManager` reuses the existing verify form for the new-device OTP branch (`_pendingDeviceVerificationPassword` flag steers `OnVerifyCode` to `VerifyDeviceAsync`).
 
 ### SecurityStamp Middleware
 

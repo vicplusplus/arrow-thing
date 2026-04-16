@@ -9,6 +9,7 @@ public class AppDbContext : DbContext
         : base(options) { }
 
     public DbSet<User> Users => Set<User>();
+    public DbSet<UserDevice> UserDevices => Set<UserDevice>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Score> Scores => Set<Score>();
     public DbSet<Lobby> Lobbies => Set<Lobby>();
@@ -28,6 +29,23 @@ public class AppDbContext : DbContext
 
             // Email is stored lowercase; app layer normalizes on write.
             entity.HasIndex(u => u.Email).IsUnique();
+        });
+
+        modelBuilder.Entity<UserDevice>(entity =>
+        {
+            entity.HasKey(d => d.Id);
+            entity.Property(d => d.DeviceIdHash).IsRequired();
+            entity.Property(d => d.FirstSeenAt).IsRequired();
+            entity.Property(d => d.LastSeenAt).IsRequired();
+            entity.Property(d => d.UserAgent).HasMaxLength(512);
+
+            entity
+                .HasOne(d => d.User)
+                .WithMany()
+                .HasForeignKey(d => d.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(d => d.UserId);
         });
 
         modelBuilder.Entity<Score>(entity =>

@@ -32,6 +32,15 @@ public class User
     // Account lock (admin-initiated)
     public DateTime? LockedAt { get; set; }
 
+    // New-device verification: email OTP challenge when logging in from an
+    // unrecognized device id. The pending OTP is tied to the specific device
+    // id that requested it so concurrent verifications from different devices
+    // don't clobber each other.
+    public string? DeviceOtpCode { get; set; }
+    public DateTime? DeviceOtpCodeExpiresAt { get; set; }
+    public string? DeviceOtpPendingDeviceIdHash { get; set; }
+    public DateTime? LastDeviceOtpEmailAt { get; set; }
+
     // Anti-cheat flagging
     public bool Flagged { get; set; }
     public string? FlagReason { get; set; }

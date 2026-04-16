@@ -15,6 +15,30 @@ public class ApiClient
     private const string TokenPrefKey = "auth_token";
     private const string DisplayNamePrefKey = "auth_display_name";
     private const string EmailPrefKey = "auth_email";
+    private const string DeviceIdPrefKey = "auth_device_id";
+
+    /// <summary>
+    /// Stable random identifier for this install. Sent as <c>X-Device-Id</c>
+    /// on auth requests so the server can skip the email OTP challenge after
+    /// the first successful verification. Generated on first access and
+    /// persisted in PlayerPrefs. Clearing PlayerPrefs forces a fresh device
+    /// verification on next login.
+    /// </summary>
+    public static string GetOrCreateDeviceId()
+    {
+        var existing = PlayerPrefs.GetString(DeviceIdPrefKey, "");
+        if (!string.IsNullOrEmpty(existing))
+            return existing;
+
+        var bytes = new byte[32];
+        using (var rng = System.Security.Cryptography.RandomNumberGenerator.Create())
+        {
+            rng.GetBytes(bytes);
+        }
+        var id = BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
+        PlayerPrefs.SetString(DeviceIdPrefKey, id);
+        return id;
+    }
 
     private readonly string _baseUrl;
 
@@ -567,6 +591,7 @@ public class ApiClient
             request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(jsonBody));
             request.downloadHandler = new DownloadHandlerBuffer();
             request.SetRequestHeader("Content-Type", "application/json");
+            request.SetRequestHeader("X-Device-Id", GetOrCreateDeviceId());
             request.timeout = 10;
 
             var op = request.SendWebRequest();
@@ -576,6 +601,12 @@ public class ApiClient
             if (request.result == UnityWebRequest.Result.Success)
             {
                 var response = JsonUtility.FromJson<AuthResponse>(request.downloadHandler.text);
+
+                // Device-OTP pending — don't save any credentials. Caller prompts
+                // the user for the 6-digit email code then calls VerifyDeviceAsync.
+                if (response.requiresDeviceOtp)
+                    return ApiResult<AuthResponse>.Ok(response);
+
                 Token = response.token;
                 DisplayName = response.displayName;
                 Email = email.Trim().ToLowerInvariant();
@@ -593,6 +624,28 @@ public class ApiClient
             Debug.LogWarning($"[ApiClient] Auth request failed: {e.Message}");
             return ApiResult<AuthResponse>.Fail(0, "Network error");
         }
+    }
+
+    /// <summary>
+    /// Completes the new-device email OTP challenge. Call after
+    /// <see cref="LoginAsync"/> returned <c>requiresDeviceOtp = true</c>.
+    /// On success, persists the JWT and marks this device as trusted.
+    /// </summary>
+    public async Task<ApiResult<AuthResponse>> VerifyDeviceAsync(
+        string email,
+        string password,
+        string code
+    )
+    {
+        var body = JsonUtility.ToJson(
+            new VerifyDeviceRequestDto
+            {
+                email = email,
+                password = password,
+                code = code,
+            }
+        );
+        return await PostAuthAsync("/api/auth/verify-device", body, email);
     }
 
     private async Task<ApiResult<MessageResponse>> PostMessageAsync(string path, string jsonBody)
@@ -845,6 +898,14 @@ public class ApiClient
     }
 
     [Serializable]
+    private class VerifyDeviceRequestDto
+    {
+        public string email;
+        public string password;
+        public string code;
+    }
+
+    [Serializable]
     private class SubmitScoreRequestDto
     {
         public string replayJson;
@@ -868,6 +929,13 @@ public class AuthResponse
 {
     public string token;
     public string displayName;
+
+    /// <summary>
+    /// Set by the server (as the only field on the response) when a login
+    /// from an unrecognized device must be confirmed via email OTP before a
+    /// JWT will be issued. When true, <see cref="token"/> is empty.
+    /// </summary>
+    public bool requiresDeviceOtp;
 }
 
 [Serializable]

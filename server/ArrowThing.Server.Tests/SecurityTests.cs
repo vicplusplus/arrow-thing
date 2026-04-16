@@ -76,6 +76,7 @@ public class SecurityTests : IClassFixture<TestFactory>, IDisposable
     {
         _factory = factory;
         _client = factory.CreateClient();
+        _client.DefaultRequestHeaders.Add("X-Device-Id", Guid.NewGuid().ToString("N"));
     }
 
     public void Dispose() => _client.Dispose();
