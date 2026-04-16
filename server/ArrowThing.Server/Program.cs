@@ -6,22 +6,14 @@ using ArrowThing.Server.Data;
 using ArrowThing.Server.Games;
 using ArrowThing.Server.Leaderboards;
 using ArrowThing.Server.Models;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using OpenTelemetry.Metrics;
 using Serilog;
 using Serilog.Sinks.Grafana.Loki;
 using StackExchange.Redis;
-
-static bool VerifyAdminKey(IConfiguration config, HttpContext ctx)
-{
-    var adminKey = config["Admin:ApiKey"];
-    if (string.IsNullOrEmpty(adminKey))
-        return false;
-
-    var provided = ctx.Request.Headers["X-Admin-Key"].FirstOrDefault() ?? "";
-    return PasswordHasher.FixedTimeEquals(provided, adminKey);
-}
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -140,8 +132,64 @@ builder.Services.AddSingleton<LeaderboardCache>(sp => new LeaderboardCache(
     sp.GetService<IConnectionMultiplexer>()
 ));
 
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
-builder.Services.AddAuthorization();
+// Production-secret guard. Must run after all config sources have been added so the
+// Jwt:Secret / Admin:ApiKey values are visible. Blocks deploys that boot with empty,
+// short, or known-dev-default secrets before any request can be served.
+if (builder.Environment.IsProduction())
+{
+    StartupSecretValidator.ValidateProductionSecret(
+        builder.Configuration["Jwt:Secret"],
+        name: "Jwt:Secret",
+        minLength: 32,
+        blocklist: ["local-dev-jwt-secret-not-for-production"]
+    );
+    StartupSecretValidator.ValidateProductionSecret(
+        builder.Configuration["Admin:ApiKey"],
+        name: "Admin:ApiKey",
+        minLength: 16,
+        blocklist: ["local-dev-admin-key"]
+    );
+}
+
+// Trust the X-Forwarded-Proto / X-Forwarded-For headers from nginx so
+// UseHttpsRedirection and GetClientIp see the real client-side values. The
+// known-proxy allowlist is empty (we clear it) because the request chain in
+// production is Cloudflare → nginx → Kestrel, all on the same host network.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedFor;
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
+if (!builder.Environment.IsDevelopment())
+{
+    builder.Services.AddHsts(options =>
+    {
+        options.MaxAge = TimeSpan.FromDays(365);
+        options.IncludeSubDomains = true;
+        options.Preload = true;
+    });
+}
+
+builder
+    .Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer()
+    .AddScheme<AuthenticationSchemeOptions, AdminKeyAuthenticationHandler>(
+        AdminKeyAuthenticationHandler.SchemeName,
+        _ => { }
+    );
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(
+        AdminKeyAuthenticationHandler.SchemeName,
+        policy =>
+            policy
+                .AddAuthenticationSchemes(AdminKeyAuthenticationHandler.SchemeName)
+                .RequireAuthenticatedUser()
+    );
+});
 
 // Configure JWT validation after all config sources are registered
 builder
@@ -166,6 +214,15 @@ using (var scope = app.Services.CreateScope())
 {
     var hub = app.Services.GetRequiredService<CoopHub>();
     await hub.EnsureSubscribedAsync();
+}
+
+// Trust proxy headers before any middleware that cares about scheme/IP.
+app.UseForwardedHeaders();
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts();
+    app.UseHttpsRedirection();
 }
 
 app.UseSerilogRequestLogging(opts =>
@@ -393,111 +450,98 @@ app.MapPost(
 
 // Admin endpoints (protected by API key, not JWT)
 app.MapPost(
-    "/api/admin/lock-account",
-    async (LockAccountRequest request, AuthService auth, IConfiguration config, HttpContext ctx) =>
-    {
-        if (!VerifyAdminKey(config, ctx))
-            return Results.Json(new { error = "Unauthorized." }, statusCode: 401);
-
-        var (response, status, error) = await auth.LockAccountAsync(request, GetClientIp(ctx));
-        return response != null
-            ? Results.Ok(response)
-            : Results.Json(new { error }, statusCode: status);
-    }
-);
+        "/api/admin/lock-account",
+        async (LockAccountRequest request, AuthService auth, HttpContext ctx) =>
+        {
+            var (response, status, error) = await auth.LockAccountAsync(request, GetClientIp(ctx));
+            return response != null
+                ? Results.Ok(response)
+                : Results.Json(new { error }, statusCode: status);
+        }
+    )
+    .RequireAuthorization(AdminKeyAuthenticationHandler.SchemeName);
 
 app.MapPost(
-    "/api/admin/unlock-account",
-    async (LockAccountRequest request, AuthService auth, IConfiguration config, HttpContext ctx) =>
-    {
-        if (!VerifyAdminKey(config, ctx))
-            return Results.Json(new { error = "Unauthorized." }, statusCode: 401);
-
-        var (response, status, error) = await auth.UnlockAccountAsync(request, GetClientIp(ctx));
-        return response != null
-            ? Results.Ok(response)
-            : Results.Json(new { error }, statusCode: status);
-    }
-);
+        "/api/admin/unlock-account",
+        async (LockAccountRequest request, AuthService auth, HttpContext ctx) =>
+        {
+            var (response, status, error) = await auth.UnlockAccountAsync(
+                request,
+                GetClientIp(ctx)
+            );
+            return response != null
+                ? Results.Ok(response)
+                : Results.Json(new { error }, statusCode: status);
+        }
+    )
+    .RequireAuthorization(AdminKeyAuthenticationHandler.SchemeName);
 
 // Admin: score moderation
 app.MapGet(
-    "/api/admin/flagged-users",
-    async (AppDbContext db, IConfiguration config, HttpContext ctx) =>
-    {
-        if (!VerifyAdminKey(config, ctx))
-            return Results.Json(new { error = "Unauthorized." }, statusCode: 401);
+        "/api/admin/flagged-users",
+        async (AppDbContext db) =>
+        {
+            var users = await db
+                .Users.Where(u => u.Flagged)
+                .OrderByDescending(u => u.CreatedAt)
+                .Select(u => new
+                {
+                    u.Id,
+                    u.Email,
+                    u.DisplayName,
+                    u.FlagReason,
+                    u.FlaggedAt,
+                    u.FlagTriggerSeed,
+                    u.FlagTriggerBoardWidth,
+                    u.FlagTriggerBoardHeight,
+                    u.FlagTriggerGameId,
+                    u.CreatedAt,
+                })
+                .ToListAsync();
 
-        var users = await db
-            .Users.Where(u => u.Flagged)
-            .OrderByDescending(u => u.CreatedAt)
-            .Select(u => new
-            {
-                u.Id,
-                u.Email,
-                u.DisplayName,
-                u.FlagReason,
-                u.FlaggedAt,
-                u.FlagTriggerSeed,
-                u.FlagTriggerBoardWidth,
-                u.FlagTriggerBoardHeight,
-                u.FlagTriggerGameId,
-                u.CreatedAt,
-            })
-            .ToListAsync();
-
-        return Results.Ok(users);
-    }
-);
+            return Results.Ok(users);
+        }
+    )
+    .RequireAuthorization(AdminKeyAuthenticationHandler.SchemeName);
 
 app.MapPost(
-    "/api/admin/users/{id:guid}/unflag",
-    async (Guid id, AppDbContext db, IConfiguration config, HttpContext ctx) =>
-    {
-        if (!VerifyAdminKey(config, ctx))
-            return Results.Json(new { error = "Unauthorized." }, statusCode: 401);
+        "/api/admin/users/{id:guid}/unflag",
+        async (Guid id, AppDbContext db) =>
+        {
+            var user = await db.Users.FindAsync(id);
+            if (user == null)
+                return Results.NotFound();
 
-        var user = await db.Users.FindAsync(id);
-        if (user == null)
-            return Results.NotFound();
-
-        user.Flagged = false;
-        user.FlagReason = null;
-        user.FlaggedAt = null;
-        user.FlagTriggerSeed = null;
-        user.FlagTriggerBoardWidth = null;
-        user.FlagTriggerBoardHeight = null;
-        user.FlagTriggerGameId = null;
-        await db.SaveChangesAsync();
-        return Results.Ok(new { message = "User unflagged." });
-    }
-);
+            user.Flagged = false;
+            user.FlagReason = null;
+            user.FlaggedAt = null;
+            user.FlagTriggerSeed = null;
+            user.FlagTriggerBoardWidth = null;
+            user.FlagTriggerBoardHeight = null;
+            user.FlagTriggerGameId = null;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { message = "User unflagged." });
+        }
+    )
+    .RequireAuthorization(AdminKeyAuthenticationHandler.SchemeName);
 
 app.MapPost(
-    "/api/admin/scores/{id:guid}/remove",
-    async (
-        Guid id,
-        AppDbContext db,
-        LeaderboardCache cache,
-        IConfiguration config,
-        HttpContext ctx
-    ) =>
-    {
-        if (!VerifyAdminKey(config, ctx))
-            return Results.Json(new { error = "Unauthorized." }, statusCode: 401);
+        "/api/admin/scores/{id:guid}/remove",
+        async (Guid id, AppDbContext db, LeaderboardCache cache) =>
+        {
+            var score = await db.Scores.FindAsync(id);
+            if (score == null)
+                return Results.NotFound();
 
-        var score = await db.Scores.FindAsync(id);
-        if (score == null)
-            return Results.NotFound();
-
-        var width = score.BoardWidth;
-        var height = score.BoardHeight;
-        db.Scores.Remove(score);
-        await db.SaveChangesAsync();
-        cache.Invalidate(width, height);
-        return Results.Ok(new { message = "Score removed." });
-    }
-);
+            var width = score.BoardWidth;
+            var height = score.BoardHeight;
+            db.Scores.Remove(score);
+            await db.SaveChangesAsync();
+            cache.Invalidate(width, height);
+            return Results.Ok(new { message = "Score removed." });
+        }
+    )
+    .RequireAuthorization(AdminKeyAuthenticationHandler.SchemeName);
 
 // Score submission
 app.MapPost(

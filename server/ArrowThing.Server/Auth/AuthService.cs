@@ -1,6 +1,7 @@
 using ArrowThing.Server.Data;
 using ArrowThing.Server.Models;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace ArrowThing.Server.Auth;
 
@@ -503,7 +504,9 @@ public class AuthService
         if (!PasswordHasher.VerifyOtp(request.Code.Trim(), user.PendingEmailCode))
             return (null, 400, "Invalid or expired confirmation code.");
 
-        // Check the new email hasn't been taken since the change was requested
+        // Fast-path check: the new email hasn't been taken since the change was requested.
+        // This is advisory only — the unique index on Users.Email is the authoritative guard
+        // against a concurrent confirmation winning between this check and SaveChangesAsync.
         if (await _db.Users.AnyAsync(u => u.Email == user.PendingEmail && u.Id != user.Id))
         {
             user.PendingEmail = null;
@@ -519,7 +522,23 @@ public class AuthService
         user.PendingEmail = null;
         user.PendingEmailCode = null;
         user.PendingEmailCodeExpiresAt = null;
-        await _db.SaveChangesAsync();
+
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            // Concurrent confirmation won the race; reload the row, clear the pending
+            // state, and report the conflict. The unique index on Users.Email ensures
+            // exactly one confirmation succeeds.
+            await _db.Entry(user).ReloadAsync();
+            user.PendingEmail = null;
+            user.PendingEmailCode = null;
+            user.PendingEmailCodeExpiresAt = null;
+            await _db.SaveChangesAsync();
+            return (null, 409, "An account with this email already exists.");
+        }
 
         await _audit.LogAsync(AuditEvent.ConfirmEmailChange, user.Id, user.Email, ip, oldEmail);
 
@@ -617,6 +636,10 @@ public class AuthService
             null
         );
     }
+
+    // Npgsql raises SQLSTATE 23505 on unique-constraint violation.
+    private static bool IsUniqueViolation(DbUpdateException ex) =>
+        ex.InnerException is PostgresException pg && pg.SqlState == "23505";
 
     private static bool IsValidEmail(string email)
     {

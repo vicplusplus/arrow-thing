@@ -19,8 +19,12 @@ public class GameService
     private const int HeavyBoardAreaThreshold = 2500; // ~50x50
     private const int MaxStandardQueueDepth = 100;
     private const int MaxHeavyQueueDepth = 20;
-    internal const string StandardQueueKey = "verify:queue:standard";
-    internal const string HeavyQueueKey = "verify:queue:heavy";
+    public const string StandardQueueKey = "verify:queue:standard";
+    public const string HeavyQueueKey = "verify:queue:heavy";
+    public const string LockKeyPrefix = "verify:lock:";
+
+    // Covers worst-case heavy-board verification with headroom.
+    private static readonly TimeSpan LockTtl = TimeSpan.FromMinutes(10);
 
     public GameService(
         AppDbContext db,
@@ -179,9 +183,33 @@ public class GameService
         var maxDepth = isHeavy ? MaxHeavyQueueDepth : MaxStandardQueueDepth;
 
         var redisDb = _redis.GetDatabase();
+
+        // Idempotency guard: a concurrent or retried submission with the same gameId
+        // must not be enqueued twice. SET NX claims the lock atomically; if it's
+        // already held, the original submission is already in flight and we return
+        // the same pending response without pushing a duplicate job.
+        var lockKey = $"{LockKeyPrefix}{gameId}";
+        var lockAcquired = await redisDb.StringSetAsync(
+            lockKey,
+            userId.ToString(),
+            LockTtl,
+            When.NotExists
+        );
+        if (!lockAcquired)
+        {
+            return (
+                new SubmitAcceptedResponse { GameId = gameId.ToString(), Status = "pending" },
+                202,
+                null
+            );
+        }
+
         var queueLength = await redisDb.ListLengthAsync(queueKey);
         if (queueLength >= maxDepth)
+        {
+            await redisDb.KeyDeleteAsync(lockKey);
             return (null, 503, "Server busy, try again later.");
+        }
 
         var job = new
         {

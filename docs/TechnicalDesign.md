@@ -319,6 +319,15 @@ Infrastructure services (`loki`, `prometheus`, `grafana`) run as Docker containe
 
 The game's board state is fully observable and deterministic. Clearability is computable, and optimal solve order is trivially derivable — a bot can auto-solve any board instantly. No amount of server-side validation can prove a human was in the loop. The anti-cheat system targets **casual cheaters** (browser console, memory editing, trivial scripts), not sophisticated bots. A determined attacker with domain knowledge can always cheat; this is accepted.
 
+### Trust Boundary
+
+**The client is untrusted.** Every field of a submitted `ReplayData` — `gameId`, `seed`, `boardWidth`, `boardHeight`, event list, event timestamps — must be treated as attacker-controlled and validated or re-derived before it touches the leaderboard. Concretely:
+
+- `VerificationWorker` re-simulates the board from `seed` using `PortableRandom` and rejects any replay whose events don't match. The verified solve time is computed from verified event timestamps, not taken from `ReplayData.ComputedSolveElapsed`.
+- The idempotency key for a score submission is `gameId`, guarded by a Redis `SET NX` lock (`verify:lock:{gameId}`) so a client retry cannot enqueue two verification jobs for the same replay.
+- Locally-stored replay snapshots (top-50 gzipped on the server, regenerated-from-seed for the rest) exist only for playback UX. They are never trust anchors; the server regenerates deterministically whenever a score's validity is in question.
+- JWTs are signed with a Production secret that is length-checked and blocklist-checked at startup (`ValidateProductionSecret` in `Program.cs`). Admin endpoints use a separate `AdminKey` authentication scheme with a constant-time comparison.
+
 ### Architecture
 
 Score submission is async. The API performs cheap pre-verification checks synchronously, enqueues the job to Redis, and returns 202. A dedicated `VerificationWorker` process consumes the queue, runs full board regeneration + clear simulation, persists verified scores, and writes results back to Redis for client polling.
