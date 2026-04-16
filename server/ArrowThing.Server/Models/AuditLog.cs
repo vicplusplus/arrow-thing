@@ -27,4 +27,6 @@ public static class AuditEvent
     public const string UnlockAccount = "unlock_account";
     public const string UpdateDisplayName = "update_display_name";
     public const string SessionInvalidated = "session_invalidated";
+    public const string DeviceOtpRequested = "device_otp_requested";
+    public const string DeviceVerified = "device_verified";
 }

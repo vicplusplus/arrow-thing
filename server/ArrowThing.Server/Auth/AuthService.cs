@@ -9,8 +9,11 @@ public class AuthService
 {
     private static readonly TimeSpan VerificationCodeLifetime = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan PasswordResetCodeLifetime = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan DeviceOtpCodeLifetime = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan DeviceMaxAge = TimeSpan.FromDays(90);
     private static readonly TimeSpan EmailCooldown = TimeSpan.FromMinutes(5);
     private const int MaxFailedLoginAttempts = 5;
+    private const int DeviceCountWarnThreshold = 10;
     private static readonly TimeSpan LoginLockoutDuration = TimeSpan.FromMinutes(15);
 
     private readonly AppDbContext _db;
@@ -115,9 +118,11 @@ public class AuthService
         return (new MeResponse(user.Email, user.DisplayName), 200, null);
     }
 
-    public async Task<(AuthResponse? Response, int StatusCode, string? Error)> LoginAsync(
+    public async Task<(object? Response, int StatusCode, string? Error)> LoginAsync(
         LoginRequest request,
-        string? ip = null
+        string? ip = null,
+        string? deviceId = null,
+        string? userAgent = null
     )
     {
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
@@ -165,11 +170,218 @@ public class AuthService
             await _db.SaveChangesAsync();
         }
 
+        // New-device OTP gate. If the client hasn't identified itself with a
+        // known device id, send an email code and respond with a pending
+        // challenge instead of issuing a JWT.
+        var deviceResult = await TryMatchDeviceAsync(user, deviceId);
+        if (!deviceResult.Matched)
+        {
+            var sendResult = await EnsureDeviceOtpSentAsync(user, deviceId, ip);
+            if (sendResult.StatusCode != 200)
+                return (null, sendResult.StatusCode, sendResult.Error);
+            return (new DeviceOtpRequiredResponse(), 200, null);
+        }
+
+        // Known device — bump LastSeenAt so it stays within the 90-day window.
+        var now = DateTime.UtcNow;
+        await _db
+            .UserDevices.Where(d => d.Id == deviceResult.MatchedDeviceId)
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.LastSeenAt, now));
+
         await _audit.LogAsync(AuditEvent.Login, user.Id, user.Email, ip);
 
         var token = _jwt.GenerateToken(user);
         return (new AuthResponse(token, user.DisplayName), 200, null);
     }
+
+    /// <summary>
+    /// Completes the new-device OTP challenge. Requires the same password as
+    /// the original login (defense in depth — the email code alone shouldn't
+    /// grant access) and must come from the exact device id that requested
+    /// the OTP. On success, records the device as known and issues a JWT.
+    /// </summary>
+    public async Task<(AuthResponse? Response, int StatusCode, string? Error)> VerifyDeviceAsync(
+        VerifyDeviceRequest request,
+        string? ip = null,
+        string? deviceId = null,
+        string? userAgent = null
+    )
+    {
+        if (
+            string.IsNullOrWhiteSpace(request.Email)
+            || string.IsNullOrWhiteSpace(request.Password)
+            || string.IsNullOrWhiteSpace(request.Code)
+        )
+            return (null, 400, "Email, password, and code are required.");
+
+        if (string.IsNullOrWhiteSpace(deviceId))
+            return (null, 400, "Missing device id.");
+
+        var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == normalizedEmail);
+
+        if (
+            user == null
+            || !PasswordHasher.Verify(request.Password, user.PasswordHash)
+            || !user.IsEmailVerified
+        )
+        {
+            await _audit.LogAsync(AuditEvent.LoginFailed, user?.Id, normalizedEmail, ip);
+            return (null, 401, "Invalid email or password.");
+        }
+
+        if (user.IsLocked)
+            return (null, 403, "Account is locked. Please contact support on Discord.");
+
+        if (user.DeviceOtpCode == null || user.DeviceOtpPendingDeviceIdHash == null)
+            return (null, 400, "No pending device verification.");
+
+        if (user.DeviceOtpCodeExpiresAt < DateTime.UtcNow)
+        {
+            user.DeviceOtpCode = null;
+            user.DeviceOtpCodeExpiresAt = null;
+            user.DeviceOtpPendingDeviceIdHash = null;
+            await _db.SaveChangesAsync();
+            return (null, 400, "Verification code has expired. Please log in again.");
+        }
+
+        // The pending OTP is bound to the specific device id that requested
+        // it. A different device can't redeem this code — it has to request
+        // its own.
+        if (!PasswordHasher.VerifyOtp(deviceId!, user.DeviceOtpPendingDeviceIdHash))
+            return (null, 400, "Invalid or expired verification code.");
+
+        if (!PasswordHasher.VerifyOtp(request.Code.Trim(), user.DeviceOtpCode))
+            return (null, 400, "Invalid or expired verification code.");
+
+        await EnsureDeviceTrustedAsync(user, deviceId!, userAgent);
+
+        user.DeviceOtpCode = null;
+        user.DeviceOtpCodeExpiresAt = null;
+        user.DeviceOtpPendingDeviceIdHash = null;
+        await _db.SaveChangesAsync();
+
+        await _audit.LogAsync(AuditEvent.DeviceVerified, user.Id, user.Email, ip);
+
+        // Operator visibility: surface abusive device accumulation without
+        // blocking legitimate power users.
+        var deviceCount = await _db.UserDevices.CountAsync(d => d.UserId == user.Id);
+        if (deviceCount >= DeviceCountWarnThreshold)
+        {
+            _logger.LogWarning(
+                "User {UserId} has {Count} verified devices — review for abuse",
+                user.Id,
+                deviceCount
+            );
+        }
+
+        var token = _jwt.GenerateToken(user);
+        return (new AuthResponse(token, user.DisplayName), 200, null);
+    }
+
+    /// <summary>
+    /// Idempotent: registers the device for this user if it isn't already, or
+    /// bumps LastSeenAt if it is. Caller is responsible for calling
+    /// <c>SaveChanges</c>.
+    /// </summary>
+    private async Task EnsureDeviceTrustedAsync(User user, string deviceId, string? userAgent)
+    {
+        var now = DateTime.UtcNow;
+        var devices = await _db
+            .UserDevices.Where(d => d.UserId == user.Id)
+            .Select(d => new { d.Id, d.DeviceIdHash })
+            .ToListAsync();
+
+        foreach (var d in devices)
+        {
+            if (PasswordHasher.VerifyOtp(deviceId, d.DeviceIdHash))
+            {
+                await _db
+                    .UserDevices.Where(x => x.Id == d.Id)
+                    .ExecuteUpdateAsync(s => s.SetProperty(x => x.LastSeenAt, now));
+                return;
+            }
+        }
+
+        _db.UserDevices.Add(
+            new UserDevice
+            {
+                Id = Guid.NewGuid(),
+                UserId = user.Id,
+                DeviceIdHash = PasswordHasher.HashOtp(deviceId),
+                FirstSeenAt = now,
+                LastSeenAt = now,
+                UserAgent = Truncate(userAgent, 512),
+            }
+        );
+    }
+
+    private async Task<(bool Matched, Guid? MatchedDeviceId)> TryMatchDeviceAsync(
+        User user,
+        string? deviceId
+    )
+    {
+        if (string.IsNullOrEmpty(deviceId))
+            return (false, null);
+
+        var cutoff = DateTime.UtcNow - DeviceMaxAge;
+        // Fetch the user's active (non-expired) devices. Count is bounded by
+        // human behavior (single digits typically), so an in-memory VerifyOtp
+        // scan is cheaper than storing a lookup index.
+        var devices = await _db
+            .UserDevices.Where(d => d.UserId == user.Id && d.LastSeenAt >= cutoff)
+            .Select(d => new { d.Id, d.DeviceIdHash })
+            .ToListAsync();
+
+        foreach (var d in devices)
+        {
+            if (PasswordHasher.VerifyOtp(deviceId, d.DeviceIdHash))
+                return (true, d.Id);
+        }
+        return (false, null);
+    }
+
+    private async Task<(int StatusCode, string? Error)> EnsureDeviceOtpSentAsync(
+        User user,
+        string? deviceId,
+        string? ip
+    )
+    {
+        if (
+            user.LastDeviceOtpEmailAt.HasValue
+            && DateTime.UtcNow - user.LastDeviceOtpEmailAt.Value < EmailCooldown
+        )
+        {
+            return (429, "Please wait a few minutes before requesting another code.");
+        }
+
+        var code = PasswordHasher.GenerateSecureCode();
+        user.DeviceOtpCode = PasswordHasher.HashOtp(code);
+        user.DeviceOtpCodeExpiresAt = DateTime.UtcNow.Add(DeviceOtpCodeLifetime);
+        user.DeviceOtpPendingDeviceIdHash = string.IsNullOrEmpty(deviceId)
+            ? null
+            : PasswordHasher.HashOtp(deviceId);
+        user.LastDeviceOtpEmailAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        await _audit.LogAsync(AuditEvent.DeviceOtpRequested, user.Id, user.Email, ip);
+
+        try
+        {
+            await _email.SendDeviceOtpCodeAsync(user.Email, code);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send device OTP email");
+        }
+
+        return (200, null);
+    }
+
+    private static string? Truncate(string? s, int max) =>
+        s == null ? null
+        : s.Length <= max ? s
+        : s[..max];
 
     public async Task<(
         DisplayNameResponse? Response,
@@ -236,7 +448,9 @@ public class AuthService
 
     public async Task<(AuthResponse? Response, int StatusCode, string? Error)> VerifyCodeAsync(
         VerifyCodeRequest request,
-        string? ip = null
+        string? ip = null,
+        string? deviceId = null,
+        string? userAgent = null
     )
     {
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Code))
@@ -262,6 +476,13 @@ public class AuthService
         user.EmailVerifiedAt = DateTime.UtcNow;
         user.VerificationCode = null;
         user.VerificationCodeExpiresAt = null;
+
+        // The user just proved ownership of their email from this device, so
+        // auto-trust it. Subsequent logins from the same deviceId skip the
+        // new-device OTP challenge.
+        if (!string.IsNullOrEmpty(deviceId))
+            await EnsureDeviceTrustedAsync(user, deviceId, userAgent);
+
         await _db.SaveChangesAsync();
 
         await _audit.LogAsync(AuditEvent.VerifyEmail, user.Id, user.Email, ip);

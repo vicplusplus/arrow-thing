@@ -293,7 +293,28 @@ app.MapPost(
     "/api/auth/login",
     async (LoginRequest request, AuthService auth, HttpContext ctx) =>
     {
-        var (response, status, error) = await auth.LoginAsync(request, GetClientIp(ctx));
+        var (response, status, error) = await auth.LoginAsync(
+            request,
+            GetClientIp(ctx),
+            deviceId: ctx.Request.Headers["X-Device-Id"].FirstOrDefault(),
+            userAgent: ctx.Request.Headers["User-Agent"].FirstOrDefault()
+        );
+        return response != null
+            ? Results.Json(response, statusCode: status)
+            : Results.Json(new { error }, statusCode: status);
+    }
+);
+
+app.MapPost(
+    "/api/auth/verify-device",
+    async (VerifyDeviceRequest request, AuthService auth, HttpContext ctx) =>
+    {
+        var (response, status, error) = await auth.VerifyDeviceAsync(
+            request,
+            GetClientIp(ctx),
+            deviceId: ctx.Request.Headers["X-Device-Id"].FirstOrDefault(),
+            userAgent: ctx.Request.Headers["User-Agent"].FirstOrDefault()
+        );
         return response != null
             ? Results.Ok(response)
             : Results.Json(new { error }, statusCode: status);
@@ -339,7 +360,12 @@ app.MapPost(
     "/api/auth/verify-code",
     async (VerifyCodeRequest request, AuthService auth, HttpContext ctx) =>
     {
-        var (response, status, error) = await auth.VerifyCodeAsync(request, GetClientIp(ctx));
+        var (response, status, error) = await auth.VerifyCodeAsync(
+            request,
+            GetClientIp(ctx),
+            deviceId: ctx.Request.Headers["X-Device-Id"].FirstOrDefault(),
+            userAgent: ctx.Request.Headers["User-Agent"].FirstOrDefault()
+        );
         return response != null
             ? Results.Ok(response)
             : Results.Json(new { error }, statusCode: status);

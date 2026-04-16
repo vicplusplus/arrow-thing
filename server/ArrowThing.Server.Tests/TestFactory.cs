@@ -137,4 +137,10 @@ public class FakeEmailService : IEmailService
         Notifications.Add(toOldEmail);
         return Task.CompletedTask;
     }
+
+    public Task SendDeviceOtpCodeAsync(string toEmail, string code)
+    {
+        SentEmails.Add(new CapturedEmail(toEmail, code, "device-otp"));
+        return Task.CompletedTask;
+    }
 }

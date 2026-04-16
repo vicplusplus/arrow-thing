@@ -83,6 +83,12 @@ public class AccountManager
     private string _pendingNewEmail;
     private string _pendingResetEmail;
 
+    // When set, the verify form is completing a new-device OTP challenge
+    // (Phase 1B) and OnVerifyCode should call VerifyDeviceAsync instead of
+    // the post-registration VerifyCodeAsync. The password is retained in
+    // memory only until the OTP is entered.
+    private string _pendingDeviceVerificationPassword;
+
     private readonly ConfirmModal _logoutModal;
 
     public AccountManager(VisualElement settingsRoot, VisualElement logoutModalRoot)
@@ -276,6 +282,7 @@ public class AccountManager
         HideAllForms();
         _loginEmail.Value = "";
         _loginPassword.Value = "";
+        _pendingDeviceVerificationPassword = null;
         SetVisible(_loginForm, true);
         UpdateStatusLabel();
         FormChanged?.Invoke(_loginEmail.Input);
@@ -381,10 +388,25 @@ public class AccountManager
     private async void OnLogin()
     {
         ClearErrors();
-        var result = await _api.LoginAsync(_loginEmail.Value, _loginPassword.Value);
+        var email = _loginEmail.Value;
+        var password = _loginPassword.Value;
+        var result = await _api.LoginAsync(email, password);
 
         if (result.Success)
         {
+            if (result.Data != null && result.Data.requiresDeviceOtp)
+            {
+                // Unknown device — fall through to the verify form, but configure
+                // it to complete a device OTP instead of the post-registration
+                // email verification.
+                _pendingVerificationEmail = email;
+                _pendingDeviceVerificationPassword = password;
+                _verifyMessage.text =
+                    $"We sent a 6-digit code to {email} because this device isn't recognized.";
+                ShowVerifyForm();
+                return;
+            }
+
             SyncServerDisplayName();
             ShowAccountInfo();
         }
@@ -424,10 +446,23 @@ public class AccountManager
         if (string.IsNullOrEmpty(_pendingVerificationEmail))
             return;
 
-        var result = await _api.VerifyCodeAsync(_pendingVerificationEmail, _verifyCode.Value);
+        ApiResult<AuthResponse> result;
+        if (!string.IsNullOrEmpty(_pendingDeviceVerificationPassword))
+        {
+            result = await _api.VerifyDeviceAsync(
+                _pendingVerificationEmail,
+                _pendingDeviceVerificationPassword,
+                _verifyCode.Value
+            );
+        }
+        else
+        {
+            result = await _api.VerifyCodeAsync(_pendingVerificationEmail, _verifyCode.Value);
+        }
 
         if (result.Success)
         {
+            _pendingDeviceVerificationPassword = null;
             SyncServerDisplayName();
             ShowAccountInfo();
         }

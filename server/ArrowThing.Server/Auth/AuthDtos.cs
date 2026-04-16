@@ -20,7 +20,16 @@ public record ConfirmEmailChangeRequest(string Email, string Code);
 
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 
+public record VerifyDeviceRequest(string Email, string Password, string Code);
+
 public record AuthResponse(string Token, string DisplayName);
+
+/// <summary>
+/// Returned from <c>/api/auth/login</c> when the supplied <c>X-Device-Id</c>
+/// isn't recognized for this user. The client prompts for the 6-digit email
+/// code and then calls <c>/api/auth/verify-device</c>.
+/// </summary>
+public record DeviceOtpRequiredResponse(bool RequiresDeviceOtp = true);
 
 public record DisplayNameResponse(string DisplayName);
 

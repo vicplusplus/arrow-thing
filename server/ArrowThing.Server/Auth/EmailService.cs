@@ -81,6 +81,19 @@ public class EmailService : IEmailService
         await SendAsync(toOldEmail, "Arrow Thing: email change requested", html);
     }
 
+    public async Task SendDeviceOtpCodeAsync(string toEmail, string code)
+    {
+        var html = $"""
+            <h2>New-device login attempt</h2>
+            <p>Someone tried to log in to your Arrow Thing account from a device we don't recognize. If that was you, enter this code in the game to complete the sign-in:</p>
+            <p style="font-size:32px;font-weight:bold;letter-spacing:6px;text-align:center;padding:16px;background:#2a2a3e;border-radius:8px;color:#7c8aff">{code}</p>
+            <p>This code expires in 10 minutes.</p>
+            <p>If this wasn't you, you can ignore this email and consider changing your password. Someone may know it.</p>
+            """;
+
+        await SendAsync(toEmail, "Arrow Thing: new-device sign-in code", html);
+    }
+
     private async Task SendAsync(string to, string subject, string html)
     {
         if (_apiKey == null || _fromAddress == null)
