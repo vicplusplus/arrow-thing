@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ArrowThing.Server.Data;
 using ArrowThing.Server.Models;
+using Microsoft.EntityFrameworkCore;
 using StackExchange.Redis;
 
 namespace ArrowThing.Server.Coop;
@@ -152,10 +153,30 @@ public class LobbyGenerationWorker : BackgroundService
 
                 await snapshots.SaveAsync(lobby.Id, bytes, LobbySnapshotFormat.BinaryV1);
 
-                lobby.Status = LobbyStatus.Active;
-                lobby.GeneratedAt = DateTime.UtcNow;
-                lobby.LastActivityAt = DateTime.UtcNow;
-                await db.SaveChangesAsync();
+                // Atomic transition: only promote to Active if the row is still
+                // Generating. Using ExecuteUpdate lets Postgres enforce the Status
+                // check in the same UPDATE; EF Core's tracked-entity path issues a
+                // full UPDATE keyed only on Id, which would overwrite Status=Deleted
+                // and undelete the lobby under a concurrent soft-delete.
+                var now = DateTime.UtcNow;
+                var rowsAffected = await db
+                    .Lobbies.Where(l => l.Id == lobby.Id && l.Status == LobbyStatus.Generating)
+                    .ExecuteUpdateAsync(
+                        s =>
+                            s.SetProperty(l => l.Status, LobbyStatus.Active)
+                                .SetProperty(l => l.GeneratedAt, now)
+                                .SetProperty(l => l.LastActivityAt, now),
+                        ct
+                    );
+
+                if (rowsAffected == 0)
+                {
+                    _logger.LogInformation(
+                        "[Gen] Lobby {Id} transitioned out of Generating during generation; discarding result",
+                        lobby.Id
+                    );
+                    return;
+                }
 
                 await _progressBus.PublishCompleteAsync(lobby.Code);
 
