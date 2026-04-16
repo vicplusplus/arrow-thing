@@ -1,206 +1,160 @@
-# TODO — Codebase Improvement Initiative
+# TODO — Phase 1B: new-device OTP
 
-Cross-cutting improvement pass split into phased PRs. Each phase is its own PR.
-The active phase for this branch (`claude/review-codebase-improvements-Pw341`) is **Phase 1: Security**.
+Continuation of the codebase improvement pass (see Phase 1 PR #101). This phase
+adds a second factor on login for previously-unseen devices.
 
-## Active — Phase 1: Security
+## Feature
 
-### 1.1 Idempotent score submission
+On successful password login, if the client has never completed OTP verification
+for this user from this device, the server:
 
-**Problem.** `GameService.SubmitReplayAsync` only dedupes against *verified* scores
-(`GameService.cs:107-131`). Between enqueue and completion, a client retry can
-enqueue the same `gameId` twice, producing two verification jobs.
+- does **not** issue a JWT;
+- emails a 6-digit code (reusing the existing `IEmailService` + `PasswordHasher`
+  OTP infrastructure);
+- responds with `{ requiresDeviceOtp: true }`.
 
-**Approach.**
-- Before enqueue, attempt `SET verify:lock:{gameId} 1 NX EX {ttl}` in Redis.
-- On success: enqueue job as today.
-- On failure (lock already held): return the same `202 pending` response without enqueueing.
-- TTL: 10 minutes (covers worst-case heavy-board verification).
-- `VerificationWorker` releases the lock after writing the result payload.
+The client prompts for the code and submits `POST /api/auth/verify-device`
+with `{ email, password, code, deviceId }`. On success, the server stores the
+device fingerprint (bcrypt hash with work factor 8 — same as other OTPs) and
+issues the JWT.
 
-**Why this layer.** Pre-verification is usually fast, but a client that retries on a
-timeout can hit the same race. The lock is cheap and doesn't require a schema
-migration.
+Rollout note: every existing user will hit the OTP challenge on their next
+login. That is accepted — no grandfathering.
 
-**Tests.**
-- Submit the same gameId twice → exactly one entry pushed to the queue.
-- Second submission returns the same `{ gameId, status: "pending" }` shape.
-- Lock is released after verification completes (both success and reject paths).
+## Device fingerprint
 
-### 1.2 Email-change race condition
+- Client generates a 256-bit random token on first login and persists it in
+  `PlayerPrefs` under key `arrowthing.deviceId`.
+- Client sends it on every login as `X-Device-Id` header (not in the JSON body,
+  so it's harder to log by accident).
+- Server never stores the raw value — only `PasswordHasher.HashOtp(deviceId)`
+  keyed on `UserId`. Looking up "does this device belong to this user" is
+  `UserDevices.AnyAsync(d => d.UserId == userId && VerifyOtp(deviceId, d.DeviceIdHash))`.
+  That's O(N) over the user's device list; acceptable since a user has O(1–10)
+  devices.
 
-**Problem.** `ConfirmEmailChangeAsync` (`AuthService.cs:505-514`) does a
-`AnyAsync(u => u.Email == …)` check before assigning `user.Email = pending`, with
-no transaction. Two users confirming a change to the same address can both pass
-the check and then race on SaveChanges.
+Design choice: not cookie-based. Cookies would require CORS credentials and CSRF
+handling — that's Phase 1C's problem, not this PR's. A localStorage / PlayerPrefs
+device ID in a custom header is a standard pattern and works on WebGL today.
 
-**Approach.** The DB already has a unique index on `Users.Email`
-(`AppDbContext.cs:30`). Catch `DbUpdateException` around the final
-`SaveChangesAsync` and map unique-constraint violations to a 409 response, clearing
-the pending fields.
+## Schema
 
-**Tests.**
-- Two concurrent `ConfirmEmailChange` requests targeting the same new address: one
-  succeeds (200), the other fails (409), DB contains exactly one user at that
-  address.
+New table `UserDevices`:
 
-### 1.3 Weak JWT secret startup guard
+| column | type | notes |
+|---|---|---|
+| `Id` | `Guid` | PK |
+| `UserId` | `Guid` | FK → Users, cascade delete |
+| `DeviceIdHash` | `string` | bcrypt(OtpWorkFactor) of raw device id |
+| `FirstSeenAt` | `DateTime` | insert timestamp |
+| `LastSeenAt` | `DateTime` | updated on every successful login |
+| `UserAgent` | `string?` | raw UA for user-facing device list (future) |
 
-**Problem.** Production must not boot with the dev default (`JWT_SECRET`
-fallback in `local_startup.sh`) or a short secret.
+Index on `UserId`. New EF Core migration `AddUserDevices`.
 
-**Approach.** After configuration loads in `Program.cs`, if
-`builder.Environment.IsProduction()` and `Jwt:Secret` is empty / shorter than 32
-bytes / matches a known dev default, throw at startup with a clear message.
+## Endpoints
 
-**Tests.** Unit test that constructs a `WebApplicationBuilder` in Production with
-a weak secret and asserts startup throws.
+### Modified: `POST /api/auth/login`
 
-### 1.4 Admin key → authorization policy
+Accepts `X-Device-Id` header (required for non-legacy clients; if missing,
+treated as "no device match" and OTP is required).
 
-**Problem.** `VerifyAdminKey` is called manually in five endpoint handlers
-(`Program.cs:395-500`). One forgotten check = public admin endpoint.
+Response shapes:
 
-**Approach.**
-- Add an `AdminKeyAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>`
-  that reads `X-Admin-Key` and validates against `Admin:ApiKey` using
-  `PasswordHasher.FixedTimeEquals`.
-- Register scheme `"AdminKey"`.
-- Add policy `"AdminKey"` requiring that scheme.
-- Replace every manual check with `.RequireAuthorization("AdminKey")`.
-- Delete the `VerifyAdminKey` helper.
+- Device matches → today's shape `{ token, displayName }` (200).
+- Device doesn't match → `{ requiresDeviceOtp: true }` (200). No JWT.
+  Email with OTP is sent.
+- Wrong password, unverified email, locked account, lockout — unchanged (401/403/429).
 
-**Tests.**
-- Admin endpoint without header → 401.
-- Admin endpoint with wrong key → 401.
-- Admin endpoint with correct key → 200.
+Rate limit for the OTP email: reuse the existing 5-minute `EmailCooldown` on
+`User.LastVerificationEmailAt`? No — that field is used for the separate
+email-verification flow. Add a new field `LastDeviceOtpEmailAt` on `User`.
 
-### 1.5 WebSocket message size cap
+### New: `POST /api/auth/verify-device`
 
-**Problem.** `CoopHub.HandleConnectionAsync` (`CoopHub.cs:228-239`) reads frames
-into a `MemoryStream` with no upper bound. A malicious client can stream unbounded
-binary into memory.
+Body: `{ email, password, code }` + `X-Device-Id` header.
 
-**Approach.** Track `ms.Length` inside the receive loop; if it exceeds 256 KB,
-close the socket with `WebSocketCloseStatus.MessageTooBig` (1009) and break.
+Flow:
+1. Re-verify password (defense in depth — the OTP alone shouldn't grant access).
+2. Verify code against `User.DeviceOtpCode` / `DeviceOtpCodeExpiresAt`.
+3. On success: insert a `UserDevice` row with `DeviceIdHash = HashOtp(deviceId)`,
+   clear the OTP fields, issue JWT.
+4. Existing failure modes: wrong code 400, expired 400, missing pending 400.
 
-**Tests.** Unit test that feeds >256 KB to `HandleConnectionAsync` via a mock
-WebSocket and asserts the close frame.
+New fields on `User`:
+- `DeviceOtpCode` (nullable string)
+- `DeviceOtpCodeExpiresAt` (nullable DateTime)
+- `LastDeviceOtpEmailAt` (nullable DateTime)
 
-### 1.6 HTTPS redirection + HSTS
+## Client changes (Unity)
 
-**Problem.** TLS is terminated at nginx but the ASP.NET app emits no HSTS header
-and does not redirect HTTP→HTTPS if nginx ever misroutes.
+- `ApiClient.GetOrCreateDeviceId()` — static helper that reads
+  `PlayerPrefs.GetString("arrowthing.deviceId")`, generates a 256-bit random
+  token if missing (`System.Security.Cryptography.RandomNumberGenerator`),
+  saves, returns.
+- `ApiClient.LoginAsync` — add `X-Device-Id` header; handle
+  `{ requiresDeviceOtp: true }` response by returning a specific
+  `LoginResult.RequiresDeviceOtp` variant.
+- `ApiClient.VerifyDeviceAsync(email, password, code)` — new method.
+- `AccountManager` — new UI state `DeviceOtpPrompt`: shows "We sent a code to
+  X@Y.Z from a new device" + 6-digit input + submit/cancel. On success, the
+  existing post-login flow runs.
 
-**Approach.**
-- Add `UseForwardedHeaders` with `ForwardedHeaders.XForwardedProto` (nginx already
-  forwards it — see `Program.cs:715`).
-- In non-Development: `app.UseHsts()` with 1-year max-age + preload, and
-  `app.UseHttpsRedirection()`.
+## Open questions (resolve before implementing)
 
-**Tests.** Integration test that a non-HTTPS request to the API gets a 307
-redirect (with `X-Forwarded-Proto: http`), and that responses carry HSTS headers.
+1. **Max devices per user?** Default: unbounded. No cap for now; add UI + cap
+   if it becomes a concern. Agreed?
+2. **Device list / revoke UI?** Out of scope for this PR. Data model supports
+   it; UI can come later.
+3. **Cancel flow?** If the user closes the OTP dialog, do we discard the
+   pending code? Simplest: leave it. They can just try again — the code
+   expires in 10 min.
+4. **Should `X-Device-Id` be *required* for login?** Yes for the current Unity
+   client. Clients that don't send it get treated as "no device match" and
+   always hit OTP. A malicious bot that omits the header hits email-OTP
+   rate-limiting immediately.
+5. **Grandfather existing sessions?** No. Only new logins trigger the OTP.
+   Already-issued JWTs continue to work until expiry (30 days) or until the
+   user's security stamp is rotated.
 
-### 1.7 Document trust boundary in TechnicalDesign.md
+## Testing plan
 
-Add a section under "Anti-cheat / verification":
+### Automated (xUnit, integration)
 
-> **Trust boundary.** The client is untrusted. Every score is re-simulated
-> server-side by `ReplayVerifier` before it enters the leaderboard. Replay
-> snapshots stored locally for playback are not trust anchors — snapshots are
-> regenerated deterministically from seed on the server path. Any field the
-> client can tamper with (gameId, seed, solve time, events) must be validated
-> or re-derived before persistence.
+- `Login_NoDeviceId_RequiresOtp` — POST /login with correct password, no
+  `X-Device-Id` → 200 with `requiresDeviceOtp: true`, email captured, no token.
+- `Login_UnknownDeviceId_RequiresOtp` — with a fresh device id, same outcome.
+- `VerifyDevice_ValidCode_IssuesTokenAndStoresDevice` — POST /verify-device
+  with correct code → 200 with token; a second login with same device id
+  skips OTP.
+- `VerifyDevice_WrongCode_Returns400_NoDeviceStored`.
+- `VerifyDevice_ExpiredCode_Returns400`.
+- `VerifyDevice_WrongPassword_Returns401` — even with valid OTP.
+- `Login_KnownDeviceSkipsOtp` — after a verify, re-logging in skips OTP and
+  bumps `LastSeenAt`.
+- `Login_OtpRateLimit` — two OTP requests within 5 minutes: the second returns
+  429.
 
-Also note that top-50 replays store a gzipped board snapshot; others are
-regenerated from seed on demand.
+Unit tests:
+- `UserDevice` column mapping + unique index.
 
-### Phase 1 done criteria
+### Manual
 
-- All changes merged into `claude/review-codebase-improvements-Pw341`.
-- `dotnet test server/ArrowThing.sln` green.
-- Unity EditMode tests unaffected (no Domain changes).
-- New tests listed above pass.
-- TODO.md deleted before PR is merge-ready.
+- Fresh install (no PlayerPrefs) → login → OTP prompt → enter code → in.
+  Re-open app → login → no prompt.
+- Clear PlayerPrefs → login → new device OTP.
+- Wrong code 3x → still able to retry after the server's OTP window resets.
 
-## Follow-up phases (separate PRs)
+## Out of scope (deferred to Phase 1C)
 
-### Phase 1B: Auth features (larger scope)
+- HttpOnly cookie JWT / in-memory access token / silent refresh. Cookie-based
+  auth brings CORS-credentials and CSRF requirements that don't belong in this
+  PR.
 
-- **New-device OTP.** On login, if fingerprint (hashed UA + IP /24) is new for
-  this user, require an email 6-digit code before issuing the JWT. Reuse OTP
-  infrastructure (`PasswordHasher.HashOtp`, 10-min TTL, work factor 8). New
-  `UserDevice` table + schema migration + client modal.
-- **JWT storage model on WebGL.** Move to HttpOnly cookie for the refresh token
-  + in-memory access token. Server: cookie auth scheme + CORS credentials +
-  CSRF token for mutating requests. Client: remove `PlayerPrefs` token storage,
-  silent refresh on app start.
+## Definition of done
 
-### Phase 2: Reliability
-
-- **Redis circuit breaker / optional surfaces.** Wrap `IConnectionMultiplexer`
-  in a small breaker; endpoints that depend on Redis return 503 instead of
-  crashing. Don't throw at DI resolution; log + degrade.
-- **Global exception handler.** Middleware that standardizes all error responses
-  to `{ error, correlationId }` and logs unhandled exceptions with the
-  correlation ID.
-- **Email send failure surfacing.** Critical paths (register, password reset)
-  return 503 on Resend failure instead of silent 200. Non-critical paths
-  (already-registered notice) stay silent.
-- **Canary deploy.** Roll API first with `docker compose up -d --no-deps api`,
-  run health check, then roll workers. Rollback on health-check failure.
-
-### Phase 3: Infra / deploy hardening
-
-- **Docker secrets for prod compose** (`deploy/docker-compose.yml`). Dev compose
-  stays on `.env`. Secrets as files under `/run/secrets/`, read by the app via
-  `IConfiguration` sources.
-- **Dockerfile hardening.** Non-root `USER` in both `Dockerfile` and
-  `Dockerfile.worker`. Add `HEALTHCHECK`.
-- **Tag format validation in `deploy.yml`.** Reject tags that don't match
-  `^v[0-9]+\.[0-9]+\.[0-9]+$` before invoking the Unity build.
-- **`.env.sample` cleanup.** Only runtime secrets + non-sensitive tunables; CI
-  secrets (Discord webhook, Cloudflare token, Unity license) live in GitHub
-  Secrets and must not appear in `.env.sample`.
-- **ServerRotation.md completeness.** Audit against `admin.sh` capabilities; add
-  rollback-to-previous-image, manual score removal, migration rollback.
-
-### Phase 4: Storage / performance
-
-- **Gzip replays server-side.** `Score.ReplayJson` becomes gzipped bytea; fetch
-  path decompresses. Covers both snapshot-containing (top-50) and stripped
-  replays. Expect 80%+ savings on DB size and /api/replays payloads.
-- **Combined leaderboard COUNT query.** `LeaderboardService.GetPlayerEntryAsync`
-  currently runs two separate COUNTs. Replace with a single query returning
-  both rank and total.
-
-### Phase 5: Accessibility & UX
-
-- **Colorblind-friendly theme (or dedicated CB mode).** Current themes use hue
-  to communicate clearable state in replay mode; retune so deutan/protan users
-  can distinguish states. Decide: retune existing themes vs add a "High
-  Contrast" theme.
-- **Multi-touch input bug.** `InputHandler.cs:241` sets `_isDragging = true`
-  whenever touch count ≥ 2 and never resets it until the touch ends. Two
-  simultaneous taps on opposite ends of the screen are swallowed. Decouple
-  pinch state from drag state.
-- **Tap hit slop.** Expand cell hit rectangle by ~½ cell in screen space, but
-  only resolve if a single arrow is within the expanded radius (ambiguous taps
-  fall through or resolve to geometrically nearest). Not aim-assist — no bias
-  toward clearable arrows.
-
-### Phase 6: Docs cleanup
-
-- Convert `CLAUDE.md` to a short pointer list ("architecture: see TDD";
-  "contribution rules: see CONTRIBUTING.md"; "feature workflow: see below")
-  instead of duplicating architecture content that drifts from
-  `TechnicalDesign.md`.
-
-## Explicitly skipped (considered and declined)
-
-- Test result publishing via `dorny/test-reporter` — Unity's test reporter UX is
-  too rough; local + GH logs are sufficient at current scale.
-- Unity `Library/` cache on EditMode/PlayMode CI jobs — previously measured,
-  cache hit time ≈ cold clone time.
-- Clearing `FocusNavigator.WasKeyboardActive` on scene transitions — intentional
-  behavior; keyboard users should not re-activate focus per scene.
+- Migration applied cleanly against existing prod DB (idempotent).
+- All new tests pass.
+- Existing auth tests still pass (login flow unchanged for JWTs on a known
+  device).
+- Manual test cases above executed and recorded below.
