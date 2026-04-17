@@ -148,26 +148,20 @@
 
 .lobby-row__code-toggle,
 .lobby-row__code-copy {
-    width: 30px;
-    height: 30px;
-    padding: 6px;
-    background-color: var(--bg-btn);
+    width: 28px;
+    height: 28px;
+    padding: 2px;
+    background-color: transparent;
     border-width: 0;
-    border-radius: 15px;
     margin: 0 0 0 4px;
     flex-shrink: 0;
-}
-
-.lobby-row__code-toggle:hover,
-.lobby-row__code-copy:hover {
-    background-color: var(--bg-btn-hover);
 }
 
 .lobby-row__code-toggle .hud-icon-btn__icon,
 .lobby-row__code-copy .hud-icon-btn__icon {
     flex-grow: 1;
     -unity-background-scale-mode: scale-to-fit;
-    -unity-background-image-tint-color: var(--text-dim);
+    -unity-background-image-tint-color: var(--text-secondary);
 }
 
 .lobby-row__code-toggle:hover .hud-icon-btn__icon,
