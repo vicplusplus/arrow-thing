@@ -22,9 +22,11 @@ public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 
 public record VerifyDeviceRequest(string Email, string Password, string Code);
 
-public record RefreshTokenRequest(string RefreshToken);
+// RefreshToken is optional — WebGL cookie clients send an empty body and the
+// endpoint falls back to reading the arrow_refresh cookie.
+public record RefreshTokenRequest(string? RefreshToken);
 
-public record LogoutRequest(string RefreshToken);
+public record LogoutRequest(string? RefreshToken);
 
 public record AuthResponse(
     string Token,

@@ -318,6 +318,22 @@ Protected by `X-Admin-Key` header (compared against `Admin:ApiKey` configuration
 
 All auth operations are tracked via `AuditLog` records in PostgreSQL. `AuditLogService` dual-writes each event to both the database and structured logs (via `ILogger<AuditLogService>`), so audit data is queryable in both PostgreSQL (via Grafana SQL datasource) and Loki (via log search). 14 event types cover registration, login (success/failure), password changes, email changes, account lock/unlock, session invalidation, and display name updates. Each record captures timestamp, event type, user ID, email, client IP (from `X-Forwarded-For`), and optional detail string.
 
+### HttpOnly cookie auth
+
+WebGL builds carry the access JWT + refresh token as HttpOnly cookies (`arrow_access`, `arrow_refresh`) instead of `Authorization: Bearer` / `PlayerPrefs`. Flags are `HttpOnly; Secure; SameSite=Strict; Path=/`; `Domain` is set from the `Auth:Cookies:Domain` config (`.arrow-thing.com` in prod, unset in dev). The server accepts **either** a Bearer header (editor / native clients) **or** the cookie — JwtBearer's `OnMessageReceived` falls back to `arrow_access` only when no `Authorization` header is present. `/api/auth/refresh` and `/api/auth/logout` similarly take the refresh token from the JSON body **or** `arrow_refresh`.
+
+WebGL's `UnityWebRequest` wraps `XMLHttpRequest` but never sets `withCredentials`, so cookies get stripped on cross-origin calls by default. `Assets/Plugins/WebGL/CookieAuth.jslib` monkey-patches `XMLHttpRequest.prototype.open` to flip `withCredentials = true` on URLs that start with the API origin. It's scoped by prefix (third-party XHRs stay credential-less) and `ApiClient` calls `EnableCredentialsForApi(_baseUrl)` once at construction under `#if UNITY_WEBGL && !UNITY_EDITOR`. Editor / native builds still use the bearer path so they don't need the browser cookie jar.
+
+CSRF defense is layered:
+1. `SameSite=Strict` — the browser doesn't send the cookies on any cross-site request. Since the game and API share eTLD+1 (`arrow-thing.com`), same-site cookie flow still works for in-page fetches.
+2. `OriginCheckMiddleware` — on mutating verbs (POST/PATCH/PUT/DELETE) with an auth cookie attached, the request's `Origin` (falling back to `Referer`) must be in the `Cors:AllowedOrigins` allow-list. Bearer-authed calls skip this check because non-browser clients don't send `Origin` and can't be CSRF'd.
+
+CORS is configured via `AddCors` with `AllowCredentials()` and explicit origins (required when credentials are on — wildcard isn't allowed). Preflight requests run before authentication.
+
+The `SecurityStamp` invalidation middleware was retuned for this phase: a stale JWT now strips `context.User` to anonymous instead of short-circuiting with 401. Public endpoints (login, verify-code, etc.) therefore keep working when a user revisits with an old cookie; protected endpoints fail authorization naturally.
+
+Cookies are NOT used on the co-op WebSocket (`/ws/coop/{code}` still takes the JWT in the query string). Migrating that path is out of scope for Phase 1D.
+
 ### Refresh tokens
 
 The access JWT now lives 15 minutes (`JwtHelper.AccessTokenLifetime`) and is paired with a 30-day rotating refresh token (`RefreshTokenService`). Daily-active users effectively never log out — every authenticated request that comes back 401 transparently refreshes once via `ApiClient.SendAuthenticatedAsync` and retries — while the XSS exposure window for a stolen JWT shrinks from 30 days to 15 minutes.

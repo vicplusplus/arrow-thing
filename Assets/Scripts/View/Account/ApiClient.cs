@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -6,7 +7,15 @@ using UnityEngine.Networking;
 
 /// <summary>
 /// HTTP client wrapper for the Arrow Thing API.
-/// Handles base URL configuration, JWT attachment, and error handling.
+///
+/// Auth model:
+/// - <b>WebGL builds</b> use HttpOnly cookies (<c>arrow_access</c> +
+///   <c>arrow_refresh</c>). The browser manages them; the
+///   <c>CookieAuth.jslib</c> plugin patches XHR to send credentials on the
+///   API origin. The bearer header isn't set.
+/// - <b>Editor / other builds</b> fall back to bearer tokens persisted in
+///   <c>PlayerPrefs</c>. The server accepts either, so both paths work
+///   against the same backend.
 /// </summary>
 public class ApiClient
 {
@@ -17,6 +26,17 @@ public class ApiClient
     private const string DisplayNamePrefKey = "auth_display_name";
     private const string EmailPrefKey = "auth_email";
     private const string DeviceIdPrefKey = "auth_device_id";
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+    private const bool UseCookieAuth = true;
+
+    [DllImport("__Internal")]
+    private static extern void EnableCredentialsForApi(string apiOrigin);
+#else
+    private const bool UseCookieAuth = false;
+#endif
+
+    private static bool _credentialsEnabled;
 
     /// <summary>
     /// Stable random identifier for this install. Sent as <c>X-Device-Id</c>
@@ -47,7 +67,14 @@ public class ApiClient
     public string RefreshToken { get; private set; }
     public string DisplayName { get; private set; }
     public string Email { get; private set; }
-    public bool IsLoggedIn => !string.IsNullOrEmpty(Token);
+
+    // In cookie mode the tokens live in the browser (HttpOnly) so JS — and
+    // therefore this client — can't see them. We proxy "logged in" off the
+    // presence of DisplayName, which we persist after a successful login.
+    // A stale DisplayName just means the first authenticated request returns
+    // 401 and the client clears local state.
+    public bool IsLoggedIn =>
+        UseCookieAuth ? !string.IsNullOrEmpty(DisplayName) : !string.IsNullOrEmpty(Token);
 
     public ApiClient()
     {
@@ -56,9 +83,33 @@ public class ApiClient
 #else
         _baseUrl = DefaultBaseUrl;
 #endif
-        // Restore saved session
-        Token = PlayerPrefs.GetString(TokenPrefKey, "");
-        RefreshToken = PlayerPrefs.GetString(RefreshTokenPrefKey, "");
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // Patch XHR so the browser attaches the arrow_access / arrow_refresh
+        // cookies on API calls. Idempotent on the JS side but we also guard
+        // here so we don't invoke the P/Invoke more than once.
+        if (!_credentialsEnabled)
+        {
+            try
+            {
+                EnableCredentialsForApi(_baseUrl);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[ApiClient] Failed to enable credentials: {e.Message}");
+            }
+            _credentialsEnabled = true;
+        }
+#endif
+
+        // Cookie mode persists nothing about the token itself — the browser
+        // holds it. We still track the displayName / email locally so the UI
+        // can render before the first /me call.
+        if (!UseCookieAuth)
+        {
+            Token = PlayerPrefs.GetString(TokenPrefKey, "");
+            RefreshToken = PlayerPrefs.GetString(RefreshTokenPrefKey, "");
+        }
         DisplayName = PlayerPrefs.GetString(DisplayNamePrefKey, "");
         Email = PlayerPrefs.GetString(EmailPrefKey, "");
     }
@@ -565,13 +616,18 @@ public class ApiClient
     /// </summary>
     public async Task LogoutAsync()
     {
+        // Snapshot the refresh token (bearer mode only) BEFORE clearing — we
+        // still want to revoke it server-side even though the local session
+        // is gone.
         var refresh = RefreshToken;
         ClearSessionLocal();
-        if (string.IsNullOrEmpty(refresh))
+        if (!UseCookieAuth && string.IsNullOrEmpty(refresh))
             return;
         try
         {
-            var body = JsonUtility.ToJson(new LogoutRequestDto { refreshToken = refresh });
+            var body = JsonUtility.ToJson(
+                new LogoutRequestDto { refreshToken = UseCookieAuth ? "" : refresh }
+            );
             using var request = new UnityWebRequest($"{_baseUrl}/api/auth/logout", "POST");
             request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
             request.downloadHandler = new DownloadHandlerBuffer();
@@ -606,12 +662,17 @@ public class ApiClient
     /// </summary>
     public async Task<bool> RefreshAsync()
     {
-        if (string.IsNullOrEmpty(RefreshToken))
+        if (!CanAttemptRefresh())
             return false;
 
         try
         {
-            var body = JsonUtility.ToJson(new RefreshRequestDto { refreshToken = RefreshToken });
+            // Cookie mode sends an empty body — the server reads the refresh
+            // value from the arrow_refresh cookie. Bearer mode sends the
+            // token from PlayerPrefs.
+            var body = JsonUtility.ToJson(
+                new RefreshRequestDto { refreshToken = UseCookieAuth ? "" : RefreshToken }
+            );
             using var request = new UnityWebRequest($"{_baseUrl}/api/auth/refresh", "POST");
             request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
             request.downloadHandler = new DownloadHandlerBuffer();
@@ -652,38 +713,53 @@ public class ApiClient
     private async Task<UnityWebRequest> SendAuthenticatedAsync(Func<UnityWebRequest> requestFactory)
     {
         var request = requestFactory();
-        request.SetRequestHeader("Authorization", $"Bearer {Token}");
+        AttachAuth(request);
         var op = request.SendWebRequest();
         while (!op.isDone)
             await Task.Yield();
 
-        // 401 with no refresh token, or after we've already refreshed once,
-        // is final — return the request as-is so the caller can inspect it.
-        if (request.responseCode != 401 || string.IsNullOrEmpty(RefreshToken))
+        // In cookie mode, an "authenticated" request always has the cookie
+        // attached by the browser; we still try one refresh on 401. In bearer
+        // mode the refresh token in PlayerPrefs gates the retry.
+        if (request.responseCode != 401 || !CanAttemptRefresh())
             return request;
 
-        // Try a single refresh. If that fails the original 401 stands and
-        // the caller maps it to "session expired".
         if (!await RefreshAsync())
             return request;
 
         request.Dispose();
         request = requestFactory();
-        request.SetRequestHeader("Authorization", $"Bearer {Token}");
+        AttachAuth(request);
         op = request.SendWebRequest();
         while (!op.isDone)
             await Task.Yield();
         return request;
     }
 
+    private void AttachAuth(UnityWebRequest request)
+    {
+        // Cookie-mode clients rely on the browser attaching arrow_access
+        // automatically via withCredentials; adding a Bearer header here
+        // would be a no-op since Token is empty.
+        if (!UseCookieAuth && !string.IsNullOrEmpty(Token))
+            request.SetRequestHeader("Authorization", $"Bearer {Token}");
+    }
+
+    private bool CanAttemptRefresh() => UseCookieAuth || !string.IsNullOrEmpty(RefreshToken);
+
     private void StoreSession(AuthResponse response, string email)
     {
-        Token = response.token;
-        RefreshToken = response.refreshToken ?? "";
+        // In cookie mode the browser owns the tokens; don't mirror them to
+        // PlayerPrefs (that would defeat the point of HttpOnly).
+        if (!UseCookieAuth)
+        {
+            Token = response.token;
+            RefreshToken = response.refreshToken ?? "";
+            PlayerPrefs.SetString(TokenPrefKey, Token);
+            PlayerPrefs.SetString(RefreshTokenPrefKey, RefreshToken);
+        }
         DisplayName = response.displayName;
         Email = email.Trim().ToLowerInvariant();
-        PlayerPrefs.SetString(TokenPrefKey, Token);
-        PlayerPrefs.SetString(RefreshTokenPrefKey, RefreshToken);
         PlayerPrefs.SetString(DisplayNamePrefKey, DisplayName);
         PlayerPrefs.SetString(EmailPrefKey, Email);
     }

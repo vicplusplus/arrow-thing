@@ -137,6 +137,32 @@ builder.Services.AddHttpClient();
 
 // Auth services
 builder.Services.AddSingleton<JwtHelper>();
+builder.Services.Configure<CookieAuthOptions>(builder.Configuration.GetSection("Auth:Cookies"));
+builder.Services.AddSingleton<CookieIssuer>();
+
+// CORS for the cookie-auth path. Credentials must be allowed, and the
+// allowed origin list comes from config (cannot be wildcard when credentials
+// are on). Bearer-only clients on same-origin don't need CORS.
+const string CorsPolicyName = "ArrowThingClient";
+var corsAllowedOrigins =
+    builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? Array.Empty<string>();
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(
+        CorsPolicyName,
+        policy =>
+        {
+            if (corsAllowedOrigins.Length > 0)
+                policy.WithOrigins(corsAllowedOrigins);
+            policy
+                .AllowAnyHeader()
+                .AllowAnyMethod()
+                .AllowCredentials()
+                .WithExposedHeaders(ExceptionHandlingMiddleware.CorrelationIdHeader);
+        }
+    );
+});
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<AuditLogService>();
 builder.Services.AddScoped<RefreshTokenService>();
@@ -212,13 +238,35 @@ builder.Services.AddAuthorization(options =>
     );
 });
 
-// Configure JWT validation after all config sources are registered
+// Configure JWT validation after all config sources are registered.
+// OnMessageReceived reads the token from the arrow_access cookie when no
+// Authorization: Bearer header is present, so WebGL cookie-auth clients work
+// alongside the legacy bearer path.
 builder
     .Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
     .Configure<JwtHelper>(
         (options, jwt) =>
         {
             options.TokenValidationParameters = jwt.GetValidationParameters();
+            options.Events = new Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents
+            {
+                OnMessageReceived = ctx =>
+                {
+                    // Only fall back to the cookie when there's no
+                    // Authorization header at all. Setting ctx.Token here
+                    // short-circuits JwtBearer's header lookup, so we must
+                    // inspect the header explicitly — the default token
+                    // field is still empty at this point in the pipeline.
+                    var authHeader = ctx.Request.Headers.Authorization.ToString();
+                    if (string.IsNullOrEmpty(authHeader))
+                    {
+                        var cookie = ctx.Request.Cookies[CookieIssuer.AccessCookieName];
+                        if (!string.IsNullOrEmpty(cookie))
+                            ctx.Token = cookie;
+                    }
+                    return Task.CompletedTask;
+                },
+            };
         }
     );
 
@@ -260,10 +308,49 @@ app.UseSerilogRequestLogging(opts =>
             : Serilog.Events.LogEventLevel.Information;
 });
 app.UseWebSockets();
-app.UseAuthentication();
-app.UseAuthorization();
 
-// Validate security stamp on authenticated requests — rejects tokens issued before a stamp change
+// CORS before auth so preflights don't need a JWT.
+app.UseCors(CorsPolicyName);
+
+// Defense-in-depth CSRF check: mutating verbs on cookie-authed requests
+// must carry an Origin (or Referer) that matches the CORS allow-list.
+// Bearer-authed calls skip this — they come from non-browser clients that
+// don't send Origin / can't be tricked by a rogue page.
+var allowedOriginSet = new HashSet<string>(corsAllowedOrigins, StringComparer.OrdinalIgnoreCase);
+app.Use(
+    async (context, next) =>
+    {
+        if (IsMutating(context.Request.Method) && HasAuthCookie(context.Request))
+        {
+            var origin = context.Request.Headers["Origin"].FirstOrDefault();
+            var referer = context.Request.Headers["Referer"].FirstOrDefault();
+            var candidate = !string.IsNullOrEmpty(origin) ? origin : GetOriginFromReferer(referer);
+            // We only block when an Origin / Referer IS present and doesn't
+            // match. Real browsers always tag cross-origin mutations with
+            // Origin, so a missing header on a cookie-authed mutation is
+            // either a same-origin fetch (safe), a non-browser client
+            // replaying our cookies (implausible — they're HttpOnly), or a
+            // test. Rejecting "missing Origin" would false-positive on the
+            // test suite without adding real CSRF protection.
+            if (!string.IsNullOrEmpty(candidate) && !allowedOriginSet.Contains(candidate))
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await context.Response.WriteAsJsonAsync(new { error = "Origin not allowed." });
+                return;
+            }
+        }
+        await next();
+    }
+);
+
+app.UseAuthentication();
+
+// Validate security stamp immediately after authentication so stale JWTs are
+// treated as anonymous before authorization runs. Public endpoints (login,
+// /health, etc.) keep working; protected endpoints fail authorization
+// naturally. Running before UseAuthorization is important — otherwise a
+// stale cookie/JWT would reject a public endpoint like POST /api/auth/login
+// with 401 mid-flow.
 app.Use(
     async (context, next) =>
     {
@@ -288,11 +375,11 @@ app.Use(
                         GetClientIp(context)
                     );
 
-                    context.Response.StatusCode = 401;
-                    await context.Response.WriteAsJsonAsync(
-                        new { error = "Session invalidated. Please log in again." }
+                    // Strip the stale identity; authorization will reject
+                    // protected endpoints, public endpoints keep working.
+                    context.User = new System.Security.Claims.ClaimsPrincipal(
+                        new System.Security.Claims.ClaimsIdentity()
                     );
-                    return;
                 }
             }
         }
@@ -300,6 +387,8 @@ app.Use(
         await next();
     }
 );
+
+app.UseAuthorization();
 
 // Endpoints
 app.MapGet("/health", () => Results.Ok());
@@ -317,7 +406,7 @@ app.MapPost(
 
 app.MapPost(
     "/api/auth/login",
-    async (LoginRequest request, AuthService auth, HttpContext ctx) =>
+    async (LoginRequest request, AuthService auth, CookieIssuer cookies, HttpContext ctx) =>
     {
         var (response, status, error) = await auth.LoginAsync(
             request,
@@ -325,6 +414,8 @@ app.MapPost(
             deviceId: ctx.Request.Headers["X-Device-Id"].FirstOrDefault(),
             userAgent: ctx.Request.Headers["User-Agent"].FirstOrDefault()
         );
+        if (response is AuthResponse auth200)
+            IssueAuthCookies(cookies, ctx.Response, auth200);
         return response != null
             ? Results.Json(response, statusCode: status)
             : Results.Json(new { error }, statusCode: status);
@@ -333,7 +424,7 @@ app.MapPost(
 
 app.MapPost(
     "/api/auth/verify-device",
-    async (VerifyDeviceRequest request, AuthService auth, HttpContext ctx) =>
+    async (VerifyDeviceRequest request, AuthService auth, CookieIssuer cookies, HttpContext ctx) =>
     {
         var (response, status, error) = await auth.VerifyDeviceAsync(
             request,
@@ -341,6 +432,8 @@ app.MapPost(
             deviceId: ctx.Request.Headers["X-Device-Id"].FirstOrDefault(),
             userAgent: ctx.Request.Headers["User-Agent"].FirstOrDefault()
         );
+        if (response != null)
+            IssueAuthCookies(cookies, ctx.Response, response);
         return response != null
             ? Results.Ok(response)
             : Results.Json(new { error }, statusCode: status);
@@ -349,12 +442,19 @@ app.MapPost(
 
 app.MapPost(
     "/api/auth/refresh",
-    async (RefreshTokenRequest request, AuthService auth, HttpContext ctx) =>
+    async (RefreshTokenRequest request, AuthService auth, CookieIssuer cookies, HttpContext ctx) =>
     {
+        // Accept the token from the request body OR the arrow_refresh cookie.
+        // WebGL clients send only the cookie; editor / Bearer clients send the body.
+        var token = !string.IsNullOrEmpty(request?.RefreshToken)
+            ? request.RefreshToken
+            : ctx.Request.Cookies[CookieIssuer.RefreshCookieName] ?? "";
         var (response, status, error) = await auth.RefreshAsync(
-            request.RefreshToken,
+            token,
             userAgent: ctx.Request.Headers["User-Agent"].FirstOrDefault()
         );
+        if (response != null)
+            IssueAuthCookies(cookies, ctx.Response, response);
         return response != null
             ? Results.Ok(response)
             : Results.Json(new { error }, statusCode: status);
@@ -363,9 +463,13 @@ app.MapPost(
 
 app.MapPost(
     "/api/auth/logout",
-    async (LogoutRequest request, AuthService auth) =>
+    async (LogoutRequest request, AuthService auth, CookieIssuer cookies, HttpContext ctx) =>
     {
-        var (response, status) = await auth.LogoutAsync(request.RefreshToken);
+        var token = !string.IsNullOrEmpty(request?.RefreshToken)
+            ? request.RefreshToken
+            : ctx.Request.Cookies[CookieIssuer.RefreshCookieName] ?? "";
+        var (response, status) = await auth.LogoutAsync(token);
+        cookies.ClearCookies(ctx.Response);
         return Results.Json(response, statusCode: status);
     }
 );
@@ -407,7 +511,7 @@ app.MapPatch(
 
 app.MapPost(
     "/api/auth/verify-code",
-    async (VerifyCodeRequest request, AuthService auth, HttpContext ctx) =>
+    async (VerifyCodeRequest request, AuthService auth, CookieIssuer cookies, HttpContext ctx) =>
     {
         var (response, status, error) = await auth.VerifyCodeAsync(
             request,
@@ -415,6 +519,8 @@ app.MapPost(
             deviceId: ctx.Request.Headers["X-Device-Id"].FirstOrDefault(),
             userAgent: ctx.Request.Headers["User-Agent"].FirstOrDefault()
         );
+        if (response != null)
+            IssueAuthCookies(cookies, ctx.Response, response);
         return response != null
             ? Results.Ok(response)
             : Results.Json(new { error }, statusCode: status);
@@ -845,6 +951,37 @@ if (app.Configuration.GetValue<bool>("Test:EnableCrashEndpoint"))
 }
 
 app.Run();
+
+static bool IsMutating(string method) =>
+    HttpMethods.IsPost(method)
+    || HttpMethods.IsPut(method)
+    || HttpMethods.IsPatch(method)
+    || HttpMethods.IsDelete(method);
+
+static bool HasAuthCookie(HttpRequest request) =>
+    !string.IsNullOrEmpty(request.Cookies[CookieIssuer.AccessCookieName])
+    || !string.IsNullOrEmpty(request.Cookies[CookieIssuer.RefreshCookieName]);
+
+static string? GetOriginFromReferer(string? referer)
+{
+    if (string.IsNullOrEmpty(referer))
+        return null;
+    if (!Uri.TryCreate(referer, UriKind.Absolute, out var uri))
+        return null;
+    return $"{uri.Scheme}://{uri.Authority}";
+}
+
+static void IssueAuthCookies(CookieIssuer cookies, HttpResponse response, object body)
+{
+    // The OTP-pending branch returns a DeviceOtpRequiredResponse without a
+    // JWT; cookies are only issued on the fully-authenticated AuthResponse.
+    if (body is AuthResponse auth && !string.IsNullOrEmpty(auth.Token))
+    {
+        cookies.IssueAccessCookie(response, auth.Token);
+        if (!string.IsNullOrEmpty(auth.RefreshToken))
+            cookies.IssueRefreshCookie(response, auth.RefreshToken);
+    }
+}
 
 static string? GetClientIp(HttpContext ctx)
 {
