@@ -104,6 +104,14 @@ public class AuthService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send verification email");
+            // Discard the hashed code so the 5-minute cooldown doesn't leave
+            // the user unable to retry, and so a leaked-but-undelivered code
+            // can't be used later.
+            user.VerificationCode = null;
+            user.VerificationCodeExpiresAt = null;
+            user.LastVerificationEmailAt = null;
+            await _db.SaveChangesAsync();
+            return (null, 503, "Failed to send email. Please try again.");
         }
 
         return (new MessageResponse(successMessage), 200, null);
@@ -373,6 +381,12 @@ public class AuthService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send device OTP email");
+            user.DeviceOtpCode = null;
+            user.DeviceOtpCodeExpiresAt = null;
+            user.DeviceOtpPendingDeviceIdHash = null;
+            user.LastDeviceOtpEmailAt = null;
+            await _db.SaveChangesAsync();
+            return (503, "Failed to send email. Please try again.");
         }
 
         return (200, null);
@@ -532,6 +546,11 @@ public class AuthService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send verification email");
+            user.VerificationCode = null;
+            user.VerificationCodeExpiresAt = null;
+            user.LastVerificationEmailAt = null;
+            await _db.SaveChangesAsync();
+            return (null, 503, "Failed to send email. Please try again.");
         }
 
         return (new MessageResponse(successMessage), 200, null);
@@ -578,6 +597,11 @@ public class AuthService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send password reset email");
+            user.PasswordResetCode = null;
+            user.PasswordResetCodeExpiresAt = null;
+            user.LastPasswordResetEmailAt = null;
+            await _db.SaveChangesAsync();
+            return (null, 503, "Failed to send email. Please try again.");
         }
 
         return (new MessageResponse(successMessage), 200, null);
@@ -674,6 +698,11 @@ public class AuthService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send email change verification");
+            user.PendingEmail = null;
+            user.PendingEmailCode = null;
+            user.PendingEmailCodeExpiresAt = null;
+            await _db.SaveChangesAsync();
+            return (null, 503, "Failed to send email. Please try again.");
         }
 
         // Notify old email
@@ -849,6 +878,10 @@ public class AuthService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send password reset email");
+            user.PasswordResetCode = null;
+            user.PasswordResetCodeExpiresAt = null;
+            await _db.SaveChangesAsync();
+            return (null, 503, "Failed to send email. Please try again.");
         }
 
         return (

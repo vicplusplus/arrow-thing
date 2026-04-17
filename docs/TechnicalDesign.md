@@ -318,6 +318,14 @@ Protected by `X-Admin-Key` header (compared against `Admin:ApiKey` configuration
 
 All auth operations are tracked via `AuditLog` records in PostgreSQL. `AuditLogService` dual-writes each event to both the database and structured logs (via `ILogger<AuditLogService>`), so audit data is queryable in both PostgreSQL (via Grafana SQL datasource) and Loki (via log search). 14 event types cover registration, login (success/failure), password changes, email changes, account lock/unlock, session invalidation, and display name updates. Each record captures timestamp, event type, user ID, email, client IP (from `X-Forwarded-For`), and optional detail string.
 
+### Reliability
+
+**Redis is optional at runtime.** `IConnectionMultiplexer` is registered with `AbortOnConnectFail=false`, so a Redis outage at startup doesn't crash the API — the multiplexer reconnects in the background. Surfaces that require Redis gate on `RedisExtensions.IsAvailable` and return `503 { error: "Service temporarily unavailable." }` instead of throwing. Currently gated: score submission (`POST /api/scores`), score status (`GET /api/scores/{id}/status`), lobby create + retry-generation (`POST /api/lobbies`, `POST /api/lobbies/{id}/retry-gen`). Read paths like the leaderboard fall back to Postgres when the cache misses, so they keep working during a Redis outage.
+
+**Global exception middleware** (`ExceptionHandlingMiddleware`, first in the pipeline) stamps every request with an `X-Correlation-Id` header (preferring the client-supplied value if present, otherwise `Guid.NewGuid("N")`) and pushes it onto the Serilog `LogContext`. Unhandled exceptions turn into `500 { error, correlationId }` with the ID echoed in the response header so clients can quote it. Intentional 4xx/5xx responses from endpoints pass through untouched.
+
+**Email sends are tiered.** Critical paths (`SendVerificationCodeAsync` on register/resend, `SendPasswordResetCodeAsync` on forgot/unlock, `SendEmailChangeCodeAsync` on change-email, `SendDeviceOtpCodeAsync` on new-device login) return `503 "Failed to send email. Please try again."` on Resend failure after clearing the persisted code + cooldown timestamp so the user can retry immediately instead of being stuck in the 5-minute window. Non-critical notifications (`SendAlreadyRegisteredEmailAsync`, `SendEmailChangeNotificationAsync`) keep the log-and-swallow behavior because failing them would block a legitimate flow for no security benefit.
+
 ### Observability Stack
 
 Structured logging via **Serilog** (console + Grafana Loki push). HTTP request logging via `UseSerilogRequestLogging()`. Metrics via **OpenTelemetry** (ASP.NET Core + .NET runtime instrumentation) exposed at `/metrics` for **Prometheus** scraping. All telemetry flows to **Grafana** (localhost:3000, SSH tunnel access only) which has three auto-provisioned datasources: Loki (logs), Prometheus (metrics), PostgreSQL (direct SQL queries against users and audit tables).

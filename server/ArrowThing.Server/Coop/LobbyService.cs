@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using ArrowThing.Server;
 using ArrowThing.Server.Auth;
 using ArrowThing.Server.Data;
 using ArrowThing.Server.Models;
@@ -67,6 +68,11 @@ public class LobbyService
         if (activeCount >= MaxActiveLobbiesPerOwner)
             return (null, 429, $"You can own at most {MaxActiveLobbiesPerOwner} active lobbies.");
 
+        // Fail fast if Redis is unavailable — a lobby created without a generation
+        // job would be stuck in Generating indefinitely.
+        if (!_redis.IsAvailable())
+            return (null, 503, "Service temporarily unavailable.");
+
         // Generate unique code with collision retry
         string? code = null;
         for (int i = 0; i < MaxCodeCollisionRetries; i++)
@@ -126,6 +132,9 @@ public class LobbyService
         if (lobby.Status != LobbyStatus.GenerationFailed)
             return (null, 400, "Lobby is not in a failed state.");
 
+        if (!_redis.IsAvailable())
+            return (null, 503, "Service temporarily unavailable.");
+
         lobby.Status = LobbyStatus.Generating;
         lobby.LastActivityAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
@@ -137,10 +146,15 @@ public class LobbyService
 
     private async Task EnqueueGenerationJobAsync(Lobby lobby)
     {
-        if (_redis == null)
+        // Callers have already verified _redis.IsAvailable() at the entry point;
+        // this double-check is belt-and-braces in case Redis drops between the
+        // gate and here. If it does, log and continue — the lobby is already
+        // persisted, and the user will see it stuck in Generating (better than
+        // a 500 mid-request).
+        if (!_redis.IsAvailable())
         {
             _logger.LogWarning(
-                "Redis not configured — generation job for lobby {Id} will not be processed.",
+                "Redis unavailable — generation job for lobby {Id} will not be processed.",
                 lobby.Id
             );
             return;
@@ -154,7 +168,7 @@ public class LobbyService
             EnqueuedAt = DateTime.UtcNow.ToString("O"),
         };
         var json = JsonSerializer.Serialize(job);
-        var db = _redis.GetDatabase();
+        var db = _redis!.GetDatabase();
         await db.ListLeftPushAsync(GenerationQueueKey, json);
     }
 
