@@ -148,18 +148,19 @@
 
 .lobby-row__code-toggle,
 .lobby-row__code-copy {
-    width: 20px;
-    height: 20px;
-    padding: 3px;
-    background-color: transparent;
+    width: 30px;
+    height: 30px;
+    padding: 6px;
+    background-color: var(--bg-btn);
     border-width: 0;
-    border-radius: 4px;
-    margin: 0 0 0 2px;
+    border-radius: 15px;
+    margin: 0 0 0 4px;
+    flex-shrink: 0;
 }
 
 .lobby-row__code-toggle:hover,
 .lobby-row__code-copy:hover {
-    background-color: var(--bg-hover);
+    background-color: var(--bg-btn-hover);
 }
 
 .lobby-row__code-toggle .hud-icon-btn__icon,
@@ -180,18 +181,20 @@
     margin-top: 4px;
 }
 
-/* Row action buttons — small, subtle, match lb-row-btn pattern */
+/* Row action buttons */
 .lobby-row__retry-btn,
 .lobby-row__open-btn,
 .lobby-row__delete-btn {
-    margin-left: 6px;
-    padding: 4px 10px;
-    font-size: 13px;
-    border-radius: 4px;
+    margin-left: 8px;
+    padding: 8px 16px;
+    min-width: 72px;
+    font-size: 15px;
+    border-radius: 6px;
     border-width: 0;
     background-color: var(--bg-btn);
     color: var(--text-primary);
     flex-shrink: 0;
+    -unity-text-align: middle-center;
 }
 
 .lobby-row__retry-btn:hover,
