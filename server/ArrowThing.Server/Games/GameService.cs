@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ArrowThing.Server;
 using ArrowThing.Server.Data;
 using ArrowThing.Server.Leaderboards;
 using ArrowThing.Server.Models;
@@ -174,15 +175,15 @@ public class GameService
             return (null, 429, "Rate limit exceeded. Try again later.");
 
         // Enqueue for async verification
-        if (_redis == null)
-            return (null, 503, "Verification service unavailable.");
+        if (!_redis.IsAvailable())
+            return (null, 503, "Service temporarily unavailable.");
 
         var area = replay.boardWidth * replay.boardHeight;
         var isHeavy = area > HeavyBoardAreaThreshold;
         var queueKey = isHeavy ? HeavyQueueKey : StandardQueueKey;
         var maxDepth = isHeavy ? MaxHeavyQueueDepth : MaxStandardQueueDepth;
 
-        var redisDb = _redis.GetDatabase();
+        var redisDb = _redis!.GetDatabase();
 
         // Idempotency guard: a concurrent or retried submission with the same gameId
         // must not be enqueued twice. SET NX claims the lock atomically; if it's

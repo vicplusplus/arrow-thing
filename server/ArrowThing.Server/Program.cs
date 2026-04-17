@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Security.Claims;
+using ArrowThing.Server;
 using ArrowThing.Server.Auth;
 using ArrowThing.Server.Coop;
 using ArrowThing.Server.Data;
@@ -100,16 +101,35 @@ builder
 var connectionString = builder.Configuration.GetConnectionString("Default");
 builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
 
-// Redis — always register so DI validation passes; connect lazily at first resolve
+// Redis — optional. Registered with AbortOnConnectFail=false so a Redis outage
+// at startup doesn't crash the API; the multiplexer reconnects in the
+// background and surfaces availability via IConnectionMultiplexer.IsConnected
+// (see RedisExtensions.IsAvailable). Missing config registers null.
+// Factory may return null when degraded — consumers must declare the
+// dependency as IConnectionMultiplexer? and gate with RedisExtensions.IsAvailable.
 builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
 {
     var config = sp.GetRequiredService<IConfiguration>();
+    var logger = sp.GetRequiredService<ILogger<Program>>();
     var connStr = config["Redis:ConnectionString"];
     if (string.IsNullOrEmpty(connStr))
-        throw new InvalidOperationException(
-            "Redis:ConnectionString is not configured but IConnectionMultiplexer was resolved."
-        );
-    return ConnectionMultiplexer.Connect(connStr);
+    {
+        logger.LogWarning("Redis:ConnectionString not configured; running without Redis.");
+        return null!;
+    }
+    try
+    {
+        var options = ConfigurationOptions.Parse(connStr);
+        options.AbortOnConnectFail = false;
+        return ConnectionMultiplexer.Connect(options);
+    }
+    catch (Exception ex)
+    {
+        // AbortOnConnectFail=false should prevent this, but StackExchange.Redis
+        // can still throw on malformed config. Log and degrade.
+        logger.LogError(ex, "Failed to construct Redis multiplexer; running degraded.");
+        return null!;
+    }
 });
 
 // HTTP client for Resend
@@ -215,6 +235,11 @@ using (var scope = app.Services.CreateScope())
     var hub = app.Services.GetRequiredService<CoopHub>();
     await hub.EnsureSubscribedAsync();
 }
+
+// First in the pipeline: stamp a correlation id on every request and catch
+// unhandled exceptions so clients see a consistent JSON error instead of
+// leaking stack traces or connection resets.
+app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 // Trust proxy headers before any middleware that cares about scheme/IP.
 app.UseForwardedHeaders();
@@ -592,10 +617,13 @@ app.MapGet(
         async (string gameId, HttpContext ctx) =>
         {
             var redis = ctx.RequestServices.GetService<IConnectionMultiplexer>();
-            if (redis == null)
-                return Results.Json(new { status = "pending" }, statusCode: 200);
+            if (!redis.IsAvailable())
+                return Results.Json(
+                    new { error = "Service temporarily unavailable." },
+                    statusCode: 503
+                );
 
-            var db = redis.GetDatabase();
+            var db = redis!.GetDatabase();
             var result = await db.StringGetAsync($"verify:result:{gameId}");
             if (result.IsNullOrEmpty)
                 return Results.Json(new { status = "pending" }, statusCode: 200);
@@ -775,6 +803,22 @@ app.MapGet(
 );
 
 app.MapPrometheusScrapingEndpoint("/metrics");
+
+// Test-only endpoint used to verify the global exception middleware. Only
+// mapped when Test:EnableCrashEndpoint=true, which is set by TestFactory.
+if (app.Configuration.GetValue<bool>("Test:EnableCrashEndpoint"))
+{
+    app.MapGet(
+        "/__test/crash",
+        () =>
+        {
+            throw new InvalidOperationException("intentional test crash");
+#pragma warning disable CS0162 // unreachable
+            return Results.Ok();
+#pragma warning restore CS0162
+        }
+    );
+}
 
 app.Run();
 
