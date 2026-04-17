@@ -135,7 +135,11 @@ public class LobbyGenerationWorker : BackgroundService
                     yields++;
                     if (yields % 100 == 0)
                     {
-                        int pct = Math.Min(95, board.Arrows.Count * 100 / maxPossible);
+                        // Arrow count isn't monotone across phases (compaction merges
+                        // drop it mid-run), so clamp to the max we've already
+                        // reported to keep the client's bar monotone.
+                        int raw = Math.Min(95, board.Arrows.Count * 100 / maxPossible);
+                        int pct = Math.Max(lastReportedPct, raw);
                         if (pct != lastReportedPct)
                         {
                             lastReportedPct = pct;
