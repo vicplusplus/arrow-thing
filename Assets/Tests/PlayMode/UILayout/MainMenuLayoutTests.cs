@@ -155,8 +155,7 @@ public class MainMenuLayoutTests : UILayoutTestBase
             warn,
             mp.Q(className: "title"),
             mp.Q<Button>("back-mp-btn"),
-            mp.Q<Button>("coop-btn"),
-            mp.Q<Label>(className: "coming-soon-text")
+            mp.Q<Button>("coop-btn")
         );
     }
 
