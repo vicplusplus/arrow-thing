@@ -40,6 +40,9 @@ public sealed class CoopHubController : NavigableScene
     private LabeledField _hostNameField;
     private LabeledField _joinCodeField;
 
+    // Focus items for each lobby row, rebuilt on each RefreshListAsync.
+    private readonly List<FocusNavigator.FocusItem> _rowFocusItems = new();
+
     // Host size sliders (range [100, 400], snap step 50)
     private const int HostMinDim = 100;
     private const int HostMaxDim = 400;
@@ -285,6 +288,11 @@ public sealed class CoopHubController : NavigableScene
             }
         );
 
+        // Append lobby row focus items (populated by BuildRow during RefreshListAsync).
+        int rowsStart = items.Count;
+        items.AddRange(_rowFocusItems);
+        int rowsEnd = items.Count; // exclusive
+
         nav.SetItems(items, hostIdx);
 
         // Link: back ↔ host ↔ join ↔ refresh
@@ -304,6 +312,17 @@ public sealed class CoopHubController : NavigableScene
         nav.Link(fAllIdx, FocusNavigator.NavDir.Up, hostIdx);
         nav.Link(fActiveIdx, FocusNavigator.NavDir.Up, joinIdx);
         nav.Link(fCompletedIdx, FocusNavigator.NavDir.Up, refreshIdx);
+
+        // Link: filter row → first row; vertical chain between rows.
+        if (rowsEnd > rowsStart)
+        {
+            nav.Link(fAllIdx, FocusNavigator.NavDir.Down, rowsStart);
+            nav.Link(fActiveIdx, FocusNavigator.NavDir.Down, rowsStart);
+            nav.Link(fCompletedIdx, FocusNavigator.NavDir.Down, rowsStart);
+            nav.Link(rowsStart, FocusNavigator.NavDir.Up, fAllIdx);
+            for (int i = rowsStart; i < rowsEnd - 1; i++)
+                nav.LinkBidi(i, FocusNavigator.NavDir.Down, i + 1);
+        }
     }
 
     private void BuildHostModalNavGraph(FocusNavigator nav, List<FocusNavigator.FocusItem> items)
@@ -531,8 +550,11 @@ public sealed class CoopHubController : NavigableScene
         if (_api == null || !_api.IsLoggedIn)
         {
             _hubList.Clear();
+            _rowFocusItems.Clear();
             SetVisible(_hubEmpty, true);
             _hubEmpty.text = "Log in to see your co-op lobbies.";
+            if (_state == HubState.List)
+                RebuildNavigator(preserveFocus: true);
             return;
         }
 
@@ -545,16 +567,22 @@ public sealed class CoopHubController : NavigableScene
         }
 
         _hubList.Clear();
+        _rowFocusItems.Clear();
         var entries = result.Data?.entries;
         if (entries == null || entries.Length == 0)
         {
             SetVisible(_hubEmpty, true);
-            return;
+        }
+        else
+        {
+            SetVisible(_hubEmpty, false);
+            foreach (var entry in entries)
+                _hubList.Add(BuildRow(entry));
         }
 
-        SetVisible(_hubEmpty, false);
-        foreach (var entry in entries)
-            _hubList.Add(BuildRow(entry));
+        // Rebuild the nav graph so the new rows are reachable with the keyboard.
+        if (_state == HubState.List)
+            RebuildNavigator(preserveFocus: true);
     }
 
     private VisualElement BuildRow(LobbyListEntryDto entry)
@@ -688,6 +716,23 @@ public sealed class CoopHubController : NavigableScene
             deleteBtn.AddToClassList("lobby-row__delete-btn");
             row.Add(deleteBtn);
         }
+
+        // Focus item: Enter on row opens the lobby (if active or generating).
+        // Completed / failed rows are still focusable but no-op on activate.
+        var capturedCode = entry.code;
+        var capturedStatus = entry.status;
+        _rowFocusItems.Add(
+            new FocusNavigator.FocusItem
+            {
+                Element = row,
+                OnActivate = () =>
+                {
+                    if (capturedStatus == 0 || capturedStatus == 1)
+                        OnOpenLobby(capturedCode, capturedStatus);
+                    return true;
+                },
+            }
+        );
 
         return row;
     }
