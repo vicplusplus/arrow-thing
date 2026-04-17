@@ -424,17 +424,13 @@ public sealed class CoopHubController : NavigableScene
 
     private void BuildHostModalNavGraph(FocusNavigator nav, List<FocusNavigator.FocusItem> items)
     {
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = _hostNameField.Input,
-                OnActivate = () =>
-                {
-                    _hostNameField.Input.Focus();
-                    return true;
-                },
-            }
-        );
+        items.Add(MakeTextFieldFocusItem(_hostNameField, OnHostSubmit));
+
+        int widthIdx = items.Count;
+        items.Add(MakeSliderFocusItem(_hostWidthSlider));
+        int heightIdx = items.Count;
+        items.Add(MakeSliderFocusItem(_hostHeightSlider));
+
         int submitIdx = items.Count;
         items.Add(
             new FocusNavigator.FocusItem
@@ -465,19 +461,49 @@ public sealed class CoopHubController : NavigableScene
         nav.LinkBidi(submitIdx, FocusNavigator.NavDir.Right, cancelIdx);
     }
 
+    private static FocusNavigator.FocusItem MakeTextFieldFocusItem(
+        LabeledField field,
+        System.Action onSubmit
+    )
+    {
+        return new FocusNavigator.FocusItem
+        {
+            Element = field.Input,
+            OnActivate =
+                onSubmit != null
+                    ? () =>
+                    {
+                        onSubmit();
+                        return true;
+                    }
+                    : (Func<bool>)null,
+            OnFocused = () => field.ActivateFromKeyboard(),
+            OnBlurred = () =>
+            {
+                field.Input.Blur();
+                if (KeybindManager.Instance != null)
+                    KeybindManager.Instance.TextFieldFocused = false;
+            },
+        };
+    }
+
+    private static FocusNavigator.FocusItem MakeSliderFocusItem(SnapSlider slider)
+    {
+        return new FocusNavigator.FocusItem
+        {
+            Element = slider.Track,
+            CustomFocusVisual = true,
+            OnHorizontal = dir =>
+            {
+                slider.KeyboardStep(dir, false);
+                return true;
+            },
+        };
+    }
+
     private void BuildJoinModalNavGraph(FocusNavigator nav, List<FocusNavigator.FocusItem> items)
     {
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = _joinCodeField.Input,
-                OnActivate = () =>
-                {
-                    _joinCodeField.Input.Focus();
-                    return true;
-                },
-            }
-        );
+        items.Add(MakeTextFieldFocusItem(_joinCodeField, OnJoinSubmit));
         int submitIdx = items.Count;
         items.Add(
             new FocusNavigator.FocusItem
