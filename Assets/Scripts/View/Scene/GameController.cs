@@ -98,6 +98,21 @@ public sealed class GameController : MonoBehaviour
     private string _coopLobbyCode;
     private CoopClient _coopClient;
     private byte[] _coopSnapshotData;
+    private CoopSession _coopSession;
+    private Guid _coopUserId;
+    private float _heartbeatAccum;
+    private const float HeartbeatIntervalSec = 15f;
+
+    // Auto-reconnect state (Phase 6). When the CoopClient disconnects
+    // unexpectedly (not via user back-out), schedule a reconnect with
+    // exponential backoff.
+    private bool _coopShouldReconnect;
+    private int _coopReconnectAttempt;
+    private float _coopReconnectAt;
+    private bool _coopReconnectInFlight;
+
+    // 1, 2, 4, 8, 16, 30 seconds (capped).
+    private static readonly float[] CoopReconnectDelays = { 1f, 2f, 4f, 8f, 16f, 30f };
 
     /// <summary>Set to true by the X button during loading to abort.</summary>
     private bool _cancelRequested;
@@ -150,6 +165,7 @@ public sealed class GameController : MonoBehaviour
     private void OnDestroy()
     {
         _focusNavigator?.Dispose();
+        _coopSession?.Dispose();
         _coopClient?.Dispose();
         SettingsController.IsOpenChanged -= OnSettingsOpenChanged;
         ThemeManager.ThemeChanged -= OnThemeChanged;
@@ -172,6 +188,37 @@ public sealed class GameController : MonoBehaviour
     private void Update()
     {
         _coopClient?.Update();
+
+        // Co-op heartbeat loop (Phase 6). 15s cadence with current focus state
+        // and last-input timestamp; the server uses these for AFK detection.
+        if (_coopSession != null && _coopClient != null && _coopClient.IsConnected)
+        {
+            _heartbeatAccum += Time.unscaledDeltaTime;
+            if (_heartbeatAccum >= HeartbeatIntervalSec)
+            {
+                _heartbeatAccum = 0f;
+                var lastInput =
+                    _inputHandler != null ? _inputHandler.LastInputTimeUtc : DateTime.UtcNow;
+                _ = _coopClient.SendAsync(CoopMessage.Heartbeat(Application.isFocused, lastInput));
+            }
+        }
+
+        // Auto-reconnect driver: fires a single reconnect attempt when the
+        // backoff timer expires. Additional retries are scheduled by the
+        // Disconnected handler when a reconnect itself fails.
+        if (
+            _coopShouldReconnect
+            && _coopClient != null
+            && !_coopClient.IsConnected
+            && !_coopReconnectInFlight
+            && _coopReconnectAt > 0f
+            && Time.unscaledTime >= _coopReconnectAt
+        )
+        {
+            _coopReconnectInFlight = true;
+            _coopReconnectAt = 0f;
+            _ = AttemptCoopReconnectAsync();
+        }
 
         // Tick FocusNavigator for modal keyboard nav (leave/cancel modals).
         if (_focusNavigator != null)
@@ -320,7 +367,12 @@ public sealed class GameController : MonoBehaviour
             switch (msg.Type)
             {
                 case "welcome":
-                    Debug.Log($"[GameController] Co-op welcome for lobby {_coopLobbyCode}");
+                    var uidStr = msg.Payload?.Value<string>("yourUserId");
+                    if (Guid.TryParse(uidStr, out var uid))
+                        _coopUserId = uid;
+                    Debug.Log(
+                        $"[GameController] Co-op welcome for lobby {_coopLobbyCode} (you={_coopUserId})"
+                    );
                     break;
                 case "gen_progress":
                     var pct = msg.Payload?.Value<int>("pct") ?? 0;
@@ -356,7 +408,30 @@ public sealed class GameController : MonoBehaviour
             {
                 failed = true;
                 failReason = $"Disconnected: {reason}";
+                return;
             }
+
+            // Unexpected disconnect after we were playing — schedule reconnect.
+            // Server-initiated disconnects for terminal states (rate_limited,
+            // lobby_completed, registration_cap) should NOT retry.
+            if (!_coopShouldReconnect)
+                return;
+            if (
+                reason != null
+                && (
+                    reason.Contains("rate_limited")
+                    || reason.Contains("completed")
+                    || reason.Contains("deleted")
+                    || reason.Contains("cap")
+                )
+            )
+                return;
+
+            _coopReconnectInFlight = false;
+            _coopReconnectAt = Time.unscaledTime + GetReconnectDelay(_coopReconnectAttempt);
+            _coopReconnectAttempt++;
+            if (_coopSession != null && GlobalToast.Instance != null)
+                GlobalToast.Instance.ShowInfo("Reconnecting...");
         };
 
         var connectTask = _coopClient.ConnectAsync(api.BaseWsUrl, _coopLobbyCode, api.Token);
@@ -438,11 +513,103 @@ public sealed class GameController : MonoBehaviour
 
         HideLoading();
 
-        // Wire input for camera pan/zoom. Taps resolve locally (read-only preview).
-        // Timer and recorder are null — InputHandler tolerates this.
+        // Enable auto-reconnect now that we have a working session.
+        _coopShouldReconnect = true;
+
+        // Create the session wrapper + wire server event handlers.
+        _coopSession = new CoopSession(_coopClient, _board, _coopUserId);
+        _coopSession.RemoteCleared += OnCoopRemoteCleared;
+        _coopSession.RemoteRejectedDep += OnCoopRemoteRejectedDep;
+        _coopSession.LocalRejectedRace += _ =>
+        { /* silent; arrow was already animated away */
+        };
+        _coopSession.LocalRejectedRate += _ =>
+        {
+            if (GlobalToast.Instance != null)
+                GlobalToast.Instance.ShowError("Slow down");
+        };
+        _coopSession.LobbyCompleted += OnCoopLobbyCompleted;
+
         WireHud();
         WireInput();
-        // Skip WireVictory — co-op completion is handled by the server (Phase 6).
+        // Skip WireVictory — co-op completion is handled by the server.
+    }
+
+    private void OnCoopRemoteCleared(CoopSession.ClearedEvent evt)
+    {
+        if (evt.IsLocal)
+            return; // already animated locally via optimistic clear
+        if (evt.Arrow != null && _boardView != null)
+            _boardView.ClearArrowAnimated(evt.Arrow);
+    }
+
+    private void OnCoopRemoteRejectedDep(CoopSession.RejectedDepEvent evt)
+    {
+        // Server broadcast a dep rejection. Play the standard blocked-tap
+        // flash on that arrow for all players. If it was OUR attempt, the
+        // flash doubles as a rollback signal since we hadn't actually
+        // removed the arrow locally (TrySubmitClear only reads it).
+        if (evt.Arrow != null && _boardView != null)
+        {
+            // TryClearArrow plays the reject animation if the arrow isn't clearable.
+            _boardView.TryClearArrow(evt.Arrow);
+        }
+    }
+
+    private void OnCoopLobbyCompleted()
+    {
+        if (GlobalToast.Instance != null)
+            GlobalToast.Instance.ShowInfo("Board cleared!");
+        if (_inputHandler != null)
+            _inputHandler.SetInputEnabled(false);
+    }
+
+    private static float GetReconnectDelay(int attempt)
+    {
+        if (attempt < 0)
+            attempt = 0;
+        if (attempt >= CoopReconnectDelays.Length)
+            attempt = CoopReconnectDelays.Length - 1;
+        return CoopReconnectDelays[attempt];
+    }
+
+    private async Task AttemptCoopReconnectAsync()
+    {
+        try
+        {
+            await _coopClient.ReconnectAsync();
+            await _coopClient.SendAsync(CoopMessage.Hello(0));
+            _coopReconnectAttempt = 0;
+            _coopReconnectInFlight = false;
+            if (GlobalToast.Instance != null)
+                GlobalToast.Instance.ShowInfo("Reconnected");
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[GameController] Co-op reconnect failed: {e.Message}");
+            // Schedule another attempt. The Disconnected handler (fired by
+            // CoopClient on the failure) also schedules one; to avoid double-
+            // scheduling, the Disconnected handler checks _coopReconnectInFlight.
+            _coopReconnectInFlight = false;
+            _coopReconnectAt = Time.unscaledTime + GetReconnectDelay(_coopReconnectAttempt);
+            _coopReconnectAttempt++;
+        }
+    }
+
+    private bool OnCoopTap(Cell cell, Vector3 tapWorld)
+    {
+        if (_coopSession == null)
+            return true;
+        var arrow = _coopSession.TrySubmitClear(cell, tapWorld);
+        if (arrow != null && _boardView != null)
+        {
+            // Optimistic animation — user sees the arrow vanish immediately.
+            // Server accept (`cleared`) does nothing further for our tap;
+            // server reject-dep plays the reject flash; server reject-race
+            // is silent (arrow was already gone).
+            _boardView.TryClearArrow(arrow);
+        }
+        return true;
     }
 
     private void UpdateLoadingLabel(string text)
@@ -979,7 +1146,8 @@ public sealed class GameController : MonoBehaviour
             OnArrowCleared,
             onQuickReset: OnQuickReset,
             onQuickSave: OnQuickSave,
-            onToggleTrail: ToggleTrail
+            onToggleTrail: ToggleTrail,
+            onTapAttempt: _isCoopMode ? (Func<Cell, Vector3, bool>)OnCoopTap : null
         );
 
         // Apply keep-trail setting from PlayerPrefs.
@@ -1234,8 +1402,10 @@ public sealed class GameController : MonoBehaviour
         }
     }
 
-    private static void ReturnToModeSelect()
+    private void ReturnToModeSelect()
     {
+        // Stop reconnect attempts before tearing down the scene.
+        _coopShouldReconnect = false;
         SceneNav.Pop();
     }
 

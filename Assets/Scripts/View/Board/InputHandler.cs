@@ -23,6 +23,16 @@ public sealed class InputHandler : MonoBehaviour
     private Action _onQuickSave;
     private Action _onToggleTrail;
 
+    /// <summary>
+    /// Co-op tap interceptor (Phase 6). When set, called instead of the local
+    /// TryClearArrow path: the delegate owns the full animation + server
+    /// round-trip. (cell, worldPos) → true if handled.
+    /// </summary>
+    private Func<Cell, Vector3, bool> _onTapAttempt;
+
+    /// <summary>Wall-clock time of the last tap or drag, for heartbeat/AFK tracking.</summary>
+    public DateTime LastInputTimeUtc { get; private set; } = DateTime.UtcNow;
+
     private InputAction _pointAction = null!;
     private InputAction _selectAction = null!;
     private InputAction _zoomAction = null!;
@@ -51,7 +61,8 @@ public sealed class InputHandler : MonoBehaviour
         Action onArrowCleared = null,
         Action onQuickReset = null,
         Action onQuickSave = null,
-        Action onToggleTrail = null
+        Action onToggleTrail = null,
+        Func<Cell, Vector3, bool> onTapAttempt = null
     )
     {
         _board = board;
@@ -64,6 +75,7 @@ public sealed class InputHandler : MonoBehaviour
         _onQuickReset = onQuickReset;
         _onQuickSave = onQuickSave;
         _onToggleTrail = onToggleTrail;
+        _onTapAttempt = onTapAttempt;
 
         var km = KeybindManager.Instance;
         _pointAction = km.Point;
@@ -137,6 +149,7 @@ public sealed class InputHandler : MonoBehaviour
 
             if (_isDragging)
             {
+                LastInputTimeUtc = DateTime.UtcNow;
                 Vector3 currentWorld = _camCtrl.Cam.ScreenToWorldPoint(currentScreen);
                 Vector3 delta = _pressStartWorld - currentWorld;
                 _camCtrl.Pan(delta);
@@ -156,11 +169,21 @@ public sealed class InputHandler : MonoBehaviour
 
     private void HandleTap(Vector2 screenPos)
     {
+        LastInputTimeUtc = DateTime.UtcNow;
+
         Vector3 worldPos = _camCtrl.Cam.ScreenToWorldPoint(screenPos);
         Cell cell = BoardCoords.WorldToCell(worldPos, _board.Width, _board.Height);
 
         if (!_board.Contains(cell))
             return;
+
+        // Co-op interceptor: delegates the entire clear flow (optimistic
+        // animation, server send, accept/reject handling) to CoopSession.
+        if (_onTapAttempt != null)
+        {
+            _onTapAttempt(cell, worldPos);
+            return;
+        }
 
         Arrow arrow = _board.GetArrowAt(cell);
         if (arrow == null)

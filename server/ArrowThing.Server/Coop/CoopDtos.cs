@@ -68,3 +68,19 @@ public record GenCompletePayload();
 public record SnapshotMetaPayload(int Version, int SizeBytes);
 
 public record DisconnectPayload(string Reason);
+
+// -- Phase 6 payloads --------------------------------------------------------
+
+public record ClearAttemptPayload(float TapX, float TapY, string ClientTsUtc, long ClientSeq);
+
+public record ClearedPayload(Guid PlayerId, float TapX, float TapY, string TsUtc, long Seq);
+
+public record RejectedDepPayload(Guid PlayerId, float TapX, float TapY, string TsUtc, long Seq);
+
+public record RejectedRacePayload(long ClientSeq, string Reason);
+
+public record RejectedRatePayload(long ClientSeq, int RetryAfterMs);
+
+public record LobbyCompletedPayload(string CompletedAtUtc);
+
+public record HeartbeatPayload(bool Focused, string LastInputTsUtc);

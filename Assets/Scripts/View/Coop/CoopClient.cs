@@ -31,6 +31,11 @@ public class CoopClient : IDisposable
     private readonly ConcurrentQueue<Action> _mainThreadQueue = new ConcurrentQueue<Action>();
     private bool _disposed;
 
+    // Last successful connection params, used by ReconnectAsync.
+    private string _lastBaseWsUrl;
+    private string _lastCode;
+    private string _lastToken;
+
 #if !UNITY_WEBGL || UNITY_EDITOR
     // -- Desktop / Editor: System.Net.WebSockets.ClientWebSocket -------------
 
@@ -44,6 +49,10 @@ public class CoopClient : IDisposable
     {
         if (_socket != null)
             throw new InvalidOperationException("Already connected.");
+
+        _lastBaseWsUrl = baseWsUrl;
+        _lastCode = code;
+        _lastToken = token;
 
         _socket = new ClientWebSocket();
         _cts = new CancellationTokenSource();
@@ -62,6 +71,19 @@ public class CoopClient : IDisposable
 
         EnqueueConnected();
         _receiveLoop = Task.Run(() => ReceiveLoopAsync(_cts.Token));
+    }
+
+    /// <summary>
+    /// Tears down the existing socket (if any) and reconnects with the
+    /// params from the most recent <see cref="ConnectAsync"/>. Caller is
+    /// responsible for sending <c>hello</c> after this returns.
+    /// </summary>
+    public async Task ReconnectAsync()
+    {
+        if (_lastBaseWsUrl == null)
+            throw new InvalidOperationException("Never connected — nothing to reconnect to.");
+        CleanupSocket();
+        await ConnectAsync(_lastBaseWsUrl, _lastCode, _lastToken);
     }
 
     public async Task SendAsync(CoopMessage msg)
@@ -183,6 +205,10 @@ public class CoopClient : IDisposable
         if (_handle >= 0)
             throw new InvalidOperationException("Already connected.");
 
+        _lastBaseWsUrl = baseWsUrl;
+        _lastCode = code;
+        _lastToken = token;
+
         CoopWebGLBridge.EnsureExists();
 
         var url = $"{baseWsUrl}/ws/coop/{code}?token={Uri.EscapeDataString(token)}";
@@ -192,6 +218,19 @@ public class CoopClient : IDisposable
 
         _instances[_handle] = this;
         return Task.CompletedTask;
+    }
+
+    public async Task ReconnectAsync()
+    {
+        if (_lastBaseWsUrl == null)
+            throw new InvalidOperationException("Never connected — nothing to reconnect to.");
+        if (_handle >= 0)
+        {
+            CoopWS_Close(_handle);
+            _instances.TryRemove(_handle, out _);
+            _handle = -1;
+        }
+        await ConnectAsync(_lastBaseWsUrl, _lastCode, _lastToken);
     }
 
     public Task SendAsync(CoopMessage msg)
