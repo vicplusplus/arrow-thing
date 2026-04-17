@@ -318,6 +318,20 @@ Protected by `X-Admin-Key` header (compared against `Admin:ApiKey` configuration
 
 All auth operations are tracked via `AuditLog` records in PostgreSQL. `AuditLogService` dual-writes each event to both the database and structured logs (via `ILogger<AuditLogService>`), so audit data is queryable in both PostgreSQL (via Grafana SQL datasource) and Loki (via log search). 14 event types cover registration, login (success/failure), password changes, email changes, account lock/unlock, session invalidation, and display name updates. Each record captures timestamp, event type, user ID, email, client IP (from `X-Forwarded-For`), and optional detail string.
 
+### Refresh tokens
+
+The access JWT now lives 15 minutes (`JwtHelper.AccessTokenLifetime`) and is paired with a 30-day rotating refresh token (`RefreshTokenService`). Daily-active users effectively never log out — every authenticated request that comes back 401 transparently refreshes once via `ApiClient.SendAuthenticatedAsync` and retries — while the XSS exposure window for a stolen JWT shrinks from 30 days to 15 minutes.
+
+Refresh tokens are opaque, formatted as `{base64url(rowId.bytes)}.{base64url(32-byte secret)}`. The server stores `bcrypt(secret)` keyed by row id (so redemption is O(1)). `POST /api/auth/refresh` validates and rotates: the presented row is marked `RevokedAt` + `ReplacedByTokenId`, a fresh row is added, and the new pair is returned.
+
+**Reuse detection.** If a presented token's row is already revoked (i.e. the legitimate user already rotated it and someone is replaying the old half), `RefreshTokenService.RedeemAsync` revokes every active refresh token for that user and returns 401. The user has to re-log, which is the right answer when a token has been seen twice.
+
+**Stamp interaction.** Every place that bumps `User.SecurityStamp` (change-password, reset-password, lock-account, unlock-account) also calls `RefreshTokenService.RevokeAllActiveAsync`, so the access JWT and refresh tokens are invalidated together.
+
+**Logout.** `POST /api/auth/logout` revokes a single refresh token and is idempotent — unknown / malformed / already-revoked tokens still get 200 so the client never has to handle a logout failure. The revoked row's `ReplacedByTokenId` stays null, so a subsequent reuse attempt does NOT trigger the revoke-all path.
+
+Storage on the client is still `PlayerPrefs` (`auth_token`, `auth_refresh_token`). HttpOnly-cookie migration is Phase 1D — it requires WebGL `withCredentials` plumbing via `.jslib` plus CORS-credentials and CSRF infrastructure that doesn't share much with the refresh-token mechanics.
+
 ### Reliability
 
 **Redis is optional at runtime.** `IConnectionMultiplexer` is registered with `AbortOnConnectFail=false`, so a Redis outage at startup doesn't crash the API — the multiplexer reconnects in the background. Surfaces that require Redis gate on `RedisExtensions.IsAvailable` and return `503 { error: "Service temporarily unavailable." }` instead of throwing. Currently gated: score submission (`POST /api/scores`), score status (`GET /api/scores/{id}/status`), lobby create + retry-generation (`POST /api/lobbies`, `POST /api/lobbies/{id}/retry-gen`). Read paths like the leaderboard fall back to Postgres when the cache misses, so they keep working during a Redis outage.

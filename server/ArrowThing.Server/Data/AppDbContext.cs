@@ -10,6 +10,7 @@ public class AppDbContext : DbContext
 
     public DbSet<User> Users => Set<User>();
     public DbSet<UserDevice> UserDevices => Set<UserDevice>();
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Score> Scores => Set<Score>();
     public DbSet<Lobby> Lobbies => Set<Lobby>();
@@ -46,6 +47,27 @@ public class AppDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
 
             entity.HasIndex(d => d.UserId);
+        });
+
+        modelBuilder.Entity<RefreshToken>(entity =>
+        {
+            entity.HasKey(t => t.Id);
+            entity.Property(t => t.TokenHash).IsRequired();
+            entity.Property(t => t.IssuedAt).IsRequired();
+            entity.Property(t => t.ExpiresAt).IsRequired();
+            entity.Property(t => t.UserAgent).HasMaxLength(512);
+
+            entity
+                .HasOne(t => t.User)
+                .WithMany()
+                .HasForeignKey(t => t.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Lookups: by user (revoke-all on reuse / stamp rotation) and by
+            // expiry (cleanup job, future). Id is the PK so per-token redeem
+            // is already O(1).
+            entity.HasIndex(t => t.UserId);
+            entity.HasIndex(t => t.ExpiresAt);
         });
 
         modelBuilder.Entity<Score>(entity =>

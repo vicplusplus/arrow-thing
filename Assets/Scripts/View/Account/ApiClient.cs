@@ -13,6 +13,7 @@ public class ApiClient
     private const string DefaultBaseUrl = "https://api.arrow-thing.com";
     private const string LocalBaseUrl = "http://localhost:5000";
     private const string TokenPrefKey = "auth_token";
+    private const string RefreshTokenPrefKey = "auth_refresh_token";
     private const string DisplayNamePrefKey = "auth_display_name";
     private const string EmailPrefKey = "auth_email";
     private const string DeviceIdPrefKey = "auth_device_id";
@@ -43,6 +44,7 @@ public class ApiClient
     private readonly string _baseUrl;
 
     public string Token { get; private set; }
+    public string RefreshToken { get; private set; }
     public string DisplayName { get; private set; }
     public string Email { get; private set; }
     public bool IsLoggedIn => !string.IsNullOrEmpty(Token);
@@ -56,6 +58,7 @@ public class ApiClient
 #endif
         // Restore saved session
         Token = PlayerPrefs.GetString(TokenPrefKey, "");
+        RefreshToken = PlayerPrefs.GetString(RefreshTokenPrefKey, "");
         DisplayName = PlayerPrefs.GetString(DisplayNamePrefKey, "");
         Email = PlayerPrefs.GetString(EmailPrefKey, "");
     }
@@ -117,16 +120,15 @@ public class ApiClient
 
         try
         {
-            using var request = new UnityWebRequest($"{_baseUrl}/api/auth/me", "PATCH");
-            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
-            request.downloadHandler = new DownloadHandlerBuffer();
-            request.SetRequestHeader("Content-Type", "application/json");
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = new UnityWebRequest($"{_baseUrl}/api/auth/me", "PATCH");
+                r.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+                r.downloadHandler = new DownloadHandlerBuffer();
+                r.SetRequestHeader("Content-Type", "application/json");
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -188,16 +190,15 @@ public class ApiClient
 
         try
         {
-            using var request = new UnityWebRequest($"{_baseUrl}/api/auth/change-email", "POST");
-            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
-            request.downloadHandler = new DownloadHandlerBuffer();
-            request.SetRequestHeader("Content-Type", "application/json");
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = new UnityWebRequest($"{_baseUrl}/api/auth/change-email", "POST");
+                r.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+                r.downloadHandler = new DownloadHandlerBuffer();
+                r.SetRequestHeader("Content-Type", "application/json");
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -230,16 +231,15 @@ public class ApiClient
 
         try
         {
-            using var request = new UnityWebRequest($"{_baseUrl}/api/auth/change-password", "POST");
-            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
-            request.downloadHandler = new DownloadHandlerBuffer();
-            request.SetRequestHeader("Content-Type", "application/json");
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = new UnityWebRequest($"{_baseUrl}/api/auth/change-password", "POST");
+                r.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+                r.downloadHandler = new DownloadHandlerBuffer();
+                r.SetRequestHeader("Content-Type", "application/json");
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -268,19 +268,15 @@ public class ApiClient
 
         try
         {
-            using var request = new UnityWebRequest(
-                $"{_baseUrl}/api/auth/confirm-email-change",
-                "POST"
-            );
-            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
-            request.downloadHandler = new DownloadHandlerBuffer();
-            request.SetRequestHeader("Content-Type", "application/json");
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = new UnityWebRequest($"{_baseUrl}/api/auth/confirm-email-change", "POST");
+                r.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+                r.downloadHandler = new DownloadHandlerBuffer();
+                r.SetRequestHeader("Content-Type", "application/json");
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -304,13 +300,12 @@ public class ApiClient
     {
         try
         {
-            using var request = UnityWebRequest.Get($"{_baseUrl}/api/auth/me");
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = UnityWebRequest.Get($"{_baseUrl}/api/auth/me");
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -337,16 +332,15 @@ public class ApiClient
         var body = JsonUtility.ToJson(new SubmitScoreRequestDto { replayJson = replayJson });
         try
         {
-            using var request = new UnityWebRequest($"{_baseUrl}/api/scores", "POST");
-            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
-            request.downloadHandler = new DownloadHandlerBuffer();
-            request.SetRequestHeader("Content-Type", "application/json");
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 120;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = new UnityWebRequest($"{_baseUrl}/api/scores", "POST");
+                r.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+                r.downloadHandler = new DownloadHandlerBuffer();
+                r.SetRequestHeader("Content-Type", "application/json");
+                r.timeout = 120;
+                return r;
+            });
 
             // 202 Accepted — async verification, need to poll
             if (request.responseCode == 202)
@@ -379,13 +373,12 @@ public class ApiClient
     {
         try
         {
-            using var request = UnityWebRequest.Get($"{_baseUrl}/api/scores/{gameId}/status");
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = UnityWebRequest.Get($"{_baseUrl}/api/scores/{gameId}/status");
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -472,15 +465,12 @@ public class ApiClient
     {
         try
         {
-            using var request = UnityWebRequest.Get(
-                $"{_baseUrl}/api/leaderboards/{width}x{height}/me"
-            );
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = UnityWebRequest.Get($"{_baseUrl}/api/leaderboards/{width}x{height}/me");
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -508,13 +498,12 @@ public class ApiClient
     {
         try
         {
-            using var request = UnityWebRequest.Get($"{_baseUrl}/api/leaderboards/all/me");
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = UnityWebRequest.Get($"{_baseUrl}/api/leaderboards/all/me");
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -569,12 +558,144 @@ public class ApiClient
         }
     }
 
+    /// <summary>
+    /// Logs out locally. Best-effort fires <c>POST /api/auth/logout</c> to
+    /// revoke the refresh token server-side; even if that call fails (offline,
+    /// 5xx) the local session is still cleared so the user can sign back in.
+    /// </summary>
+    public async Task LogoutAsync()
+    {
+        var refresh = RefreshToken;
+        ClearSessionLocal();
+        if (string.IsNullOrEmpty(refresh))
+            return;
+        try
+        {
+            var body = JsonUtility.ToJson(new LogoutRequestDto { refreshToken = refresh });
+            using var request = new UnityWebRequest($"{_baseUrl}/api/auth/logout", "POST");
+            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+            request.timeout = 5;
+            var op = request.SendWebRequest();
+            while (!op.isDone)
+                await Task.Yield();
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] Logout server call failed: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Clears local credentials without contacting the server. Use this when
+    /// you've already detected the session is invalid (e.g. transparent
+    /// refresh failed). Prefer <see cref="LogoutAsync"/> for user-initiated
+    /// logout so the refresh token is revoked server-side too.
+    /// </summary>
     public void Logout()
     {
+        ClearSessionLocal();
+    }
+
+    /// <summary>
+    /// Exchanges the stored refresh token for a fresh access + refresh pair.
+    /// On success, the new tokens are persisted. On failure (401 / network),
+    /// the local session is cleared and the caller should treat the user as
+    /// logged out.
+    /// </summary>
+    public async Task<bool> RefreshAsync()
+    {
+        if (string.IsNullOrEmpty(RefreshToken))
+            return false;
+
+        try
+        {
+            var body = JsonUtility.ToJson(new RefreshRequestDto { refreshToken = RefreshToken });
+            using var request = new UnityWebRequest($"{_baseUrl}/api/auth/refresh", "POST");
+            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+            request.timeout = 10;
+
+            var op = request.SendWebRequest();
+            while (!op.isDone)
+                await Task.Yield();
+
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                if (request.responseCode == 401 || request.responseCode == 403)
+                    ClearSessionLocal();
+                return false;
+            }
+
+            var response = JsonUtility.FromJson<AuthResponse>(request.downloadHandler.text);
+            StoreSession(response, Email);
+            return true;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] Refresh failed: {e.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Sends a request that requires the access JWT, transparently refreshing
+    /// once on 401 and retrying. Use this for any authenticated endpoint
+    /// that runs after the initial login flow — without it, an expired access
+    /// token boots the user out instead of silently rolling forward.
+    ///
+    /// The factory is invoked again to build the retry request because
+    /// <see cref="UnityWebRequest"/> can only be sent once.
+    /// </summary>
+    private async Task<UnityWebRequest> SendAuthenticatedAsync(Func<UnityWebRequest> requestFactory)
+    {
+        var request = requestFactory();
+        request.SetRequestHeader("Authorization", $"Bearer {Token}");
+        var op = request.SendWebRequest();
+        while (!op.isDone)
+            await Task.Yield();
+
+        // 401 with no refresh token, or after we've already refreshed once,
+        // is final — return the request as-is so the caller can inspect it.
+        if (request.responseCode != 401 || string.IsNullOrEmpty(RefreshToken))
+            return request;
+
+        // Try a single refresh. If that fails the original 401 stands and
+        // the caller maps it to "session expired".
+        if (!await RefreshAsync())
+            return request;
+
+        request.Dispose();
+        request = requestFactory();
+        request.SetRequestHeader("Authorization", $"Bearer {Token}");
+        op = request.SendWebRequest();
+        while (!op.isDone)
+            await Task.Yield();
+        return request;
+    }
+
+    private void StoreSession(AuthResponse response, string email)
+    {
+        Token = response.token;
+        RefreshToken = response.refreshToken ?? "";
+        DisplayName = response.displayName;
+        Email = email.Trim().ToLowerInvariant();
+        PlayerPrefs.SetString(TokenPrefKey, Token);
+        PlayerPrefs.SetString(RefreshTokenPrefKey, RefreshToken);
+        PlayerPrefs.SetString(DisplayNamePrefKey, DisplayName);
+        PlayerPrefs.SetString(EmailPrefKey, Email);
+    }
+
+    private void ClearSessionLocal()
+    {
         Token = "";
+        RefreshToken = "";
         DisplayName = "";
         Email = "";
         PlayerPrefs.DeleteKey(TokenPrefKey);
+        PlayerPrefs.DeleteKey(RefreshTokenPrefKey);
         PlayerPrefs.DeleteKey(DisplayNamePrefKey);
         PlayerPrefs.DeleteKey(EmailPrefKey);
     }
@@ -607,12 +728,7 @@ public class ApiClient
                 if (response.requiresDeviceOtp)
                     return ApiResult<AuthResponse>.Ok(response);
 
-                Token = response.token;
-                DisplayName = response.displayName;
-                Email = email.Trim().ToLowerInvariant();
-                PlayerPrefs.SetString(TokenPrefKey, Token);
-                PlayerPrefs.SetString(DisplayNamePrefKey, DisplayName);
-                PlayerPrefs.SetString(EmailPrefKey, Email);
+                StoreSession(response, email);
                 return ApiResult<AuthResponse>.Ok(response);
             }
 
@@ -700,16 +816,15 @@ public class ApiClient
         var body = JsonUtility.ToJson(new CreateLobbyRequestDto { name = name });
         try
         {
-            using var request = new UnityWebRequest($"{_baseUrl}/api/lobbies", "POST");
-            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
-            request.downloadHandler = new DownloadHandlerBuffer();
-            request.SetRequestHeader("Content-Type", "application/json");
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = new UnityWebRequest($"{_baseUrl}/api/lobbies", "POST");
+                r.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+                r.downloadHandler = new DownloadHandlerBuffer();
+                r.SetRequestHeader("Content-Type", "application/json");
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success || request.responseCode == 201)
             {
@@ -741,13 +856,12 @@ public class ApiClient
 
         try
         {
-            using var request = UnityWebRequest.Get($"{_baseUrl}/api/lobbies/me{query}");
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = UnityWebRequest.Get($"{_baseUrl}/api/lobbies/me{query}");
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -771,15 +885,14 @@ public class ApiClient
     {
         try
         {
-            using var request = UnityWebRequest.Get(
-                $"{_baseUrl}/api/lobbies/{UnityWebRequest.EscapeURL(code)}"
-            );
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = UnityWebRequest.Get(
+                    $"{_baseUrl}/api/lobbies/{UnityWebRequest.EscapeURL(code)}"
+                );
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -801,14 +914,13 @@ public class ApiClient
     {
         try
         {
-            using var request = UnityWebRequest.Delete($"{_baseUrl}/api/lobbies/{lobbyId}");
-            request.downloadHandler = new DownloadHandlerBuffer();
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = UnityWebRequest.Delete($"{_baseUrl}/api/lobbies/{lobbyId}");
+                r.downloadHandler = new DownloadHandlerBuffer();
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -906,6 +1018,18 @@ public class ApiClient
     }
 
     [Serializable]
+    private class RefreshRequestDto
+    {
+        public string refreshToken;
+    }
+
+    [Serializable]
+    private class LogoutRequestDto
+    {
+        public string refreshToken;
+    }
+
+    [Serializable]
     private class SubmitScoreRequestDto
     {
         public string replayJson;
@@ -929,6 +1053,9 @@ public class AuthResponse
 {
     public string token;
     public string displayName;
+    public string refreshToken;
+    public int expiresIn;
+    public int refreshExpiresIn;
 
     /// <summary>
     /// Set by the server (as the only field on the response) when a login
