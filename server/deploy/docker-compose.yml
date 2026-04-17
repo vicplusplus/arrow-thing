@@ -14,6 +14,10 @@ services:
       - Admin__ApiKey=${ADMIN_API_KEY}
       - Redis__ConnectionString=redis:6379
       - Loki__Url=http://loki:3100
+      # Phase 1D cookie auth + CORS. See server/.env.sample for explanations.
+      - Auth__Cookies__Domain=${Auth__Cookies__Domain}
+      - Auth__Cookies__Secure=${Auth__Cookies__Secure}
+      - Cors__AllowedOrigins__0=${Cors__AllowedOrigins__0}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 5s

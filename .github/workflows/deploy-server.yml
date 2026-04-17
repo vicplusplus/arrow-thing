@@ -19,7 +19,26 @@ permissions:
   packages: write
 
 jobs:
+  validate-tag:
+    # Reject releases whose tag isn't plain semver — a malformed tag like
+    # release-2026-04-17 sneaks past downstream scripts that parse it as a
+    # version. Cheap gate before the expensive build.
+    if: ${{ github.event_name == 'release' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check tag format
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+            echo "ERROR: release tag '$TAG' must match ^v[0-9]+\.[0-9]+(\.[0-9]+)?$"
+            echo "Examples: v1.0, v1.0.0, v2.13.4"
+            exit 1
+          fi
+          echo "Tag $TAG is valid."
+
   build-and-push:
+    needs: validate-tag
+    if: ${{ !cancelled() && (needs.validate-tag.result == 'success' || needs.validate-tag.result == 'skipped') }}
     runs-on: ubuntu-latest
 
     steps:
@@ -60,21 +79,54 @@ jobs:
     environment: production
 
     steps:
-      - name: Deploy to VPS
+      - name: Deploy to VPS (canary API first, then worker)
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           echo "${{ secrets.VPS_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/id_ed25519 deploy@${{ secrets.VPS_HOST }} \
-            "cd /home/deploy/arrow-thing/repo && \
-             git fetch origin main && \
-             git reset --hard origin/main && \
-             ./server/deploy/setup.sh && \
-             cd /home/deploy/arrow-thing && \
-             docker compose pull && \
-             docker compose up -d --remove-orphans && \
-             docker compose restart nginx"
+          # Canary ordering: API rolls first (migrations run there). Wait for
+          # its healthcheck to clear before touching the worker, so a bad
+          # migration fails fast without also restarting the worker fleet.
+          # Docker's `unless-stopped` policy keeps the previous image alive
+          # if the new one can't come up.
+          ssh -i ~/.ssh/id_ed25519 deploy@${{ secrets.VPS_HOST }} '
+            set -euo pipefail
+            cd /home/deploy/arrow-thing/repo
+            git fetch origin main
+            git reset --hard origin/main
+            ./server/deploy/setup.sh
+
+            cd /home/deploy/arrow-thing
+            docker compose pull
+
+            # 1) Roll API (migrations, cookie/cors changes, anything schema-y).
+            docker compose up -d --no-deps api
+
+            # 2) Wait for API /health to come up. Compose healthchecks take up
+            #    to 30s start_period + retries, plus migration time.
+            echo "Waiting for API healthcheck..."
+            for i in $(seq 1 30); do
+              STATUS=$(docker inspect -f "{{.State.Health.Status}}" $(docker compose ps -q api) 2>/dev/null || echo "unknown")
+              if [ "$STATUS" = "healthy" ]; then
+                echo "API healthy after ${i}x2s"
+                break
+              fi
+              if [ $i -eq 30 ]; then
+                echo "API did not become healthy within 60s"
+                docker compose logs --tail=200 api
+                exit 1
+              fi
+              sleep 2
+            done
+
+            # 3) Roll worker (schema is now validated by the healthy API).
+            docker compose up -d --no-deps worker
+
+            # 4) Bring up anything else that was added/updated + nginx reload.
+            docker compose up -d --remove-orphans
+            docker compose restart nginx
+          '
 
       - name: Health check
         run: |
