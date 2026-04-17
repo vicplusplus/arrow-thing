@@ -1,0 +1,88 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="coop-hub-root" class="list-screen coop-hub">
+
+        <!-- Header (same pattern as Leaderboard) -->
+        <ui:VisualElement class="screen-header">
+            <ui:Button name="back-hub-btn" class="screen-header__back-btn">
+                <ui:VisualElement class="hud-icon-btn__icon icon--arrow-back" />
+            </ui:Button>
+            <ui:Label class="screen-header__title" text="Co-op" />
+        </ui:VisualElement>
+
+        <!-- Toolbar: Host / Join (small) + refresh -->
+        <ui:VisualElement class="hub-toolbar">
+            <ui:Button name="host-btn" class="hub-toolbar__btn" text="Host" />
+            <ui:Button name="join-btn" class="hub-toolbar__btn" text="Join" />
+            <ui:Button name="hub-refresh-btn" class="list-refresh-btn">
+                <ui:VisualElement class="list-refresh-icon" />
+            </ui:Button>
+        </ui:VisualElement>
+
+        <!-- Filter row (same pattern as Leaderboard sort row) -->
+        <ui:VisualElement class="filter-row">
+            <ui:Button name="filter-all" class="filter-row__btn filter-row__btn--active" text="All" />
+            <ui:Button name="filter-active" class="filter-row__btn" text="Active" />
+            <ui:Button name="filter-completed" class="filter-row__btn" text="Completed" />
+        </ui:VisualElement>
+
+        <!-- Lobby list (same scroll pattern as Leaderboard) -->
+        <ui:ScrollView name="hub-list-scroll" class="list-scroll" mode="Vertical">
+            <ui:VisualElement name="hub-list" class="hub-list" />
+        </ui:ScrollView>
+
+        <!-- Empty state -->
+        <ui:Label name="hub-empty" class="empty-state hub--hidden" text="No lobbies yet. Host one or join by code!" />
+
+        <!-- Host modal overlay -->
+        <ui:VisualElement name="host-modal" class="modal-overlay modal--hidden">
+            <ui:VisualElement class="modal-box hub-modal__box">
+                <ui:Label class="modal-label" text="Host a lobby" />
+                <ui:VisualElement name="host-form-slot" />
+
+                <ui:Label class="host-size-label" text="Board size" />
+                <ui:VisualElement name="host-size-panel" class="custom-panel">
+                    <ui:VisualElement name="host-width-row" class="preset-custom-row">
+                        <ui:Label class="preset-custom-dim-label" text="W" />
+                    </ui:VisualElement>
+                    <ui:VisualElement name="host-height-row" class="preset-custom-row">
+                        <ui:Label class="preset-custom-dim-label" text="H" />
+                    </ui:VisualElement>
+                </ui:VisualElement>
+
+                <ui:Label name="host-error" class="account-error screen--hidden" />
+                <ui:VisualElement class="modal-buttons">
+                    <ui:Button name="host-submit-btn" class="modal-btn" text="Create" />
+                    <ui:Button name="host-cancel-btn" class="modal-btn" text="Cancel" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <!-- Join modal overlay -->
+        <ui:VisualElement name="join-modal" class="modal-overlay modal--hidden">
+            <ui:VisualElement class="modal-box hub-modal__box">
+                <ui:Label class="modal-label" text="Join by code" />
+                <ui:VisualElement name="join-form-slot" />
+                <ui:Label name="join-error" class="account-error screen--hidden" />
+                <ui:VisualElement class="modal-buttons">
+                    <ui:Button name="join-submit-btn" class="modal-btn" text="Join" />
+                    <ui:Button name="join-cancel-btn" class="modal-btn" text="Cancel" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <!-- Hosting (generation progress) modal -->
+        <ui:VisualElement name="hosting-modal" class="modal-overlay modal--hidden">
+            <ui:VisualElement class="modal-box hub-modal__box hub-hosting">
+                <ui:Label name="hosting-label" class="modal-label" text="Generating your lobby..." />
+                <ui:VisualElement class="progress-bar hub-progress">
+                    <ui:VisualElement name="hub-progress__fill" class="progress-bar__fill" />
+                </ui:VisualElement>
+                <ui:Label name="progress-pct" class="hub-progress__pct" text="Preparing..." />
+                <ui:VisualElement class="modal-buttons">
+                    <ui:Button name="hosting-cancel-btn" class="modal-btn" text="Background" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+    </ui:VisualElement>
+</ui:UXML>

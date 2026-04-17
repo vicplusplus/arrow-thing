@@ -27,7 +27,7 @@
         <ui:VisualElement name="menu-play" class="menu-panel screen--hidden">
             <ui:VisualElement class="icon-row icon-row--top-left">
                 <ui:Button name="back-play-btn" class="icon-btn">
-                    <ui:VisualElement class="icon-btn__icon icon--close" />
+                    <ui:VisualElement class="icon-btn__icon icon--arrow-back" />
                 </ui:Button>
             </ui:VisualElement>
 
@@ -76,13 +76,12 @@
         <ui:VisualElement name="menu-multiplayer" class="menu-panel screen--hidden">
             <ui:VisualElement class="icon-row icon-row--top-left">
                 <ui:Button name="back-mp-btn" class="icon-btn">
-                    <ui:VisualElement class="icon-btn__icon icon--close" />
+                    <ui:VisualElement class="icon-btn__icon icon--arrow-back" />
                 </ui:Button>
             </ui:VisualElement>
 
             <ui:VisualElement class="title" />
             <ui:Button name="coop-btn" class="menu-btn" text="Co-op" />
-            <ui:Label class="coming-soon-text" text="Coming soon" />
         </ui:VisualElement>
 
     </ui:VisualElement>

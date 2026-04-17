@@ -125,22 +125,78 @@ public class LobbyGenerationWorker : BackgroundService
                     (int)lobby.Seed
                 );
 
+                // Phase-weighted progress (shared with client GameController via
+                // GenerationProgress in the domain layer). Server omits the
+                // client-only view-rebuild phase.
                 int yields = 0;
                 int lastReportedPct = -1;
-                int maxPossible = Math.Max(1, lobby.Width * lobby.Height / 2);
+                var phase = GenerationPhase.Generating;
+                int arrowsBeforeCompaction = 0;
+                var compactStart = DateTime.UtcNow;
+                var weights = GenerationProgress.ServerWeights;
+
                 while (iter.MoveNext())
                 {
                     if (ct.IsCancellationRequested)
                         throw new OperationCanceledException();
-                    yields++;
-                    if (yields % 100 == 0)
+
+                    // Phase transitions come through iter.Current as GenerationPhase.
+                    if (iter.Current is GenerationPhase nextPhase)
                     {
-                        int pct = Math.Min(95, board.Arrows.Count * 100 / maxPossible);
-                        if (pct != lastReportedPct)
+                        if (nextPhase == GenerationPhase.Compacting)
                         {
-                            lastReportedPct = pct;
-                            await _progressBus.PublishProgressAsync(lobby.Code, pct);
+                            arrowsBeforeCompaction = board.Arrows.Count;
+                            compactStart = DateTime.UtcNow;
                         }
+                        phase = nextPhase;
+                    }
+
+                    yields++;
+                    if (yields % 100 != 0)
+                        continue;
+
+                    float raw = phase switch
+                    {
+                        GenerationPhase.Generating => GenerationProgress.ForGenerating(
+                            board.InitialCandidateCount > 0
+                                ? 1f
+                                    - (float)board.RemainingCandidateCount
+                                        / board.InitialCandidateCount
+                                : 0f,
+                            weights
+                        ),
+                        GenerationPhase.Compacting => GenerationProgress.ForCompacting(
+                            mergesCompleted: arrowsBeforeCompaction - board.Arrows.Count,
+                            arrowsBeforeCompaction: arrowsBeforeCompaction,
+                            timeRatio: GenerationProgress.ExpectedCompactSeconds(
+                                arrowsBeforeCompaction
+                            ) > 0.001f
+                                ? (float)(
+                                    (DateTime.UtcNow - compactStart).TotalSeconds
+                                    / GenerationProgress.ExpectedCompactSeconds(
+                                        arrowsBeforeCompaction
+                                    )
+                                )
+                                : 1f,
+                            w: weights
+                        ),
+                        GenerationPhase.Finalizing => GenerationProgress.ForFinalizing(
+                            iter.Current is int finalized && board.Arrows.Count > 0
+                                ? (float)finalized / board.Arrows.Count
+                                : 0f,
+                            weights
+                        ),
+                        _ => 0f,
+                    };
+
+                    // Cap at 95 until gen_complete; keep monotone across phase
+                    // boundaries in case two samples disagree.
+                    int pct = Math.Min(95, (int)(raw * 100f));
+                    pct = Math.Max(lastReportedPct, pct);
+                    if (pct != lastReportedPct)
+                    {
+                        lastReportedPct = pct;
+                        await _progressBus.PublishProgressAsync(lobby.Code, pct);
                     }
                 }
 

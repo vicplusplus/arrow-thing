@@ -84,6 +84,7 @@
                     <!-- Logged in: Account info -->
                     <ui:VisualElement name="account-info" class="account-form screen--hidden">
                         <ui:Label name="account-email" class="account-info-text" />
+                        <ui:VisualElement name="coop-color-slot" class="settings-coop-color-slot" />
                         <ui:Label name="account-error" class="account-error screen--hidden" />
                         <ui:Button name="change-email-btn" class="account-switch-btn" text="Change email" />
                         <ui:Button name="change-password-btn" class="account-switch-btn" text="Change password" />

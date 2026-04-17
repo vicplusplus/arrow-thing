@@ -29,4 +29,5 @@ public static class AuditEvent
     public const string SessionInvalidated = "session_invalidated";
     public const string DeviceOtpRequested = "device_otp_requested";
     public const string DeviceVerified = "device_verified";
+    public const string UpdateCoopColor = "update_coop_color";
 }

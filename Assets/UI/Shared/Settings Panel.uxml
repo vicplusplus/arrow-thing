@@ -1,6 +1,5 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <Style src="Shared.uss" />
-    <Style src="../MainMenu/MainMenu.uss" />
 
     <ui:Template name="SettingsScreen" src="project://database/Assets/UI/MainMenu/SettingsScreen.uxml" />
     <ui:Template name="ConfirmModal" src="project://database/Assets/UI/Shared/ConfirmModal.uxml" />

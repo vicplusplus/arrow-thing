@@ -1,0 +1,18 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement class="lobby-row">
+        <ui:VisualElement name="lobby-row__status-dot" class="lobby-row__status-dot" />
+        <ui:VisualElement class="lobby-row__main">
+            <ui:Label name="lobby-row__name" class="lobby-row__name" />
+            <ui:VisualElement class="lobby-row__meta-row">
+                <ui:Label name="lobby-row__code" class="lobby-row__code" />
+                <ui:Label name="lobby-row__dim" class="lobby-row__dim" />
+                <ui:Label name="lobby-row__owner" class="lobby-row__owner" />
+                <ui:Label name="lobby-row__progress" class="lobby-row__progress" />
+            </ui:VisualElement>
+            <ui:Label name="lobby-row__activity" class="lobby-row__activity" />
+        </ui:VisualElement>
+        <ui:Button name="lobby-row__retry-btn" class="lobby-row__retry-btn hub--hidden" text="Retry" />
+        <ui:Button name="lobby-row__open-btn" class="lobby-row__open-btn" text="Play" />
+        <ui:Button name="lobby-row__delete-btn" class="lobby-row__delete-btn hub--hidden" text="Delete" />
+    </ui:VisualElement>
+</ui:UXML>

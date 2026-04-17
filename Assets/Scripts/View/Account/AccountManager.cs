@@ -91,6 +91,9 @@ public class AccountManager
 
     private readonly ConfirmModal _logoutModal;
 
+    // Co-op color picker (visible in account-info form when logged in)
+    private readonly CoopColorPicker _colorPicker;
+
     public AccountManager(VisualElement settingsRoot, VisualElement logoutModalRoot)
     {
         _api = new ApiClient();
@@ -105,6 +108,15 @@ public class AccountManager
         );
         _logoutModal.Confirmed += OnLogoutConfirm;
         _logoutModal.Cancelled += () => _logoutModal.Hide();
+
+        // Co-op color picker — visible in account-info form
+        _colorPicker = new CoopColorPicker();
+        var colorSlot = settingsRoot.Q("coop-color-slot");
+        if (colorSlot != null)
+            colorSlot.Add(_colorPicker.Root);
+
+        _colorPicker.OnPreview += OnCoopColorPreview;
+        _colorPicker.OnCommit += OnCoopColorCommit;
 
         // Display name — always visible, works offline
         _displayName = new EditableLabel();
@@ -121,6 +133,14 @@ public class AccountManager
         _displayName.Value = string.IsNullOrEmpty(GameSettings.DisplayName)
             ? "Player"
             : GameSettings.DisplayName;
+
+        // Apply initial color to the display name text
+        var localColor = PlayerPrefs.GetString("LocalCoopColor", "");
+        if (!string.IsNullOrEmpty(localColor))
+        {
+            var initColor = _colorPicker.SetValueWithoutNotify(localColor);
+            ApplyColorToDisplayName(initColor);
+        }
 
         // Combined login / register form
         _loginForm = settingsRoot.Q("login-form");
@@ -329,6 +349,14 @@ public class AccountManager
         {
             GameSettings.DisplayName = _api.DisplayName;
             _displayName.Value = _api.DisplayName;
+        }
+
+        // Sync co-op color from the server response
+        if (result.Success && result.Data != null && !string.IsNullOrEmpty(result.Data.coopColor))
+        {
+            var serverColor = _colorPicker.SetValueWithoutNotify(result.Data.coopColor);
+            ApplyColorToDisplayName(serverColor);
+            PlayerPrefs.SetString("LocalCoopColor", result.Data.coopColor);
         }
 
         _accountEmail.text = MaskEmail(_api.Email);
@@ -562,6 +590,32 @@ public class AccountManager
         }
     }
 
+    private void OnCoopColorPreview(Color color)
+    {
+        ApplyColorToDisplayName(color);
+    }
+
+    private void ApplyColorToDisplayName(Color color)
+    {
+        // Tint the display name TextField's inner text element.
+        var textInput = _displayName.Input?.Q(className: "unity-text-field__input");
+        if (textInput != null)
+            textInput.style.color = new StyleColor(color);
+    }
+
+    private async void OnCoopColorCommit(string hex)
+    {
+        PlayerPrefs.SetString("LocalCoopColor", hex);
+        PlayerPrefs.Save();
+
+        if (_api.IsLoggedIn)
+        {
+            var result = await _api.UpdateCoopColorAsync(hex);
+            if (!result.Success && GlobalToast.Instance != null)
+                GlobalToast.Instance.ShowError("Couldn't save color");
+        }
+    }
+
     private async void OnChangeEmail()
     {
         ClearErrors();
@@ -702,6 +756,8 @@ public class AccountManager
         }
         else if (IsVisible(_accountInfo))
         {
+            // Color picker sliders + hex field
+            items.AddRange(_colorPicker.GetFocusItems());
             AddBtn(items, "change-email-btn", ShowChangeEmailForm);
             AddBtn(items, "change-password-btn", ShowChangePasswordForm);
             AddBtn(items, "logout-btn", () => _logoutModal.Show());

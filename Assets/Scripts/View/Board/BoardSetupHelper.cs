@@ -85,4 +85,47 @@ public static class BoardSetupHelper
             $"[BoardSetupHelper] RestoreBoardFromSnapshot complete: {board.Arrows.Count} arrows placed"
         );
     }
+
+    /// <summary>
+    /// Restores arrows from a pre-built arrow list (e.g. from BinarySnapshot.DecodeFull)
+    /// onto the board and view. Same incremental yielding pattern as the cell-list overload.
+    /// </summary>
+    public static IEnumerator<int> RestoreBoardFromSnapshotArrows(
+        Board board,
+        BoardView boardView,
+        IReadOnlyList<Arrow> arrows,
+        float frameBudgetMs = 12f
+    )
+    {
+        int totalArrows = arrows.Count;
+        Debug.Log(
+            $"[BoardSetupHelper] RestoreBoardFromSnapshotArrows: {totalArrows} arrows, board={board.Width}x{board.Height}"
+        );
+        var restorer = board.RestoreArrowsIncremental(arrows);
+
+        int viewedCount = 0;
+        while (true)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            bool done = false;
+            while (sw.ElapsedMilliseconds < frameBudgetMs)
+            {
+                if (!restorer.MoveNext())
+                {
+                    done = true;
+                    break;
+                }
+                if (viewedCount < totalArrows)
+                    boardView.AddArrowView(arrows[viewedCount++]);
+            }
+
+            yield return restorer.Current;
+
+            if (done)
+                break;
+        }
+        Debug.Log(
+            $"[BoardSetupHelper] RestoreBoardFromSnapshotArrows complete: {board.Arrows.Count} arrows placed"
+        );
+    }
 }

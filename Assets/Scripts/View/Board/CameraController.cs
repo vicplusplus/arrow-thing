@@ -144,6 +144,7 @@ public sealed class CameraController : MonoBehaviour
 
         _cam.orthographicSize = _initialOrthoSize;
         transform.position = targetPos;
+        CameraChanged?.Invoke();
         onComplete?.Invoke();
     }
 }

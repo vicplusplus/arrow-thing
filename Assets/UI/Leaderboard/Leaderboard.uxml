@@ -4,7 +4,7 @@
 
     <ui:Template name="ConfirmModal" src="project://database/Assets/UI/Shared/ConfirmModal.uxml" />
 
-    <ui:VisualElement name="leaderboard-root" class="lb-screen">
+    <ui:VisualElement name="leaderboard-root" class="list-screen">
         <!-- Header row -->
         <ui:VisualElement class="screen-header">
             <ui:Button name="lb-back-btn" class="screen-header__back-btn">
@@ -24,8 +24,8 @@
             <ui:Button name="tab-large" class="tab-bar__tab" text="Large" />
             <ui:Button name="tab-xlarge" class="tab-bar__tab" text="XLarge" />
             <ui:Button name="tab-all" class="tab-bar__tab" text="All" />
-            <ui:Button name="lb-refresh-btn" class="lb-refresh-btn lb--hidden">
-                <ui:VisualElement class="lb-refresh-icon" />
+            <ui:Button name="lb-refresh-btn" class="list-refresh-btn lb--hidden">
+                <ui:VisualElement class="list-refresh-icon" />
             </ui:Button>
         </ui:VisualElement>
 
@@ -37,7 +37,7 @@
         </ui:VisualElement>
 
         <!-- Entry list -->
-        <ui:ScrollView name="lb-scroll" class="lb-scroll">
+        <ui:ScrollView name="lb-scroll" class="list-scroll">
             <ui:VisualElement name="lb-list" class="lb-list" />
         </ui:ScrollView>
 

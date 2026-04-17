@@ -47,6 +47,10 @@ public record DisplayNameResponse(string DisplayName);
 
 public record MessageResponse(string Message);
 
-public record MeResponse(string Email, string DisplayName);
+public record MeResponse(string Email, string DisplayName, string? CoopColor);
+
+public record UpdateCoopColorRequest(string CoopColor);
+
+public record CoopColorResponse(string CoopColor);
 
 public record LockAccountRequest(string Email);

@@ -100,6 +100,34 @@ public static class GameSettings
     /// </summary>
     public static string LeaderboardFocusGameId { get; set; }
 
+    /// <summary>
+    /// Set by deep-link or URL query param. Consumed by CoopHubController
+    /// to pre-fill the Join modal. Cleared on consume.
+    /// </summary>
+    public static string PendingLobbyCode { get; set; }
+
+    /// <summary>
+    /// Set by CoopHubController when transitioning to the Coop Game scene.
+    /// Consumed by CoopGameController on load. Cleared on consume.
+    /// </summary>
+    public static string ActiveLobbyCode { get; set; }
+
+    /// <summary>Returns and clears PendingLobbyCode in one call.</summary>
+    public static string ConsumePendingLobbyCode()
+    {
+        var code = PendingLobbyCode;
+        PendingLobbyCode = null;
+        return code;
+    }
+
+    /// <summary>Returns and clears ActiveLobbyCode in one call.</summary>
+    public static string ConsumeActiveLobbyCode()
+    {
+        var code = ActiveLobbyCode;
+        ActiveLobbyCode = null;
+        return code;
+    }
+
     public static void Reset()
     {
         IsSet = false;
@@ -108,6 +136,8 @@ public static class GameSettings
         IsReplaying = false;
         ReplaySource = null;
         LeaderboardFocusGameId = null;
+        PendingLobbyCode = null;
+        ActiveLobbyCode = null;
         Width = 0;
         Height = 0;
         MaxArrowLength = 0;

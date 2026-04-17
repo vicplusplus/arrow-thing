@@ -17,6 +17,9 @@ EditorBuildSettings:
   - enabled: 1
     path: Assets/Scenes/ReplayViewer.unity
     guid: 21a1038f14c70ef40a67c8698d6a701f
+  - enabled: 1
+    path: Assets/Scenes/CoopHub.unity
+    guid: 764b344f45afd5641b9094540cd3d104
   m_configObjects:
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 2bcd2660ca9b64942af0de543d8d7100, type: 3}
   m_UseUCBPForAssetBundles: 0

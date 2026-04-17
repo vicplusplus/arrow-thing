@@ -15,6 +15,14 @@ public class LobbyService
     public const string GenerationQueueKey = "coop:gen:queue";
 
     private const int MaxActiveLobbiesPerOwner = 5;
+    public const int MaxRegistrationsPerUser = 50;
+    public const int MinBoardDimension = 100;
+    public const int MaxBoardDimension = 400;
+
+    // Rate limit: creating 400x400 boards is CPU-heavy. Block delete-and-recreate
+    // abuse by counting ALL creations (including deleted) against this window.
+    private const int MaxCreatesPerWindow = 5;
+    private static readonly TimeSpan CreateRateLimitWindow = TimeSpan.FromMinutes(30);
     private const int CodeLength = 6;
 
     // Whitelist of safe code characters: letters only (no digits to avoid
@@ -56,6 +64,26 @@ public class LobbyService
         if (name.Length < 1 || name.Length > 40)
             return (null, 400, "Lobby name must be 1-40 characters.");
 
+        // Validate board dimensions. Only applies to client-provided values;
+        // the options default (used by tests to force 20x20) is trusted as
+        // server-configured intent.
+        int width = request.Width ?? _options.DefaultWidth;
+        int height = request.Height ?? _options.DefaultHeight;
+        if (request.Width.HasValue || request.Height.HasValue)
+        {
+            if (
+                width < MinBoardDimension
+                || width > MaxBoardDimension
+                || height < MinBoardDimension
+                || height > MaxBoardDimension
+            )
+                return (
+                    null,
+                    400,
+                    $"Board size must be between {MinBoardDimension}x{MinBoardDimension} and {MaxBoardDimension}x{MaxBoardDimension}."
+                );
+        }
+
         // Look up owner for display name + cap check
         var owner = await _db.Users.FindAsync(ownerUserId);
         if (owner == null)
@@ -67,6 +95,19 @@ public class LobbyService
             .CountAsync();
         if (activeCount >= MaxActiveLobbiesPerOwner)
             return (null, 429, $"You can own at most {MaxActiveLobbiesPerOwner} active lobbies.");
+
+        // Rate limit: count ALL creations (including deleted) in the rolling window.
+        // Prevents create-delete-recreate floods that hammer the generation worker.
+        var windowStart = DateTime.UtcNow - CreateRateLimitWindow;
+        var recentCreates = await _db
+            .Lobbies.Where(l => l.OwnerUserId == ownerUserId && l.CreatedAt >= windowStart)
+            .CountAsync();
+        if (recentCreates >= MaxCreatesPerWindow)
+            return (
+                null,
+                429,
+                $"Too many lobbies created recently. Limit is {MaxCreatesPerWindow} per {CreateRateLimitWindow.TotalMinutes:F0} minutes."
+            );
 
         // Fail fast if Redis is unavailable — a lobby created without a generation
         // job would be stuck in Generating indefinitely.
@@ -96,8 +137,8 @@ public class LobbyService
             Code = code,
             Name = name,
             OwnerUserId = ownerUserId,
-            Width = _options.DefaultWidth,
-            Height = _options.DefaultHeight,
+            Width = width,
+            Height = height,
             Seed = GenerateSeed(),
             MaxArrowLength = _options.MaxArrowLength,
             Status = LobbyStatus.Generating,
@@ -106,6 +147,21 @@ public class LobbyService
         };
 
         _db.Lobbies.Add(lobby);
+        await _db.SaveChangesAsync();
+
+        // Auto-register the creator as a player in their own lobby.
+        var creatorColor = owner.CoopColor ?? CoopColorPalette.HexForGuid(ownerUserId);
+        _db.LobbyRegistrations.Add(
+            new LobbyRegistration
+            {
+                LobbyId = lobby.Id,
+                UserId = ownerUserId,
+                DisplayNameAtJoin = owner.DisplayName,
+                ColorAtJoin = creatorColor,
+                JoinedAt = now,
+                LastActivityAt = now,
+            }
+        );
         await _db.SaveChangesAsync();
 
         await EnqueueGenerationJobAsync(lobby);
@@ -131,6 +187,19 @@ public class LobbyService
             return (null, 403, "Only the owner can retry generation.");
         if (lobby.Status != LobbyStatus.GenerationFailed)
             return (null, 400, "Lobby is not in a failed state.");
+
+        // Rate limit: retries enqueue a new generation job, same as Create.
+        // Share the window budget so the total gen-enqueue rate is bounded.
+        var windowStart = DateTime.UtcNow - CreateRateLimitWindow;
+        var recentCreates = await _db
+            .Lobbies.Where(l => l.OwnerUserId == requesterUserId && l.CreatedAt >= windowStart)
+            .CountAsync();
+        if (recentCreates >= MaxCreatesPerWindow)
+            return (
+                null,
+                429,
+                $"Too many generation attempts recently. Limit is {MaxCreatesPerWindow} per {CreateRateLimitWindow.TotalMinutes:F0} minutes."
+            );
 
         if (!_redis.IsAvailable())
             return (null, 503, "Service temporarily unavailable.");
@@ -201,40 +270,69 @@ public class LobbyService
         if (page < 0)
             page = 0;
 
-        // Phase 3: only owned lobbies. Phase 5+ will broaden to "owned OR registered to".
-        IQueryable<Lobby> query = _db.Lobbies.Where(l =>
-            l.OwnerUserId == userId && l.Status != LobbyStatus.Deleted
+        // Owned OR registered-to lobbies (broadened in Phase 5).
+        var baseQuery = _db.Lobbies.Where(l =>
+            l.Status != LobbyStatus.Deleted
+            && (
+                l.OwnerUserId == userId
+                || _db.LobbyRegistrations.Any(r => r.LobbyId == l.Id && r.UserId == userId)
+            )
         );
 
         if (string.Equals(filter, "active", StringComparison.OrdinalIgnoreCase))
-            query = query.Where(l =>
+            baseQuery = baseQuery.Where(l =>
                 l.Status == LobbyStatus.Active || l.Status == LobbyStatus.Generating
             );
         else if (string.Equals(filter, "completed", StringComparison.OrdinalIgnoreCase))
-            query = query.Where(l => l.Status == LobbyStatus.Completed);
+            baseQuery = baseQuery.Where(l => l.Status == LobbyStatus.Completed);
 
-        query = string.Equals(sort, "alphabetical", StringComparison.OrdinalIgnoreCase)
-            ? query.OrderBy(l => l.Name)
-            : query.OrderByDescending(l => l.LastActivityAt);
+        baseQuery = string.Equals(sort, "alphabetical", StringComparison.OrdinalIgnoreCase)
+            ? baseQuery.OrderBy(l => l.Name)
+            : baseQuery.OrderByDescending(l => l.LastActivityAt);
 
-        var ownerName = (await _db.Users.FindAsync(userId))?.DisplayName ?? "";
-        var items = await query.Skip(page * PageSize).Take(PageSize + 1).ToListAsync();
+        // Join with Users for per-row owner display name, and with
+        // LobbyRegistrations for the requester's clear count.
+        var projected = baseQuery
+            .Join(
+                _db.Users,
+                l => l.OwnerUserId,
+                u => u.Id,
+                (l, u) => new { Lobby = l, OwnerName = u.DisplayName }
+            )
+            .GroupJoin(
+                _db.LobbyRegistrations.Where(r => r.UserId == userId),
+                lu => lu.Lobby.Id,
+                r => r.LobbyId,
+                (lu, regs) =>
+                    new
+                    {
+                        lu.Lobby,
+                        lu.OwnerName,
+                        Reg = regs.FirstOrDefault(),
+                    }
+            );
+
+        var items = await projected.Skip(page * PageSize).Take(PageSize + 1).ToListAsync();
         var hasMore = items.Count > PageSize;
         if (hasMore)
             items.RemoveAt(PageSize);
 
         var entries = items
-            .Select(l => new LobbyListEntry(
-                l.Id,
-                l.Code,
-                l.Name,
-                ownerName,
-                l.Width,
-                l.Height,
-                (short)l.Status,
-                l.CreatedAt,
-                l.LastActivityAt
-            ))
+            .Select(x => new LobbyListEntry
+            {
+                Id = x.Lobby.Id,
+                Code = x.Lobby.Code,
+                Name = x.Lobby.Name,
+                OwnerDisplayName = x.OwnerName,
+                Width = x.Lobby.Width,
+                Height = x.Lobby.Height,
+                Status = (short)x.Lobby.Status,
+                CreatedAt = x.Lobby.CreatedAt,
+                LastActivityAt = x.Lobby.LastActivityAt,
+                YouAreOwner = x.Lobby.OwnerUserId == userId,
+                YourClearCount = x.Reg?.ClearCount ?? 0,
+                ShareUrl = ShareUrlBase + x.Lobby.Code,
+            })
             .ToList();
 
         return (new LobbyListResponse(entries, page, hasMore), 200, null);
@@ -259,6 +357,33 @@ public class LobbyService
         return (new MessageResponse("Lobby deleted."), 200, null);
     }
 
+    public async Task<(MessageResponse? Response, int StatusCode, string? Error)> RenameAsync(
+        Guid lobbyId,
+        Guid requesterUserId,
+        RenameLobbyRequest request
+    )
+    {
+        if (request.Name == null)
+            return (null, 400, "Lobby name is required.");
+
+        var name = StripControlChars(request.Name).Trim();
+        if (name.Length < 1 || name.Length > 40)
+            return (null, 400, "Lobby name must be 1-40 characters.");
+
+        var lobby = await _db.Lobbies.FindAsync(lobbyId);
+        if (lobby == null || lobby.Status == LobbyStatus.Deleted)
+            return (null, 404, "Lobby not found.");
+
+        if (lobby.OwnerUserId != requesterUserId)
+            return (null, 403, "Only the owner can rename this lobby.");
+
+        lobby.Name = name;
+        lobby.LastActivityAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        return (new MessageResponse("Lobby renamed."), 200, null);
+    }
+
     /// <summary>Look up a lobby by code (case-insensitive). Returns null if missing or deleted.</summary>
     public Task<Lobby?> FindActiveByCodeAsync(string code)
     {
@@ -266,6 +391,24 @@ public class LobbyService
         return _db.Lobbies.FirstOrDefaultAsync(l =>
             l.Code == normalized && l.Status != LobbyStatus.Deleted
         );
+    }
+
+    /// <summary>
+    /// Counts the user's active lobby registrations (lobbies that are not
+    /// Deleted or Completed). Used by CoopHub to enforce the 50-per-user cap.
+    /// </summary>
+    public async Task<int> CountActiveRegistrationsAsync(Guid userId)
+    {
+        return await _db
+            .LobbyRegistrations.Where(r =>
+                r.UserId == userId
+                && _db.Lobbies.Any(l =>
+                    l.Id == r.LobbyId
+                    && l.Status != LobbyStatus.Deleted
+                    && l.Status != LobbyStatus.Completed
+                )
+            )
+            .CountAsync();
     }
 
     // -- Helpers -------------------------------------------------------------

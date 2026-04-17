@@ -400,6 +400,56 @@ public class CoopHub
                 );
                 return;
             }
+
+            // Auto-register the player if not already registered.
+            var existingReg = await db.LobbyRegistrations.FindAsync(lobbyAtConnect.Id, userId);
+            if (existingReg == null)
+            {
+                // Enforce 50-per-user active registration cap.
+                var lobbyService = scope.ServiceProvider.GetRequiredService<LobbyService>();
+                var activeCount = await lobbyService.CountActiveRegistrationsAsync(userId);
+                if (activeCount >= LobbyService.MaxRegistrationsPerUser)
+                {
+                    await SendAsync(
+                        entry,
+                        new CoopMessage
+                        {
+                            Type = "disconnect",
+                            Payload = ToJsonElement(new DisconnectPayload("registration_cap")),
+                        },
+                        ct
+                    );
+                    await entry.Socket.CloseAsync(
+                        WebSocketCloseStatus.NormalClosure,
+                        "registration_cap",
+                        CancellationToken.None
+                    );
+                    return;
+                }
+
+                var user = await db.Users.FindAsync(userId);
+                var color = user?.CoopColor ?? CoopColorPalette.HexForGuid(userId);
+                var now = DateTime.UtcNow;
+                db.LobbyRegistrations.Add(
+                    new LobbyRegistration
+                    {
+                        LobbyId = lobbyAtConnect.Id,
+                        UserId = userId,
+                        DisplayNameAtJoin = user?.DisplayName ?? "",
+                        ColorAtJoin = color,
+                        JoinedAt = now,
+                        LastActivityAt = now,
+                    }
+                );
+                await db.SaveChangesAsync();
+            }
+            else
+            {
+                // Existing registration — just bump activity timestamp.
+                existingReg.LastActivityAt = DateTime.UtcNow;
+                await db.SaveChangesAsync();
+            }
+
             if (current.Status == LobbyStatus.Active)
             {
                 var snapRepo = scope.ServiceProvider.GetRequiredService<LobbySnapshotRepository>();

@@ -1,9 +1,5 @@
 /* GameHud-specific styles. Shared components live in Shared.uss. */
-
-/* modal--hidden is used by GameController to show/hide modals */
-.modal--hidden {
-    display: none;
-}
+/* .modal--hidden moved to Shared.uss */
 
 .timer-label {
     position: absolute;

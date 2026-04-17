@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+using ArrowThing.Server.Coop;
 using ArrowThing.Server.Data;
 using ArrowThing.Server.Models;
 using Microsoft.EntityFrameworkCore;
@@ -144,7 +146,8 @@ public class AuthService
         if (user == null)
             return (null, 401, "User not found.");
 
-        return (new MeResponse(user.Email, user.DisplayName), 200, null);
+        var color = user.CoopColor ?? CoopColorPalette.HexForGuid(user.Id);
+        return (new MeResponse(user.Email, user.DisplayName, color), 200, null);
     }
 
     public async Task<(object? Response, int StatusCode, string? Error)> LoginAsync(
@@ -450,6 +453,33 @@ public class AuthService
         );
 
         return (new DisplayNameResponse(user.DisplayName), 200, null);
+    }
+
+    private static readonly Regex HexColorRegex = new(@"^#[0-9A-Fa-f]{6}$", RegexOptions.Compiled);
+
+    public async Task<(
+        CoopColorResponse? Response,
+        int StatusCode,
+        string? Error
+    )> UpdateCoopColorAsync(Guid userId, UpdateCoopColorRequest request, string? ip = null)
+    {
+        if (
+            string.IsNullOrWhiteSpace(request.CoopColor)
+            || !HexColorRegex.IsMatch(request.CoopColor)
+        )
+            return (null, 400, "Color must be a valid hex color (e.g. #A1B2C3).");
+
+        var user = await _db.Users.FindAsync(userId);
+        if (user == null)
+            return (null, 401, "User not found.");
+
+        var canonical = request.CoopColor.ToUpperInvariant();
+        user.CoopColor = canonical;
+        await _db.SaveChangesAsync();
+
+        await _audit.LogAsync(AuditEvent.UpdateCoopColor, user.Id, user.Email, ip, canonical);
+
+        return (new CoopColorResponse(canonical), 200, null);
     }
 
     public async Task<(

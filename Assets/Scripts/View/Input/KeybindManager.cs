@@ -27,6 +27,7 @@ public sealed class KeybindManager : MonoBehaviour
         Gameplay,
         Leaderboard,
         Replay,
+        CoopHub,
     }
 
     private InputActionAsset _asset;

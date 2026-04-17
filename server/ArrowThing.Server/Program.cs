@@ -509,6 +509,28 @@ app.MapPatch(
     )
     .RequireAuthorization();
 
+app.MapPatch(
+        "/api/auth/me/coop-color",
+        async (
+            UpdateCoopColorRequest request,
+            AuthService auth,
+            ClaimsPrincipal user,
+            HttpContext ctx
+        ) =>
+        {
+            var userId = Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var (response, status, error) = await auth.UpdateCoopColorAsync(
+                userId,
+                request,
+                GetClientIp(ctx)
+            );
+            return response != null
+                ? Results.Ok(response)
+                : Results.Json(new { error }, statusCode: status);
+        }
+    )
+    .RequireAuthorization();
+
 app.MapPost(
     "/api/auth/verify-code",
     async (VerifyCodeRequest request, AuthService auth, CookieIssuer cookies, HttpContext ctx) =>
@@ -861,6 +883,19 @@ app.MapGet(
         async (string code, LobbyService lobbies) =>
         {
             var (response, status, error) = await lobbies.GetByCodeAsync(code);
+            return response != null
+                ? Results.Ok(response)
+                : Results.Json(new { error }, statusCode: status);
+        }
+    )
+    .RequireAuthorization();
+
+app.MapPatch(
+        "/api/lobbies/{id:guid}",
+        async (Guid id, RenameLobbyRequest request, LobbyService lobbies, ClaimsPrincipal user) =>
+        {
+            var userId = Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var (response, status, error) = await lobbies.RenameAsync(id, userId, request);
             return response != null
                 ? Results.Ok(response)
                 : Results.Json(new { error }, statusCode: status);

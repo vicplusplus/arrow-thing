@@ -76,6 +76,22 @@ public class ApiClient
     public bool IsLoggedIn =>
         UseCookieAuth ? !string.IsNullOrEmpty(DisplayName) : !string.IsNullOrEmpty(Token);
 
+    /// <summary>
+    /// WebSocket-scheme version of the base URL (ws:// or wss://).
+    /// Used by CoopClient for lobby connections.
+    /// </summary>
+    public string BaseWsUrl
+    {
+        get
+        {
+            if (_baseUrl.StartsWith("https://"))
+                return "wss://" + _baseUrl.Substring("https://".Length);
+            if (_baseUrl.StartsWith("http://"))
+                return "ws://" + _baseUrl.Substring("http://".Length);
+            return _baseUrl;
+        }
+    }
+
     public ApiClient()
     {
 #if UNITY_EDITOR
@@ -887,9 +903,16 @@ public class ApiClient
 
     // -- Co-op lobbies (Phase 3) ---------------------------------------------
 
-    public async Task<ApiResult<LobbyResponse>> CreateLobbyAsync(string name)
+    public async Task<ApiResult<LobbyResponse>> CreateLobbyAsync(string name, int width, int height)
     {
-        var body = JsonUtility.ToJson(new CreateLobbyRequestDto { name = name });
+        var body = JsonUtility.ToJson(
+            new CreateLobbyRequestDto
+            {
+                name = name,
+                width = width,
+                height = height,
+            }
+        );
         try
         {
             using var request = await SendAuthenticatedAsync(() =>
@@ -1014,7 +1037,115 @@ public class ApiClient
         }
     }
 
+    // -- Co-op color (Phase 5) ---------------------------------------------------
+
+    public async Task<ApiResult<CoopColorResponseDto>> UpdateCoopColorAsync(string hex)
+    {
+        var body = JsonUtility.ToJson(new UpdateCoopColorRequestDto { coopColor = hex });
+        try
+        {
+            using var request = new UnityWebRequest($"{_baseUrl}/api/auth/me/coop-color", "PATCH");
+            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+            request.SetRequestHeader("Authorization", $"Bearer {Token}");
+            request.timeout = 10;
+
+            var op = request.SendWebRequest();
+            while (!op.isDone)
+                await Task.Yield();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var response = JsonUtility.FromJson<CoopColorResponseDto>(
+                    request.downloadHandler.text
+                );
+                return ApiResult<CoopColorResponseDto>.Ok(response);
+            }
+
+            var error = TryParseError(request.downloadHandler.text);
+            return ApiResult<CoopColorResponseDto>.Fail(request.responseCode, error);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] UpdateCoopColor failed: {e.Message}");
+            return ApiResult<CoopColorResponseDto>.Fail(0, "Network error");
+        }
+    }
+
+    public async Task<ApiResult<MessageResponse>> RetryGenerationAsync(string lobbyId)
+    {
+        try
+        {
+            using var request = new UnityWebRequest(
+                $"{_baseUrl}/api/lobbies/{lobbyId}/retry-gen",
+                "POST"
+            );
+            request.uploadHandler = new UploadHandlerRaw(new byte[0]);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+            request.SetRequestHeader("Authorization", $"Bearer {Token}");
+            request.timeout = 10;
+
+            var op = request.SendWebRequest();
+            while (!op.isDone)
+                await Task.Yield();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var response = JsonUtility.FromJson<MessageResponse>(request.downloadHandler.text);
+                return ApiResult<MessageResponse>.Ok(response);
+            }
+
+            var error = TryParseError(request.downloadHandler.text);
+            return ApiResult<MessageResponse>.Fail(request.responseCode, error);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] RetryGeneration failed: {e.Message}");
+            return ApiResult<MessageResponse>.Fail(0, "Network error");
+        }
+    }
+
+    public async Task<ApiResult<MessageResponse>> RenameLobbyAsync(string lobbyId, string name)
+    {
+        var body = JsonUtility.ToJson(new RenameLobbyRequestDto { name = name });
+        try
+        {
+            using var request = new UnityWebRequest($"{_baseUrl}/api/lobbies/{lobbyId}", "PATCH");
+            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+            request.SetRequestHeader("Authorization", $"Bearer {Token}");
+            request.timeout = 10;
+
+            var op = request.SendWebRequest();
+            while (!op.isDone)
+                await Task.Yield();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var response = JsonUtility.FromJson<MessageResponse>(request.downloadHandler.text);
+                return ApiResult<MessageResponse>.Ok(response);
+            }
+
+            var error = TryParseError(request.downloadHandler.text);
+            return ApiResult<MessageResponse>.Fail(request.responseCode, error);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] RenameLobby failed: {e.Message}");
+            return ApiResult<MessageResponse>.Fail(0, "Network error");
+        }
+    }
+
     // DTOs (JsonUtility requires serializable classes with public fields)
+
+    [Serializable]
+    private class RenameLobbyRequestDto
+    {
+        public string name;
+    }
 
     [Serializable]
     private class RegisterRequest
@@ -1115,6 +1246,14 @@ public class ApiClient
     private class CreateLobbyRequestDto
     {
         public string name;
+        public int width;
+        public int height;
+    }
+
+    [Serializable]
+    private class UpdateCoopColorRequestDto
+    {
+        public string coopColor;
     }
 
     [Serializable]
@@ -1158,6 +1297,7 @@ public class MeResponse
 {
     public string email;
     public string displayName;
+    public string coopColor;
 }
 
 [Serializable]
@@ -1222,6 +1362,12 @@ public class ReplayFetchResponse
 }
 
 [Serializable]
+public class CoopColorResponseDto
+{
+    public string coopColor;
+}
+
+[Serializable]
 public class LobbyResponse
 {
     public string id;
@@ -1249,6 +1395,9 @@ public class LobbyListEntryDto
     public short status;
     public string createdAt;
     public string lastActivityAt;
+    public bool youAreOwner;
+    public int yourClearCount;
+    public string shareUrl;
 }
 
 [Serializable]
