@@ -93,6 +93,12 @@ public sealed class GameController : MonoBehaviour
     private List<List<Cell>> _initialBoardSnapshot;
     private const float FrameBudgetMs = 12f;
 
+    // Co-op mode state (active when GameSettings.ActiveLobbyCode is set)
+    private bool _isCoopMode;
+    private string _coopLobbyCode;
+    private CoopClient _coopClient;
+    private byte[] _coopSnapshotData;
+
     /// <summary>Set to true by the X button during loading to abort.</summary>
     private bool _cancelRequested;
 
@@ -144,6 +150,7 @@ public sealed class GameController : MonoBehaviour
     private void OnDestroy()
     {
         _focusNavigator?.Dispose();
+        _coopClient?.Dispose();
         SettingsController.IsOpenChanged -= OnSettingsOpenChanged;
         ThemeManager.ThemeChanged -= OnThemeChanged;
     }
@@ -164,6 +171,8 @@ public sealed class GameController : MonoBehaviour
 
     private void Update()
     {
+        _coopClient?.Update();
+
         // Tick FocusNavigator for modal keyboard nav (leave/cancel modals).
         if (_focusNavigator != null)
             _focusNavigator.Update();
@@ -197,6 +206,16 @@ public sealed class GameController : MonoBehaviour
 
     private IEnumerator GenerateAndSetup()
     {
+        // Check for co-op mode FIRST — it bypasses all solo parameter resolution.
+        _coopLobbyCode = GameSettings.ConsumeActiveLobbyCode();
+        _isCoopMode = !string.IsNullOrEmpty(_coopLobbyCode);
+
+        if (_isCoopMode)
+        {
+            yield return CoopSetup();
+            yield break;
+        }
+
         ResolveParameters(out ReplayData priorData, out bool deferredResume);
         ResolveHudElements();
 
@@ -272,6 +291,164 @@ public sealed class GameController : MonoBehaviour
         WireHud();
         WireInput();
         WireVictory();
+    }
+
+    // --- Co-op mode setup ---
+
+    private IEnumerator CoopSetup()
+    {
+        ResolveHudElements();
+        ShowLoading("Connecting...");
+        yield return null;
+
+        var api = new ApiClient();
+        if (!api.IsLoggedIn)
+        {
+            Debug.LogError("[GameController] Co-op mode requires login.");
+            SceneNav.Pop();
+            yield break;
+        }
+
+        // Connect WebSocket and send hello.
+        _coopClient = new CoopClient();
+        _coopSnapshotData = null;
+        bool failed = false;
+        string failReason = null;
+
+        _coopClient.MessageReceived += msg =>
+        {
+            switch (msg.Type)
+            {
+                case "welcome":
+                    Debug.Log($"[GameController] Co-op welcome for lobby {_coopLobbyCode}");
+                    break;
+                case "gen_progress":
+                    var pct = msg.Payload?.Value<int>("pct") ?? 0;
+                    _loadProgress = pct / 100f;
+                    UpdateLoadingLabel($"Generating... {pct}%");
+                    break;
+                case "gen_complete":
+                    _loadProgress = 1f;
+                    UpdateLoadingLabel("Board ready!");
+                    break;
+                case "snapshot":
+                    // Binary frame follows — handled below.
+                    break;
+                case "lobby_failed":
+                    failed = true;
+                    failReason = "Board generation failed.";
+                    break;
+                case "disconnect":
+                    failed = true;
+                    failReason = msg.Payload?.Value<string>("reason") ?? "Disconnected";
+                    break;
+            }
+        };
+
+        _coopClient.BinaryReceived += data =>
+        {
+            _coopSnapshotData = data;
+        };
+
+        _coopClient.Disconnected += reason =>
+        {
+            if (_coopSnapshotData == null)
+            {
+                failed = true;
+                failReason = $"Disconnected: {reason}";
+            }
+        };
+
+        var connectTask = _coopClient.ConnectAsync(api.BaseWsUrl, _coopLobbyCode, api.Token);
+        while (!connectTask.IsCompleted)
+            yield return null;
+        if (connectTask.IsFaulted)
+        {
+            Debug.LogError($"[GameController] Co-op connect failed: {connectTask.Exception}");
+            SceneNav.Pop();
+            yield break;
+        }
+
+        var helloTask = _coopClient.SendAsync(CoopMessage.Hello(0));
+        while (!helloTask.IsCompleted)
+            yield return null;
+        if (helloTask.IsFaulted)
+        {
+            Debug.LogError($"[GameController] Co-op hello failed: {helloTask.Exception}");
+            SceneNav.Pop();
+            yield break;
+        }
+
+        // Wait for snapshot binary frame (or failure).
+        while (_coopSnapshotData == null && !failed)
+        {
+            if (_cancelRequested)
+            {
+                _coopClient.Dispose();
+                _coopClient = null;
+                SceneNav.Pop();
+                yield break;
+            }
+            yield return null;
+        }
+
+        if (failed)
+        {
+            Debug.LogWarning($"[GameController] Co-op failed: {failReason}");
+            UpdateLoadingLabel(failReason ?? "Failed");
+            // Wait a beat so the user sees the message, then pop.
+            yield return new WaitForSeconds(2f);
+            SceneNav.Pop();
+            yield break;
+        }
+
+        // Decode snapshot and build the board.
+        UpdateLoadingLabel("Loading board...");
+        yield return null;
+
+        Board decodedBoard = null;
+        try
+        {
+            decodedBoard = BinarySnapshot.DecodeFull(_coopSnapshotData);
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[GameController] Failed to decode co-op snapshot: {e}");
+        }
+        if (decodedBoard == null)
+        {
+            SceneNav.Pop();
+            yield break;
+        }
+        _board = decodedBoard;
+        _w = _board.Width;
+        _h = _board.Height;
+
+        Debug.Log($"[GameController] Co-op board decoded: {_w}x{_h}, {_board.Arrows.Count} arrows");
+
+        // Create the view from the already-populated board.
+        var vs = ThemeManager.Current ?? visualSettings;
+        var boardGo = new GameObject("BoardView");
+        _boardView = boardGo.AddComponent<BoardView>();
+        _boardView.Init(_board, vs, spawnArrows: true);
+
+        SetupCamera();
+        _boardView.SetCameraController(_camCtrl);
+        _boardView.ApplyColoring();
+
+        HideLoading();
+
+        // Wire input for camera pan/zoom. Taps resolve locally (read-only preview).
+        // Timer and recorder are null — InputHandler tolerates this.
+        WireHud();
+        WireInput();
+        // Skip WireVictory — co-op completion is handled by the server (Phase 6).
+    }
+
+    private void UpdateLoadingLabel(string text)
+    {
+        if (_loadingPercent != null)
+            _loadingPercent.text = text;
     }
 
     // --- Parameter resolution ---
@@ -710,12 +887,27 @@ public sealed class GameController : MonoBehaviour
 
         if (_retryBtn != null)
         {
-            _retryBtn.clickable = new Clickable(() => { });
-            _retryBtn.clicked += OnRetryClicked;
+            if (_isCoopMode)
+            {
+                _retryBtn.style.display = DisplayStyle.None;
+            }
+            else
+            {
+                _retryBtn.clickable = new Clickable(() => { });
+                _retryBtn.clicked += OnRetryClicked;
+            }
         }
 
-        var timerView = gameObject.AddComponent<GameTimerView>();
-        timerView.Init(_timer, hudUIDocument, inspectionWarningThreshold);
+        if (_timer != null)
+        {
+            var timerView = gameObject.AddComponent<GameTimerView>();
+            timerView.Init(_timer, hudUIDocument, inspectionWarningThreshold);
+        }
+        else if (_timerLabel != null)
+        {
+            // Co-op mode: hide the solo timer label.
+            _timerLabel.style.display = DisplayStyle.None;
+        }
 
         if (_trailToggleBtn != null)
         {

@@ -1,0 +1,13 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <Style src="../Shared/Shared.uss" />
+    <Style src="Coop.uss" />
+
+    <ui:Template name="CoopHubScreen" src="project://database/Assets/UI/Coop/CoopHubScreen.uxml" />
+    <ui:Template name="ConfirmModal" src="project://database/Assets/UI/Shared/ConfirmModal.uxml" />
+    <ui:Template name="LobbyListRow" src="project://database/Assets/UI/Coop/LobbyListRow.uxml" />
+
+    <ui:Instance template="CoopHubScreen" name="coop-hub" class="screen-instance" />
+
+    <!-- Delete lobby confirmation modal -->
+    <ui:Instance template="ConfirmModal" name="delete-lobby-modal" class="modal-instance" />
+</ui:UXML>

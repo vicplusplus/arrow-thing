@@ -18,6 +18,10 @@
     display: none;
 }
 
+.modal--hidden {
+    display: none;
+}
+
 /* ── Loading Overlay ──────────────────────────────────────────────── */
 
 .loading-overlay {
@@ -39,6 +43,22 @@
     margin-bottom: 24px;
 }
 
+/* Shared progress bar base — used by loading overlay, hub gen progress, replay seek */
+.progress-bar {
+    height: 8px;
+    background-color: var(--bg-track);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.progress-bar__fill {
+    height: 100%;
+    width: 0%;
+    background-color: var(--accent-info);
+    border-radius: 4px;
+}
+
+/* Loading overlay progress bar — fixed width, centered */
 .loading-bar-track {
     width: 300px;
     height: 8px;
@@ -189,6 +209,18 @@
 
 .icon--refresh {
     background-image: url("/Assets/Art/Icons/refresh.png");
+}
+
+.icon--copy {
+    background-image: url("/Assets/Art/Icons/copy.png");
+}
+
+.icon--visible-on {
+    background-image: url("/Assets/Art/Icons/visible_on.png");
+}
+
+.icon--visible-off {
+    background-image: url("/Assets/Art/Icons/visible_off.png");
 }
 
 .icon--joystick {
@@ -366,6 +398,66 @@
 }
 
 /* ── Modal Instance ──────────────────────────────────────────────── */
+/* ── Shared layout classes ────────────────────────────────────────── */
+/* Used across MainMenu, Coop Hub, Coop Game, and any future scenes.  */
+
+.screen-instance {
+    flex-grow: 1;
+}
+
+.screen {
+    flex-grow: 1;
+    background-color: var(--bg-screen);
+}
+
+.overlay-instance {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+/* Standard menu button — reused in menus, modals, hub toolbar */
+.menu-btn {
+    width: 300px;
+    padding: 14px 0;
+    margin: 6px 0;
+    font-size: 28px;
+    color: var(--text-primary);
+    background-color: var(--bg-btn);
+    border-radius: 8px;
+    border-width: 0;
+    -unity-text-align: middle-center;
+    flex-shrink: 1;
+}
+
+.menu-btn:hover {
+    background-color: var(--bg-btn-hover);
+}
+
+.menu-btn:active {
+    background-color: var(--bg-btn-active);
+}
+
+.menu-btn--danger {
+    color: var(--text-danger);
+}
+
+.menu-btn--danger:hover {
+    background-color: var(--bg-btn-hover);
+}
+
+.menu-btn--ghost {
+    background-color: transparent;
+    border-width: 1px;
+    border-color: var(--border-secondary);
+}
+
+.menu-btn--ghost:hover {
+    background-color: var(--bg-hover);
+}
+
 /*
    Wrapper element for ConfirmModal template instances.
    Hidden by default; shown/hidden from C# via ConfirmModal.Show/Hide.
@@ -624,6 +716,111 @@
     background-color: var(--bg-nav-active);
 }
 
+/* ── List Screen (shared base for Leaderboard + Co-op Hub) ───────── */
+/*
+   Full-screen list view: bg-screen + padding + screen-header + filter-row
+   + scrollable row list + modals. Apply .list-screen to the root element
+   of any scene using this pattern.
+*/
+
+.list-screen {
+    flex-grow: 1;
+    background-color: var(--bg-screen);
+    padding: 16px;
+    overflow: hidden;
+    height: 100%;
+}
+
+.list-screen .screen-header {
+    margin-bottom: 12px;
+}
+
+.list-screen .filter-row {
+    margin-bottom: 10px;
+}
+
+/* Compact modal overrides for list screens */
+.list-screen .modal-box {
+    padding: 28px 40px;
+}
+
+.list-screen .modal-label {
+    font-size: 20px;
+    margin-bottom: 20px;
+}
+
+.list-screen .modal-btn {
+    min-width: 100px;
+    font-size: 16px;
+    border-radius: 6px;
+    margin: 0 6px;
+}
+
+/* Shared scrollable list area */
+.list-scroll {
+    flex-grow: 1;
+    flex-shrink: 1;
+}
+
+.list-scroll .unity-scroller--vertical {
+    width: 8px;
+    margin: 0;
+    padding: 0;
+}
+
+.list-scroll .unity-scroller--vertical .unity-slider {
+    margin: 0;
+    padding: 0;
+}
+
+.list-scroll .unity-scroller--vertical .unity-base-slider__tracker {
+    background-color: var(--scrollbar-track);
+    border-width: 0;
+}
+
+.list-scroll .unity-scroller--vertical .unity-base-slider__dragger {
+    background-color: var(--scrollbar-thumb);
+    border-radius: 4px;
+    border-width: 0;
+}
+
+.list-scroll .unity-scroller--vertical .unity-base-slider__dragger:hover {
+    background-color: var(--scrollbar-thumb-hover);
+}
+
+.list-scroll .unity-scroller--vertical .unity-repeat-button {
+    display: none;
+    height: 0;
+    min-height: 0;
+}
+
+/* Shared refresh button (used in tab bars and toolbars) */
+.list-refresh-btn {
+    width: 30px;
+    height: 30px;
+    padding: 5px;
+    background-color: var(--bg-btn);
+    border-radius: 15px;
+    border-width: 0;
+    flex-shrink: 0;
+    margin-left: 6px;
+}
+
+.list-refresh-btn:hover {
+    background-color: var(--bg-btn-hover);
+}
+
+.list-refresh-btn:active {
+    background-color: var(--bg-btn-active);
+}
+
+.list-refresh-icon {
+    flex-grow: 1;
+    background-image: url("/Assets/Art/Icons/refresh.png");
+    -unity-background-scale-mode: scale-to-fit;
+    -unity-background-image-tint-color: var(--text-secondary);
+}
+
 /* ── CustomDropdown ───────────────────────────────────────────────────── */
 /*
    Trigger button — add to any VisualElement via CustomDropdown constructor.
@@ -808,4 +1005,661 @@
     font-size: 12px;
     color: var(--text-danger);
     margin-top: 2px;
+}
+
+/* ── Co-op Color Picker (in Settings Account tab) ────────────────── */
+
+.settings-coop-color-slot {
+    margin: 8px 0;
+}
+
+.coop-color-picker__label {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+}
+
+.coop-color-picker__sliders {
+    flex-grow: 1;
+}
+
+.coop-color-picker__slider-row {
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.coop-color-picker__slider-name {
+    width: 16px;
+    font-size: 13px;
+    color: var(--text-dim);
+    -unity-font-style: bold;
+    margin-right: 4px;
+}
+
+.coop-color-picker__hex-row {
+    flex-direction: row;
+    align-items: center;
+    margin-top: 6px;
+}
+
+.coop-color-picker__hash {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-right: 4px;
+}
+
+.coop-color-picker__hex-field {
+    width: 120px;
+    font-size: 14px;
+}
+
+/* ── SnapSlider component ────────────────────────────────────────── */
+/* Used by size-select sliders, settings sliders, and color picker.  */
+
+.snap-slider {
+    flex-direction: row;
+    align-items: center;
+    flex-grow: 1;
+}
+
+.snap-slider__track {
+    flex-grow: 1;
+    height: 22px;
+    margin: 0 4px 0 0;
+    background-color: var(--bg-surface-active);
+    overflow: visible;
+}
+
+.snap-slider__handle {
+    position: absolute;
+    width: 22px;
+    height: 22px;
+    background-color: var(--accent-info);
+}
+
+.snap-slider__value {
+    font-size: 13px;
+    color: var(--text-primary);
+    width: 34px;
+    -unity-text-align: middle-center;
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.snap-slider__btn-row {
+    flex-direction: row;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.snap-slider__step-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-primary);
+    background-color: var(--bg-surface-active);
+    border-radius: 0;
+    border-width: 0;
+    -unity-text-align: middle-center;
+    flex-shrink: 0;
+}
+
+.snap-slider__step-btn:hover {
+    background-color: var(--bg-btn-hover);
+}
+
+.snap-slider__step-btn:active {
+    background-color: var(--bg-btn-active);
+}
+
+.snap-slider__lock-btn {
+    width: 22px;
+    height: 22px;
+    padding: 4px;
+    margin: 0;
+    background-color: var(--bg-nav);
+    border-radius: 0;
+    border-width: 0;
+    flex-shrink: 0;
+}
+
+.snap-slider__lock-btn:hover {
+    background-color: var(--bg-nav-hover);
+}
+
+.snap-slider__btn--first {
+    border-top-left-radius: 4px;
+    border-bottom-left-radius: 4px;
+}
+
+.snap-slider__btn--middle {
+    border-radius: 0;
+}
+
+.snap-slider__btn--last {
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+}
+
+.snap-slider__lock-icon {
+    flex-grow: 1;
+    -unity-background-scale-mode: scale-to-fit;
+}
+
+.snap-slider__lock-icon--locked {
+    background-image: url("/Assets/Art/Icons/lock_closed.png");
+    -unity-background-image-tint-color: var(--accent-info);
+}
+
+.snap-slider__lock-icon--unlocked {
+    background-image: url("/Assets/Art/Icons/lock_open.png");
+    -unity-background-image-tint-color: var(--text-dim);
+}
+
+.setting-snap-slider {
+    align-self: stretch;
+}
+
+/* ── Preset grid + custom panel (size select pattern) ────────────── */
+/* Used by MainMenu singleplayer size select + Co-op Hub host modal. */
+
+.preset-grid {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: 560px;
+    margin-bottom: 12px;
+}
+
+.preset-btn {
+    width: 160px;
+    height: 80px;
+    padding: 8px 4px;
+    margin: 6px;
+    font-size: 16px;
+    color: var(--text-primary);
+    background-color: var(--bg-surface);
+    border-radius: 8px;
+    border-width: 2px;
+    border-color: var(--border-normal);
+    -unity-text-align: middle-center;
+    white-space: normal;
+}
+
+.preset-btn:hover {
+    background-color: var(--bg-surface-hover);
+    border-color: var(--border-strong);
+}
+
+.preset-btn--selected {
+    background-color: var(--bg-surface-active);
+    border-color: var(--accent-info);
+}
+
+.custom-panel {
+    width: 80%;
+    max-width: 500px;
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    background-color: var(--bg-surface);
+    border-radius: 8px;
+}
+
+.preset-custom-row {
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 2px;
+}
+
+.preset-custom-dim-label {
+    font-size: 14px;
+    color: var(--text-primary);
+    width: 20px;
+    margin-right: 4px;
+    -unity-text-align: middle-center;
+}
+
+/* ── Settings Panel ──────────────────────────────────────────────── */
+/* Independent overlay panel (DontDestroyOnLoad singleton). Lives in  */
+/* Settings Panel.uxml with its own PanelSettings.                   */
+
+.settings-screen {
+    flex-grow: 1;
+    flex-direction: row;
+    align-items: stretch;
+    padding: 0;
+    background-color: rgba(0, 0, 0, 0);
+}
+
+.settings-backdrop {
+    flex-grow: 1;
+    background-color: var(--bg-backdrop);
+}
+
+.settings-panel {
+    width: 50%;
+    max-width: 520px;
+    background-color: var(--bg-sidebar);
+    align-items: stretch;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+.settings-layout {
+    flex-direction: row;
+    flex-grow: 1;
+    flex-shrink: 1;
+    overflow: hidden;
+}
+
+.settings-nav {
+    width: 56px;
+    flex-shrink: 0;
+    flex-direction: column;
+    padding-top: 16px;
+    align-items: center;
+    background-color: var(--bg-sidebar-nav);
+    border-right-width: 1px;
+    border-right-color: var(--border-normal);
+}
+
+.settings-nav-btn {
+    width: 40px;
+    height: 40px;
+    padding: 8px;
+    background-color: transparent;
+    border-width: 0;
+    border-radius: 8px;
+    margin-bottom: 4px;
+}
+
+.settings-nav-btn__icon {
+    flex-grow: 1;
+    -unity-background-scale-mode: scale-to-fit;
+    -unity-background-image-tint-color: var(--text-dim);
+}
+
+.settings-nav-btn:hover {
+    background-color: var(--bg-btn);
+}
+
+.settings-nav-btn:hover .settings-nav-btn__icon {
+    -unity-background-image-tint-color: var(--text-secondary);
+}
+
+.settings-nav-btn--active {
+    border-left-width: 2px;
+    border-left-color: var(--accent-info);
+    background-color: var(--accent-info-bg);
+}
+
+.settings-nav-btn--active .settings-nav-btn__icon {
+    -unity-background-image-tint-color: var(--accent-info);
+}
+
+.settings-scroll {
+    flex-grow: 1;
+    flex-shrink: 1;
+}
+
+.settings-scroll .unity-scroller--vertical {
+    width: 4px;
+    margin-left: -4px;
+    margin-right: 0;
+    padding: 0;
+    transition-property: width, margin-left;
+    transition-duration: 0.15s;
+}
+
+.settings-scroll:hover .unity-scroller--vertical {
+    width: 10px;
+    margin-left: -10px;
+}
+
+.settings-scroll .unity-scroller--vertical .unity-slider {
+    margin: 0;
+    padding: 0;
+}
+
+.settings-scroll .unity-scroller--vertical .unity-base-slider__tracker {
+    background-color: var(--scrollbar-track);
+    border-width: 0;
+}
+
+.settings-scroll .unity-scroller--vertical .unity-base-slider__dragger {
+    background-color: var(--scrollbar-thumb);
+    border-radius: 3px;
+    border-width: 0;
+}
+
+.settings-scroll:hover .unity-scroller--vertical .unity-base-slider__dragger {
+    background-color: var(--scrollbar-thumb-hover);
+}
+
+.settings-scroll .unity-scroller--vertical .unity-base-slider__dragger:hover {
+    background-color: var(--scrollbar-thumb-hover);
+}
+
+.settings-scroll .unity-scroller--vertical .unity-repeat-button {
+    display: none;
+    height: 0;
+    min-height: 0;
+}
+
+.settings-section {
+    padding: 28px 40px 28px 32px;
+    max-width: 480px;
+    align-items: flex-start;
+}
+
+.settings-section--divider {
+    border-top-width: 1px;
+    border-top-color: var(--border-normal);
+}
+
+.settings-section-header {
+    font-size: 16px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+    -unity-text-align: upper-left;
+    -unity-font-style: bold;
+}
+
+.settings-section-desc {
+    font-size: 14px;
+    color: var(--text-dim);
+    margin-bottom: 16px;
+    white-space: normal;
+    -unity-text-align: upper-left;
+}
+
+.settings-danger-btn {
+    font-size: 14px;
+    color: var(--text-on-accent);
+    background-color: var(--accent-danger-btn);
+    border-width: 0;
+    border-radius: 6px;
+    padding: 6px 14px;
+    align-self: flex-start;
+    -unity-text-align: middle-center;
+    margin-top: 8px;
+}
+
+.settings-danger-btn:hover {
+    background-color: var(--accent-danger-btn-hover);
+}
+
+.about-links {
+    flex-direction: row;
+    margin-top: 8px;
+}
+
+.about-link-icon-btn {
+    margin-right: 8px;
+}
+
+.settings-account-status {
+    font-size: 14px;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    -unity-text-align: upper-left;
+}
+
+/* ── Setting rows ────────────────────────────────────────────────── */
+
+.setting-row {
+    max-width: 300px;
+    align-self: stretch;
+    margin-bottom: 24px;
+    align-items: flex-start;
+}
+
+.setting-row--toggle {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.setting-row--toggle .setting-label {
+    margin-bottom: 0;
+}
+
+.setting-label {
+    font-size: 16px;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+    -unity-text-align: upper-left;
+}
+
+.setting-toggle {
+    flex-direction: row;
+    align-items: center;
+}
+
+.setting-toggle .unity-toggle__input {
+    width: 52px;
+    height: 28px;
+    flex-direction: row;
+    align-items: center;
+    background-color: var(--bg-surface-active);
+    border-radius: 14px;
+    border-width: 0;
+    padding: 3px;
+}
+
+.setting-toggle .unity-toggle__checkmark {
+    width: 22px;
+    height: 22px;
+    border-radius: 11px;
+    background-color: var(--text-dim);
+    border-width: 0;
+    background-image: none;
+    -unity-background-image-tint-color: rgba(0, 0, 0, 0);
+    translate: 0 0;
+    transition-duration: 0.15s;
+    transition-property: translate, background-color;
+}
+
+.setting-toggle:checked .unity-toggle__checkmark {
+    background-color: var(--accent-info);
+    translate: 24px 0;
+}
+
+.setting-toggle .unity-label {
+    display: none;
+}
+
+/* ── Display name ────────────────────────────────────────────────── */
+
+.settings-display-name-slot {
+    align-self: stretch;
+    margin-bottom: 4px;
+}
+
+/* ── Account forms ───────────────────────────────────────────────── */
+
+.account-form {
+    align-self: stretch;
+    align-items: stretch;
+}
+
+.auth-btn-row {
+    flex-direction: row;
+    align-self: stretch;
+    margin-top: 8px;
+}
+
+.auth-btn {
+    flex: 1;
+    font-size: 16px;
+    padding: 10px 0;
+    margin: 0 4px;
+}
+
+.auth-btn--primary {
+    color: var(--text-on-accent);
+    background-color: var(--accent-info-btn);
+    border-width: 0;
+}
+
+.auth-btn--primary:hover {
+    background-color: var(--accent-info-btn-hover);
+}
+
+.auth-btn--primary:active {
+    background-color: var(--accent-info-btn-active);
+}
+
+.account-form-title {
+    font-size: 16px;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+    -unity-text-align: upper-left;
+}
+
+/* ── EditableLabel component ─────────────────────────────────────── */
+
+.editable-label {
+    align-self: stretch;
+    margin-bottom: 8px;
+}
+
+.editable-label__input {
+    margin: 0;
+    padding: 0;
+}
+
+.editable-label__input Label {
+    display: none;
+}
+
+.editable-label__input .unity-text-field__input {
+    font-size: 24px;
+    color: var(--text-primary);
+    background-color: rgba(0, 0, 0, 0);
+    border-color: rgba(255, 255, 255, 0);
+    border-width: 1px;
+    border-radius: 6px;
+    padding: 6px 12px;
+    -unity-text-align: middle-left;
+}
+
+.editable-label__input .unity-text-field__input:hover {
+    border-color: var(--border-emphasis);
+}
+
+.editable-label--editing .editable-label__input .unity-text-field__input {
+    background-color: var(--bg-input);
+    border-color: var(--border-emphasis);
+    -unity-text-align: middle-left;
+}
+
+.editable-label--editing .editable-label__input .unity-text-field__input:focus {
+    border-color: var(--accent-info);
+}
+
+/* ── LabeledField component ──────────────────────────────────────── */
+
+.labeled-field {
+    margin-bottom: 8px;
+    align-self: stretch;
+}
+
+.labeled-field__label-row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 2px;
+}
+
+.labeled-field__label {
+    font-size: 14px;
+    color: var(--text-secondary);
+    -unity-text-align: upper-left;
+}
+
+.labeled-field__label-action {
+    font-size: 12px;
+    color: var(--accent-info);
+    background-color: rgba(0, 0, 0, 0);
+    border-width: 0;
+    padding: 0;
+    margin: 0;
+    -unity-text-align: middle-right;
+}
+
+.labeled-field__label-action:hover {
+    color: var(--accent-info);
+}
+
+.labeled-field__input {
+    margin: 0;
+    padding: 0;
+}
+
+.labeled-field__input Label {
+    display: none;
+}
+
+.labeled-field__input .unity-text-field__input {
+    font-size: 16px;
+    color: var(--text-primary);
+    background-color: var(--bg-input);
+    border-color: var(--border-normal);
+    border-width: 1px;
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+
+.labeled-field__input .unity-text-field__input:focus {
+    border-color: var(--accent-info);
+}
+
+/* ── Account status/error/success ────────────────────────────────── */
+
+.account-error {
+    font-size: 14px;
+    color: var(--text-danger);
+    margin-bottom: 8px;
+    white-space: normal;
+}
+
+.account-success {
+    font-size: 14px;
+    color: var(--text-success);
+    margin-bottom: 8px;
+    white-space: normal;
+}
+
+.account-info-text {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    white-space: normal;
+    -unity-text-align: upper-left;
+}
+
+.account-submit-btn {
+    width: auto;
+    align-self: stretch;
+    font-size: 16px;
+    padding: 10px 0;
+}
+
+.account-switch-btn {
+    font-size: 14px;
+    color: var(--accent-info);
+    background-color: rgba(0, 0, 0, 0);
+    border-width: 0;
+    padding: 4px 0;
+    margin: 0;
+    align-self: flex-start;
+    -unity-text-align: upper-left;
+}
+
+.account-switch-btn:hover {
+    color: var(--accent-info);
 }

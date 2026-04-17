@@ -1,89 +1,13 @@
-/* Leaderboard-specific styles. Shared components live in Shared.uss. */
-
-/* Root screen */
-.lb-screen {
-    flex-grow: 1;
-    background-color: var(--bg-screen);
-    padding: 16px;
-    overflow: hidden;
-    height: 100%;
-}
+/* Leaderboard-specific styles. Shared list-screen/list-scroll/list-refresh
+   patterns live in Shared.uss — this file adds only leaderboard-specific rules. */
 
 .lb--hidden {
     display: none;
 }
 
-/* ── Spacing overrides for shared components ──────────────────────── */
-
-.lb-screen .screen-header {
-    margin-bottom: 12px;
-}
-
-.lb-screen .tab-bar {
+/* Tab bar spacing (leaderboard-specific, not in shared filter-row) */
+.list-screen .tab-bar {
     margin-bottom: 8px;
-}
-
-.lb-screen .filter-row {
-    margin-bottom: 10px;
-}
-
-/* ── Compact modal overrides ──────────────────────────────────────── */
-/* The leaderboard modal is more compact than the default shared modal. */
-
-.lb-screen .modal-box {
-    padding: 28px 40px;
-}
-
-.lb-screen .modal-label {
-    font-size: 20px;
-    margin-bottom: 20px;
-}
-
-.lb-screen .modal-btn {
-    min-width: 100px;
-    font-size: 16px;
-    border-radius: 6px;
-    margin: 0 6px;
-}
-
-/* ── Scroll area ──────────────────────────────────────────────────── */
-
-.lb-scroll {
-    flex-grow: 1;
-    flex-shrink: 1;
-}
-
-/* Scrollbar styling */
-.lb-scroll .unity-scroller--vertical {
-    width: 8px;
-    margin: 0;
-    padding: 0;
-}
-
-.lb-scroll .unity-scroller--vertical .unity-slider {
-    margin: 0;
-    padding: 0;
-}
-
-.lb-scroll .unity-scroller--vertical .unity-base-slider__tracker {
-    background-color: var(--scrollbar-track);
-    border-width: 0;
-}
-
-.lb-scroll .unity-scroller--vertical .unity-base-slider__dragger {
-    background-color: var(--scrollbar-thumb);
-    border-radius: 4px;
-    border-width: 0;
-}
-
-.lb-scroll .unity-scroller--vertical .unity-base-slider__dragger:hover {
-    background-color: var(--scrollbar-thumb-hover);
-}
-
-.lb-scroll .unity-scroller--vertical .unity-repeat-button {
-    display: none;
-    height: 0;
-    min-height: 0;
 }
 
 .lb-list {
@@ -281,38 +205,12 @@
     background-image: url("/Assets/Art/Icons/context_menu.png");
 }
 
-/* ── Refresh button (in tab bar) ─────────────────────────────────── */
-
-.lb-refresh-btn {
-    width: 30px;
-    height: 30px;
-    padding: 5px;
-    background-color: var(--bg-btn);
-    border-radius: 15px;
-    border-width: 0;
-    flex-shrink: 0;
-    margin-left: 6px;
-}
-
-.lb-refresh-btn:hover {
-    background-color: var(--bg-btn-hover);
-}
-
-.lb-refresh-btn:active {
-    background-color: var(--bg-btn-active);
-}
-
-.lb-refresh-icon {
-    flex-grow: 1;
-    background-image: url("/Assets/Art/Icons/refresh.png");
-    -unity-background-scale-mode: scale-to-fit;
-    -unity-background-image-tint-color: var(--text-secondary);
-}
+/* Refresh button uses .list-refresh-btn from Shared.uss */
 
 /* ── Toast position (bottom-center of leaderboard) ─────────────────── */
 /* Base toast styles live in Shared.uss (.toast, .toast__text) */
 
-.lb-screen .toast {
+.list-screen .toast {
     bottom: 16px;
     left: 50%;
     translate: -50% 0;

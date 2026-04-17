@@ -59,6 +59,17 @@ public sealed class MainMenuController : NavigableScene
 
     protected override KeybindManager.Context NavContext => KeybindManager.Context.MainMenu;
 
+    protected override void OnEnable()
+    {
+        // Deep-link resolution must happen before base.OnEnable calls BuildUI/SetState.
+        CoopDeepLink.TryResolve();
+        base.OnEnable();
+
+        // If a lobby code was provided via deep-link, jump straight to the hub.
+        if (!string.IsNullOrEmpty(GameSettings.PendingLobbyCode))
+            SceneNav.Push("CoopHub");
+    }
+
     protected override void BuildUI(VisualElement root)
     {
         _menuRoot = root.Q("menu-root");
@@ -98,7 +109,7 @@ public sealed class MainMenuController : NavigableScene
         continueBtn.clicked += OnContinue;
 
         // Multiplayer buttons
-        root.Q<Button>("coop-btn").SetEnabled(false);
+        root.Q<Button>("coop-btn").clicked += () => SceneNav.Push("CoopHub");
         root.Q<Button>("back-mp-btn").clicked += () => SetState(MenuState.Play);
 
         // Restore state (e.g. returning from Game via SceneNav.Pop)
@@ -338,7 +349,17 @@ public sealed class MainMenuController : NavigableScene
         );
 
         int coopIdx = items.Count;
-        items.Add(new FocusNavigator.FocusItem { Element = Root.Q<Button>("coop-btn") });
+        items.Add(
+            new FocusNavigator.FocusItem
+            {
+                Element = Root.Q<Button>("coop-btn"),
+                OnActivate = () =>
+                {
+                    SceneNav.Push("CoopHub");
+                    return true;
+                },
+            }
+        );
 
         nav.SetItems(items, coopIdx);
 

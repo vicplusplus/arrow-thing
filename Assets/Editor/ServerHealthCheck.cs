@@ -44,7 +44,7 @@ public static class ServerHealthCheck
         }
 
         var name = "Test Lobby " + System.DateTime.UtcNow.ToString("HH:mm:ss");
-        var result = await api.CreateLobbyAsync(name);
+        var result = await api.CreateLobbyAsync(name, 200, 200);
         if (result.Success)
         {
             Debug.Log(

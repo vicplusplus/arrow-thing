@@ -1,0 +1,290 @@
+/* ====================================================================
+   Coop.uss — Co-op hub styles.
+   Follows the same patterns as Leaderboard.uss: screen-header, filter-row,
+   scrollable list with --bg-row rows, shared modal-box/modal-btn classes.
+   ==================================================================== */
+
+/* ── Visibility ───────────────────────────────────────────────────── */
+
+.hub--hidden {
+    display: none;
+}
+
+/* .hub-modal--hidden replaced by shared .modal--hidden from Shared.uss */
+
+/* Hub root uses .list-screen from Shared.uss for screen/header/filter spacing */
+
+/* ── Hub toolbar (Host / Join / Refresh) ──────────────────────────── */
+
+.hub-toolbar {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+}
+
+.hub-toolbar__btn {
+    padding: 6px 16px;
+    margin-right: 6px;
+    font-size: 13px;
+    color: var(--text-primary);
+    background-color: var(--bg-btn);
+    border-radius: 6px;
+    border-width: 0;
+    flex-shrink: 0;
+}
+
+.hub-toolbar__btn:hover {
+    background-color: var(--bg-btn-hover);
+}
+
+.hub-toolbar__btn:active {
+    background-color: var(--bg-btn-active);
+}
+
+/* Refresh button uses default .list-refresh-btn spacing (margin-left: 6px) */
+
+/* Scroll, scrollbar, refresh all use .list-scroll / .list-refresh-btn from Shared.uss */
+
+.hub-list {
+    flex-direction: column;
+}
+
+.hub-empty {
+    padding: 40px 0;
+}
+
+/* ── Lobby row — same sizing as lb-entry but taller (3x) ─────────── */
+
+.lobby-row {
+    flex-direction: row;
+    align-items: center;
+    padding: 16px 12px;
+    margin-bottom: 2px;
+    border-radius: 6px;
+    background-color: var(--bg-row);
+}
+
+.lobby-row:hover {
+    background-color: var(--bg-row-hover);
+}
+
+.lobby-row__status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 5px;
+    margin-right: 10px;
+    flex-shrink: 0;
+    background-color: var(--text-dim);
+}
+
+.lobby-row--generating .lobby-row__status-dot {
+    background-color: var(--accent-info);
+}
+
+.lobby-row--active .lobby-row__status-dot {
+    background-color: var(--accent-success);
+}
+
+.lobby-row--completed .lobby-row__status-dot {
+    background-color: var(--text-secondary);
+}
+
+.lobby-row--failed .lobby-row__status-dot {
+    background-color: var(--accent-danger);
+}
+
+.lobby-row__main {
+    flex-grow: 1;
+    flex-shrink: 1;
+    overflow: hidden;
+}
+
+.lobby-row__name {
+    font-size: 16px;
+    color: var(--text-primary);
+    -unity-font-style: bold;
+    overflow: hidden;
+    -unity-text-overflow-position: end;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Inline editable name (owner rows): compact, no extra margin */
+.lobby-row__name.editable-label {
+    margin-bottom: 0;
+}
+
+.lobby-row__name .editable-label__input .unity-text-field__input {
+    font-size: 16px;
+    -unity-font-style: bold;
+    padding: 2px 6px;
+}
+
+.lobby-row__meta-row {
+    flex-direction: row;
+    margin-top: 4px;
+}
+
+.lobby-row__meta-row > Label {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-right: 12px;
+}
+
+.lobby-row__code-group {
+    flex-direction: row;
+    align-items: center;
+    margin-right: 12px;
+}
+
+.lobby-row__code {
+    color: var(--text-secondary);
+    -unity-font-style: bold;
+    letter-spacing: 1px;
+    margin-right: 4px;
+}
+
+.lobby-row__code-toggle,
+.lobby-row__code-copy {
+    width: 20px;
+    height: 20px;
+    padding: 3px;
+    background-color: transparent;
+    border-width: 0;
+    border-radius: 4px;
+    margin: 0 0 0 2px;
+}
+
+.lobby-row__code-toggle:hover,
+.lobby-row__code-copy:hover {
+    background-color: var(--bg-hover);
+}
+
+.lobby-row__code-toggle .hud-icon-btn__icon,
+.lobby-row__code-copy .hud-icon-btn__icon {
+    flex-grow: 1;
+    -unity-background-scale-mode: scale-to-fit;
+    -unity-background-image-tint-color: var(--text-dim);
+}
+
+.lobby-row__code-toggle:hover .hud-icon-btn__icon,
+.lobby-row__code-copy:hover .hud-icon-btn__icon {
+    -unity-background-image-tint-color: var(--text-primary);
+}
+
+.lobby-row__activity {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 4px;
+}
+
+/* Row action buttons — small, subtle, match lb-row-btn pattern */
+.lobby-row__retry-btn,
+.lobby-row__open-btn,
+.lobby-row__delete-btn {
+    margin-left: 6px;
+    padding: 4px 10px;
+    font-size: 13px;
+    border-radius: 4px;
+    border-width: 0;
+    background-color: var(--bg-btn);
+    color: var(--text-primary);
+    flex-shrink: 0;
+}
+
+.lobby-row__retry-btn:hover,
+.lobby-row__open-btn:hover {
+    background-color: var(--bg-btn-hover);
+}
+
+.lobby-row__delete-btn {
+    color: var(--text-on-accent);
+    background-color: var(--accent-danger-btn);
+}
+
+.lobby-row__delete-btn:hover {
+    background-color: var(--accent-danger-btn-hover);
+}
+
+/* Hub modals reuse shared .modal-overlay (absolute fill) + .modal-box from Shared.uss.
+   .hub-modal / .hub-modal--hidden add the display toggle layer. */
+
+.hub-modal {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+/* Generation progress uses shared .progress-bar from Shared.uss */
+
+.hub-progress {
+    width: 100%;
+    margin: 12px 0;
+}
+
+.hub-progress__pct {
+    font-size: 14px;
+    color: var(--text-dim);
+    -unity-text-align: middle-center;
+    margin-bottom: 12px;
+}
+
+/* ── Narrow layout (< 768px) ─────────────────────────────────────── */
+
+.hub--narrow .lobby-row {
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.hub--narrow .lobby-row__meta-row {
+    flex-wrap: wrap;
+}
+
+.hub--narrow .lobby-row__retry-btn,
+.hub--narrow .lobby-row__open-btn,
+.hub--narrow .lobby-row__delete-btn {
+    margin-left: 0;
+    margin-top: 6px;
+}
+
+/* Hub modal sizing: 90% of viewport up to 420px — scales on small screens */
+.hub-modal__box {
+    width: 90%;
+    max-width: 420px;
+    align-items: stretch;
+}
+
+.hub-modal__box .modal-label {
+    -unity-text-align: middle-center;
+}
+
+.hub-modal__box .modal-buttons {
+    justify-content: center;
+}
+
+.host-size-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 8px 0 4px 0;
+}
+
+/* Match the text input width inside the host modal (no 80% / 500px cap) */
+.hub-modal__box .custom-panel {
+    width: auto;
+    max-width: none;
+    align-self: stretch;
+}
+
+.hub--narrow .hub-modal__box {
+    min-width: 0;
+    max-width: none;
+    width: 90%;
+}
+
+.hub--narrow .hub-toolbar {
+    flex-wrap: wrap;
+}

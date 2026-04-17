@@ -182,4 +182,45 @@ public class SceneNavStackTests
         _stack.Replace("Game", "Game");
         Assert.AreEqual("MainMenu", _stack.Pop());
     }
+
+    // ── Co-op flows (Phase 5) ──────────────────────────────────────────
+
+    [Test]
+    public void Flow_MainMenu_CoopHub_Back()
+    {
+        // MainMenu → (Multiplayer, in-scene) → Coop Hub → Back
+        _stack.Push("MainMenu", "CoopHub");
+        Assert.AreEqual("MainMenu", _stack.Pop());
+    }
+
+    [Test]
+    public void Flow_CoopHub_CoopGame_Back()
+    {
+        // MainMenu → Coop Hub → Coop Game → Back → Back
+        _stack.Push("MainMenu", "CoopHub");
+        _stack.Push("CoopHub", "Game");
+        Assert.AreEqual("CoopHub", _stack.Pop());
+        Assert.AreEqual("MainMenu", _stack.Pop());
+    }
+
+    [Test]
+    public void Flow_DeepLink_CoopHub_CoopGame_Back()
+    {
+        // Deep-link pushes MainMenu → Coop Hub immediately, then Coop Hub → Coop Game
+        _stack.Push("MainMenu", "CoopHub");
+        _stack.Push("CoopHub", "Game");
+        Assert.AreEqual("CoopHub", _stack.Pop());
+        Assert.AreEqual("MainMenu", _stack.Pop());
+    }
+
+    [Test]
+    public void Flow_CoopHub_CoopGame_Leave_Back()
+    {
+        // MainMenu → Coop Hub → Coop Game → Leave (Pop) → Back to Hub → Back to MainMenu
+        _stack.Push("MainMenu", "CoopHub");
+        _stack.Push("CoopHub", "Game");
+        Assert.AreEqual("CoopHub", _stack.Pop());
+        Assert.AreEqual("MainMenu", _stack.Pop());
+        Assert.AreEqual(0, _stack.Depth);
+    }
 }

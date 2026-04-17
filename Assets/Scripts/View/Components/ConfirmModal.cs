@@ -48,12 +48,18 @@ public class ConfirmModal
         string confirmText,
         string cancelText,
         string subtitle = null,
-        bool isDismissable = false
+        bool isDismissable = false,
+        bool isDanger = false
     )
     {
         _root.Q<Label>("modal-title").text = title;
         _confirmBtn.text = confirmText;
         _cancelBtn.text = cancelText;
+
+        if (isDanger)
+            _confirmBtn.AddToClassList("modal-btn--danger");
+        else
+            _confirmBtn.RemoveFromClassList("modal-btn--danger");
 
         var sub = _root.Q<Label>("modal-subtitle");
         if (sub != null)
@@ -118,7 +124,7 @@ public class ConfirmModal
         _confirmBtn = root.Q<Button>("modal-confirm-btn");
         _confirmBtn.text = confirmText;
         if (isDanger)
-            _confirmBtn.AddToClassList("menu-btn--danger");
+            _confirmBtn.AddToClassList("modal-btn--danger");
 
         _cancelBtn = root.Q<Button>("modal-cancel-btn");
         _cancelBtn.text = cancelText;

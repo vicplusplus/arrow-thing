@@ -126,6 +126,27 @@ public class LobbyTests : IClassFixture<TestFactory>, IDisposable
     }
 
     [Fact]
+    public async Task Create_DeleteRecreate_BlockedByRateLimit()
+    {
+        // Even after deleting lobbies, the create-rate-limit window counts them.
+        // Prevents delete-and-recreate floods of the generation worker.
+        var auth = await RegisterAndVerifyAsync($"rate-{Guid.NewGuid():N}@example.com");
+        SetAuth(auth.Token);
+
+        // Create 5, delete all 5 → still blocked from creating a 6th (recent count = 5).
+        for (int i = 1; i <= 5; i++)
+        {
+            var create = await _client.PostAsJsonAsync("/api/lobbies", new { name = $"L{i}" });
+            Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+            var body = await create.Content.ReadFromJsonAsync<LobbyResponse>();
+            await _client.DeleteAsync($"/api/lobbies/{body!.Id}");
+        }
+
+        var sixth = await _client.PostAsJsonAsync("/api/lobbies", new { name = "L6" });
+        Assert.Equal((HttpStatusCode)429, sixth.StatusCode);
+    }
+
+    [Fact]
     public async Task Create_FifthLobby_Succeeds_SixthFails()
     {
         var auth = await RegisterAndVerifyAsync($"cap-{Guid.NewGuid():N}@example.com");
@@ -237,5 +258,40 @@ public class LobbyTests : IClassFixture<TestFactory>, IDisposable
         SetAuth(bob.Token);
         var del = await _client.DeleteAsync($"/api/lobbies/{created!.Id}");
         Assert.Equal(HttpStatusCode.Forbidden, del.StatusCode);
+    }
+
+    // -- Phase 5: Auto-registration + broadened ListMine --
+
+    [Fact]
+    public async Task Create_AutoRegistersCreator()
+    {
+        var auth = await RegisterAndVerifyAsync($"autoreg-{Guid.NewGuid():N}@example.com");
+        SetAuth(auth.Token);
+
+        var create = await _client.PostAsJsonAsync("/api/lobbies", new { name = "AutoReg" });
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+
+        // ListMine should include the lobby with youAreOwner = true
+        var list = await _client.GetAsync("/api/lobbies/me");
+        var body = await list.Content.ReadFromJsonAsync<LobbyListResponse>();
+        Assert.NotNull(body);
+        Assert.Contains(body!.Entries, e => e.Name == "AutoReg" && e.YouAreOwner);
+    }
+
+    [Fact]
+    public async Task ListMine_IncludesNewFields()
+    {
+        var auth = await RegisterAndVerifyAsync($"fields-{Guid.NewGuid():N}@example.com");
+        SetAuth(auth.Token);
+
+        await _client.PostAsJsonAsync("/api/lobbies", new { name = "FieldTest" });
+
+        var list = await _client.GetAsync("/api/lobbies/me");
+        var body = await list.Content.ReadFromJsonAsync<LobbyListResponse>();
+        Assert.NotNull(body);
+        var entry = Assert.Single(body!.Entries, e => e.Name == "FieldTest");
+        Assert.True(entry.YouAreOwner);
+        Assert.Equal(0, entry.YourClearCount);
+        Assert.NotEmpty(entry.OwnerDisplayName);
     }
 }
