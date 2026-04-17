@@ -17,7 +17,6 @@ public sealed class CoopHubController : NavigableScene
         HostModal,
         JoinModal,
         HostingModal,
-        DeleteConfirm,
     }
 
     private HubState _state = HubState.List;
@@ -165,11 +164,7 @@ public sealed class CoopHubController : NavigableScene
             isDanger: true
         );
         _deleteModal.Confirmed += OnDeleteConfirm;
-        _deleteModal.Cancelled += () =>
-        {
-            _deleteModal.Hide();
-            SetState(HubState.List);
-        };
+        _deleteModal.Cancelled += () => _deleteModal.Hide();
 
         // Narrow layout detection
         _hubRoot.RegisterCallback<GeometryChangedEvent>(OnGeometryChanged);
@@ -542,10 +537,6 @@ public sealed class CoopHubController : NavigableScene
                 break;
             case HubState.HostingModal:
                 CloseHostingModal();
-                break;
-            case HubState.DeleteConfirm:
-                _deleteModal.Hide();
-                SetState(HubState.List);
                 break;
             case HubState.List:
                 SceneNav.Pop();
@@ -1093,8 +1084,9 @@ public sealed class CoopHubController : NavigableScene
             isDismissable: false,
             isDanger: true
         );
+        // ConfirmModal.Show() pushes its own modal onto FocusNavigator.Active;
+        // the hub's state stays List so we don't rebuild the nav and drop the push.
         _deleteModal.Show();
-        SetState(HubState.DeleteConfirm);
     }
 
     private async void OnDeleteConfirm()
@@ -1107,7 +1099,6 @@ public sealed class CoopHubController : NavigableScene
                 GlobalToast.Instance.ShowError(result.Error ?? "Couldn't delete lobby.");
         }
         _pendingDeleteId = null;
-        SetState(HubState.List);
         RefreshListAsync();
     }
 
