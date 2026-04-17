@@ -20,6 +20,7 @@ public class AuthService
     private readonly JwtHelper _jwt;
     private readonly IEmailService _email;
     private readonly AuditLogService _audit;
+    private readonly RefreshTokenService _refreshTokens;
     private readonly ILogger<AuthService> _logger;
 
     public AuthService(
@@ -27,6 +28,7 @@ public class AuthService
         JwtHelper jwt,
         IEmailService email,
         AuditLogService audit,
+        RefreshTokenService refreshTokens,
         ILogger<AuthService> logger
     )
     {
@@ -34,7 +36,26 @@ public class AuthService
         _jwt = jwt;
         _email = email;
         _audit = audit;
+        _refreshTokens = refreshTokens;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Mints an access JWT + refresh token pair. The refresh token row is
+    /// added to the EF tracker but not saved here — caller is responsible
+    /// for the next SaveChanges.
+    /// </summary>
+    private AuthResponse IssueTokenPair(User user, string? userAgent)
+    {
+        var jwt = _jwt.GenerateToken(user);
+        var refresh = _refreshTokens.Issue(user.Id, userAgent);
+        return new AuthResponse(
+            Token: jwt,
+            DisplayName: user.DisplayName,
+            RefreshToken: refresh.Token,
+            ExpiresIn: (int)JwtHelper.AccessTokenLifetime.TotalSeconds,
+            RefreshExpiresIn: (int)RefreshTokenService.Lifetime.TotalSeconds
+        );
     }
 
     public async Task<(MessageResponse? Response, int StatusCode, string? Error)> RegisterAsync(
@@ -198,8 +219,9 @@ public class AuthService
 
         await _audit.LogAsync(AuditEvent.Login, user.Id, user.Email, ip);
 
-        var token = _jwt.GenerateToken(user);
-        return (new AuthResponse(token, user.DisplayName), 200, null);
+        var response = IssueTokenPair(user, userAgent);
+        await _db.SaveChangesAsync();
+        return (response, 200, null);
     }
 
     /// <summary>
@@ -283,8 +305,9 @@ public class AuthService
             );
         }
 
-        var token = _jwt.GenerateToken(user);
-        return (new AuthResponse(token, user.DisplayName), 200, null);
+        var response = IssueTokenPair(user, userAgent);
+        await _db.SaveChangesAsync();
+        return (response, 200, null);
     }
 
     /// <summary>
@@ -453,6 +476,7 @@ public class AuthService
 
         user.PasswordHash = PasswordHasher.Hash(request.NewPassword);
         user.SecurityStamp = Guid.NewGuid().ToString();
+        await _refreshTokens.RevokeAllActiveAsync(user.Id);
         await _db.SaveChangesAsync();
 
         await _audit.LogAsync(AuditEvent.ChangePassword, user.Id, user.Email, ip);
@@ -497,12 +521,11 @@ public class AuthService
         if (!string.IsNullOrEmpty(deviceId))
             await EnsureDeviceTrustedAsync(user, deviceId, userAgent);
 
-        await _db.SaveChangesAsync();
-
         await _audit.LogAsync(AuditEvent.VerifyEmail, user.Id, user.Email, ip);
 
-        var jwt = _jwt.GenerateToken(user);
-        return (new AuthResponse(jwt, user.DisplayName), 200, null);
+        var response = IssueTokenPair(user, userAgent);
+        await _db.SaveChangesAsync();
+        return (response, 200, null);
     }
 
     public async Task<(
@@ -641,6 +664,7 @@ public class AuthService
         user.PasswordResetCodeExpiresAt = null;
         // Invalidate all existing sessions — critical for security when password is reset
         user.SecurityStamp = Guid.NewGuid().ToString();
+        await _refreshTokens.RevokeAllActiveAsync(user.Id);
         await _db.SaveChangesAsync();
 
         await _audit.LogAsync(AuditEvent.ResetPassword, user.Id, user.Email, ip);
@@ -825,6 +849,7 @@ public class AuthService
 
         // Bump security stamp to invalidate all existing JWTs
         user.SecurityStamp = Guid.NewGuid().ToString();
+        await _refreshTokens.RevokeAllActiveAsync(user.Id);
 
         await _db.SaveChangesAsync();
 
@@ -860,6 +885,7 @@ public class AuthService
         user.LockedAt = null;
         // Invalidate all pre-lock sessions
         user.SecurityStamp = Guid.NewGuid().ToString();
+        await _refreshTokens.RevokeAllActiveAsync(user.Id);
 
         // Generate a password reset code so the user can set a new password
         var code = PasswordHasher.GenerateSecureCode();
@@ -894,6 +920,59 @@ public class AuthService
     // Npgsql raises SQLSTATE 23505 on unique-constraint violation.
     private static bool IsUniqueViolation(DbUpdateException ex) =>
         ex.InnerException is PostgresException pg && pg.SqlState == "23505";
+
+    /// <summary>
+    /// Rotates a refresh token. On success returns a fresh access JWT + refresh
+    /// pair. On failure (unknown / expired / reused / revoked token) returns 401
+    /// without leaking which sub-check failed.
+    /// </summary>
+    public async Task<(AuthResponse? Response, int StatusCode, string? Error)> RefreshAsync(
+        string rawRefreshToken,
+        string? userAgent = null
+    )
+    {
+        if (string.IsNullOrWhiteSpace(rawRefreshToken))
+            return (null, 400, "Refresh token is required.");
+
+        var (issue, user) = await _refreshTokens.RedeemAsync(rawRefreshToken, userAgent);
+        if (issue == null || user == null)
+            return (null, 401, "Invalid or expired refresh token.");
+
+        if (user.IsLocked)
+            return (null, 403, "Account is locked. Please contact support on Discord.");
+
+        var jwt = _jwt.GenerateToken(user);
+        await _db.SaveChangesAsync();
+
+        return (
+            new AuthResponse(
+                Token: jwt,
+                DisplayName: user.DisplayName,
+                RefreshToken: issue.Token,
+                ExpiresIn: (int)JwtHelper.AccessTokenLifetime.TotalSeconds,
+                RefreshExpiresIn: (int)RefreshTokenService.Lifetime.TotalSeconds
+            ),
+            200,
+            null
+        );
+    }
+
+    /// <summary>
+    /// Best-effort logout — revokes the supplied refresh token if it exists,
+    /// always returns 200. Idempotent so the client can call it from a "user
+    /// hit log out" handler without having to handle errors.
+    /// </summary>
+    public async Task<(MessageResponse Response, int StatusCode)> LogoutAsync(
+        string rawRefreshToken
+    )
+    {
+        if (!string.IsNullOrEmpty(rawRefreshToken))
+        {
+            await _refreshTokens.RevokeAsync(rawRefreshToken);
+            await _db.SaveChangesAsync();
+        }
+        return (new MessageResponse("Logged out."), 200);
+    }
 
     private static bool IsValidEmail(string email)
     {

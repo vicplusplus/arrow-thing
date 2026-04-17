@@ -13,6 +13,13 @@ public class JwtHelper
     private const string Issuer = "arrow-thing-api";
     private const string Audience = "arrow-thing-client";
 
+    /// <summary>
+    /// Access-token lifetime. Short on purpose: paired with the refresh-token
+    /// flow (Phase 1C), this caps the XSS exposure window for a stolen JWT
+    /// at the lifetime length.
+    /// </summary>
+    public static readonly TimeSpan AccessTokenLifetime = TimeSpan.FromMinutes(15);
+
     public JwtHelper(IConfiguration configuration)
     {
         var secret =
@@ -43,7 +50,7 @@ public class JwtHelper
             issuer: Issuer,
             audience: Audience,
             claims: claims,
-            expires: DateTime.UtcNow.AddDays(30),
+            expires: DateTime.UtcNow.Add(AccessTokenLifetime),
             signingCredentials: credentials
         );
 

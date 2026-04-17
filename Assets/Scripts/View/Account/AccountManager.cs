@@ -798,12 +798,17 @@ public class AccountManager
         return el != null && !el.ClassListContains("screen--hidden");
     }
 
-    private void OnLogoutConfirm()
+    private async void OnLogoutConfirm()
     {
         _logoutModal.Hide();
-        _api.Logout();
+        // LogoutAsync clears local session immediately, then best-effort
+        // revokes the refresh token server-side. Don't await before showing
+        // the login form — the UI flips instantly even if the network call
+        // is slow or offline.
+        var task = _api.LogoutAsync();
         ShowLoginForm();
         UpdateStatusLabel();
+        await task;
     }
 
     private void ClearErrors()

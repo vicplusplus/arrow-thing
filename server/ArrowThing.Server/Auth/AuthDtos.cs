@@ -22,7 +22,17 @@ public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 
 public record VerifyDeviceRequest(string Email, string Password, string Code);
 
-public record AuthResponse(string Token, string DisplayName);
+public record RefreshTokenRequest(string RefreshToken);
+
+public record LogoutRequest(string RefreshToken);
+
+public record AuthResponse(
+    string Token,
+    string DisplayName,
+    string RefreshToken,
+    int ExpiresIn,
+    int RefreshExpiresIn
+);
 
 /// <summary>
 /// Returned from <c>/api/auth/login</c> when the supplied <c>X-Device-Id</c>

@@ -139,6 +139,7 @@ builder.Services.AddHttpClient();
 builder.Services.AddSingleton<JwtHelper>();
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<AuditLogService>();
+builder.Services.AddScoped<RefreshTokenService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<GameService>();
 builder.Services.AddScoped<LeaderboardService>();
@@ -343,6 +344,29 @@ app.MapPost(
         return response != null
             ? Results.Ok(response)
             : Results.Json(new { error }, statusCode: status);
+    }
+);
+
+app.MapPost(
+    "/api/auth/refresh",
+    async (RefreshTokenRequest request, AuthService auth, HttpContext ctx) =>
+    {
+        var (response, status, error) = await auth.RefreshAsync(
+            request.RefreshToken,
+            userAgent: ctx.Request.Headers["User-Agent"].FirstOrDefault()
+        );
+        return response != null
+            ? Results.Ok(response)
+            : Results.Json(new { error }, statusCode: status);
+    }
+);
+
+app.MapPost(
+    "/api/auth/logout",
+    async (LogoutRequest request, AuthService auth) =>
+    {
+        var (response, status) = await auth.LogoutAsync(request.RefreshToken);
+        return Results.Json(response, statusCode: status);
     }
 );
 
