@@ -40,8 +40,19 @@ public sealed class CoopHubController : NavigableScene
     private LabeledField _hostNameField;
     private LabeledField _joinCodeField;
 
-    // Focus items for each lobby row, rebuilt on each RefreshListAsync.
-    private readonly List<FocusNavigator.FocusItem> _rowFocusItems = new();
+    // Focus items per lobby row, rebuilt on each RefreshListAsync.
+    // Each row is a grid of 4 columns: [visibility, copy, main (play/retry), delete].
+    // Columns may be null when the button isn't shown for that row (e.g., no delete
+    // for non-owners, no main button for completed lobbies).
+    private struct RowFocus
+    {
+        public FocusNavigator.FocusItem? Visibility;
+        public FocusNavigator.FocusItem? Copy;
+        public FocusNavigator.FocusItem? Main;
+        public FocusNavigator.FocusItem? Delete;
+    }
+
+    private readonly List<RowFocus> _rowFocus = new();
 
     // Host size sliders (range [100, 400], snap step 50)
     private const int HostMinDim = 100;
@@ -288,10 +299,19 @@ public sealed class CoopHubController : NavigableScene
             }
         );
 
-        // Append lobby row focus items (populated by BuildRow during RefreshListAsync).
-        int rowsStart = items.Count;
-        items.AddRange(_rowFocusItems);
-        int rowsEnd = items.Count; // exclusive
+        // Append lobby row focus items. Each row has up to 4 columns:
+        // [visibility, copy, main (play/retry), delete]. Missing buttons stay -1.
+        // rowIndices[row][col] -> index into `items`, or -1 if absent.
+        int rowCount = _rowFocus.Count;
+        var rowIndices = new int[rowCount, 4];
+        for (int r = 0; r < rowCount; r++)
+        {
+            var rf = _rowFocus[r];
+            rowIndices[r, 0] = AddOpt(items, rf.Visibility);
+            rowIndices[r, 1] = AddOpt(items, rf.Copy);
+            rowIndices[r, 2] = AddOpt(items, rf.Main);
+            rowIndices[r, 3] = AddOpt(items, rf.Delete);
+        }
 
         nav.SetItems(items, hostIdx);
 
@@ -313,16 +333,98 @@ public sealed class CoopHubController : NavigableScene
         nav.Link(fActiveIdx, FocusNavigator.NavDir.Up, joinIdx);
         nav.Link(fCompletedIdx, FocusNavigator.NavDir.Up, refreshIdx);
 
-        // Link: filter row → first row; vertical chain between rows.
-        if (rowsEnd > rowsStart)
+        // Link row grid: filter row → first row's main (falling back to any
+        // present column); horizontal between columns within a row;
+        // vertical stays in same column across rows.
+        if (rowCount > 0)
         {
-            nav.Link(fAllIdx, FocusNavigator.NavDir.Down, rowsStart);
-            nav.Link(fActiveIdx, FocusNavigator.NavDir.Down, rowsStart);
-            nav.Link(fCompletedIdx, FocusNavigator.NavDir.Down, rowsStart);
-            nav.Link(rowsStart, FocusNavigator.NavDir.Up, fAllIdx);
-            for (int i = rowsStart; i < rowsEnd - 1; i++)
-                nav.LinkBidi(i, FocusNavigator.NavDir.Down, i + 1);
+            int firstMain = FirstNonNeg(rowIndices, 0, preferred: 2);
+            if (firstMain >= 0)
+            {
+                nav.Link(fAllIdx, FocusNavigator.NavDir.Down, firstMain);
+                nav.Link(fActiveIdx, FocusNavigator.NavDir.Down, firstMain);
+                nav.Link(fCompletedIdx, FocusNavigator.NavDir.Down, firstMain);
+            }
+
+            for (int r = 0; r < rowCount; r++)
+            {
+                // Horizontal chain within row: skip absent columns.
+                int prev = -1;
+                for (int c = 0; c < 4; c++)
+                {
+                    int cur = rowIndices[r, c];
+                    if (cur < 0)
+                        continue;
+                    if (prev >= 0)
+                        nav.LinkBidi(prev, FocusNavigator.NavDir.Right, cur);
+                    prev = cur;
+                }
+
+                // Vertical: same column to the next row (or next present column as fallback).
+                for (int c = 0; c < 4; c++)
+                {
+                    int cur = rowIndices[r, c];
+                    if (cur < 0)
+                        continue;
+
+                    // Up: previous row's same column, or nearest present.
+                    if (r == 0)
+                    {
+                        // Top row goes up to the filter row.
+                        nav.Link(cur, FocusNavigator.NavDir.Up, fAllIdx);
+                    }
+                    else
+                    {
+                        int up = NearestColumn(rowIndices, r - 1, c);
+                        if (up >= 0)
+                            nav.Link(cur, FocusNavigator.NavDir.Up, up);
+                    }
+
+                    // Down: next row's same column, or nearest present.
+                    if (r < rowCount - 1)
+                    {
+                        int down = NearestColumn(rowIndices, r + 1, c);
+                        if (down >= 0)
+                            nav.Link(cur, FocusNavigator.NavDir.Down, down);
+                    }
+                }
+            }
         }
+    }
+
+    private static int AddOpt(List<FocusNavigator.FocusItem> items, FocusNavigator.FocusItem? item)
+    {
+        if (!item.HasValue)
+            return -1;
+        int idx = items.Count;
+        items.Add(item.Value);
+        return idx;
+    }
+
+    private static int FirstNonNeg(int[,] indices, int row, int preferred)
+    {
+        // Try preferred column first, then fall back to any present column.
+        if (indices[row, preferred] >= 0)
+            return indices[row, preferred];
+        for (int c = 0; c < 4; c++)
+            if (indices[row, c] >= 0)
+                return indices[row, c];
+        return -1;
+    }
+
+    private static int NearestColumn(int[,] indices, int row, int col)
+    {
+        // Prefer the same column; fall back to nearest present column in the row.
+        if (indices[row, col] >= 0)
+            return indices[row, col];
+        for (int offset = 1; offset < 4; offset++)
+        {
+            if (col - offset >= 0 && indices[row, col - offset] >= 0)
+                return indices[row, col - offset];
+            if (col + offset < 4 && indices[row, col + offset] >= 0)
+                return indices[row, col + offset];
+        }
+        return -1;
     }
 
     private void BuildHostModalNavGraph(FocusNavigator nav, List<FocusNavigator.FocusItem> items)
@@ -550,7 +652,7 @@ public sealed class CoopHubController : NavigableScene
         if (_api == null || !_api.IsLoggedIn)
         {
             _hubList.Clear();
-            _rowFocusItems.Clear();
+            _rowFocus.Clear();
             SetVisible(_hubEmpty, true);
             _hubEmpty.text = "Log in to see your co-op lobbies.";
             if (_state == HubState.List)
@@ -567,7 +669,7 @@ public sealed class CoopHubController : NavigableScene
         }
 
         _hubList.Clear();
-        _rowFocusItems.Clear();
+        _rowFocus.Clear();
         var entries = result.Data?.entries;
         if (entries == null || entries.Length == 0)
         {
@@ -644,7 +746,7 @@ public sealed class CoopHubController : NavigableScene
         toggleIcon.AddToClassList("hud-icon-btn__icon");
         toggleIcon.AddToClassList("icon--visible-off");
         toggleBtn.Add(toggleIcon);
-        toggleBtn.clicked += () =>
+        System.Action toggleAction = () =>
         {
             codeHidden = !codeHidden;
             codeLabel.text = codeHidden ? MaskCode(entry.code) : entry.code;
@@ -652,6 +754,7 @@ public sealed class CoopHubController : NavigableScene
             toggleIcon.RemoveFromClassList("icon--visible-off");
             toggleIcon.AddToClassList(codeHidden ? "icon--visible-off" : "icon--visible-on");
         };
+        toggleBtn.clicked += toggleAction;
         codeGroup.Add(toggleBtn);
 
         var copyBtn = new Button();
@@ -660,7 +763,7 @@ public sealed class CoopHubController : NavigableScene
         copyIcon.AddToClassList("hud-icon-btn__icon");
         copyIcon.AddToClassList("icon--copy");
         copyBtn.Add(copyIcon);
-        copyBtn.clicked += () =>
+        System.Action copyAction = () =>
         {
             var url = !string.IsNullOrEmpty(entry.shareUrl)
                 ? entry.shareUrl
@@ -669,6 +772,7 @@ public sealed class CoopHubController : NavigableScene
             if (GlobalToast.Instance != null)
                 GlobalToast.Instance.ShowInfo("Lobby link copied");
         };
+        copyBtn.clicked += copyAction;
         codeGroup.Add(copyBtn);
 
         metaRow.Add(codeGroup);
@@ -690,47 +794,83 @@ public sealed class CoopHubController : NavigableScene
 
         row.Add(main);
 
-        // Retry button (owner + generation failed)
+        // Main action: Retry (owner + failed) OR Play (active/generating).
+        Button mainBtn = null;
         if (entry.youAreOwner && entry.status == 3)
         {
-            var retryBtn = new Button(() => OnRetryGeneration(entry.id)) { text = "Retry" };
-            retryBtn.AddToClassList("lobby-row__retry-btn");
-            row.Add(retryBtn);
+            mainBtn = new Button(() => OnRetryGeneration(entry.id)) { text = "Retry" };
+            mainBtn.AddToClassList("lobby-row__retry-btn");
+            row.Add(mainBtn);
         }
-
-        // Play button (active or generating)
-        if (entry.status == 0 || entry.status == 1)
+        else if (entry.status == 0 || entry.status == 1)
         {
-            var playBtn = new Button(() => OnOpenLobby(entry.code, entry.status)) { text = "Play" };
-            playBtn.AddToClassList("lobby-row__open-btn");
-            row.Add(playBtn);
+            mainBtn = new Button(() => OnOpenLobby(entry.code, entry.status)) { text = "Play" };
+            mainBtn.AddToClassList("lobby-row__open-btn");
+            row.Add(mainBtn);
         }
 
         // Delete button (owner only, non-completed)
+        Button deleteBtn = null;
         if (entry.youAreOwner && entry.status != 2)
         {
-            var deleteBtn = new Button(() => OnDeletePressed(entry.id, entry.name))
-            {
-                text = "Delete",
-            };
+            deleteBtn = new Button(() => OnDeletePressed(entry.id, entry.name)) { text = "Delete" };
             deleteBtn.AddToClassList("lobby-row__delete-btn");
             row.Add(deleteBtn);
         }
 
-        // Focus item: Enter on row opens the lobby (if active or generating).
-        // Completed / failed rows are still focusable but no-op on activate.
+        // Register row's focus grid: [visibility, copy, main, delete].
         var capturedCode = entry.code;
         var capturedStatus = entry.status;
-        _rowFocusItems.Add(
-            new FocusNavigator.FocusItem
+        var capturedId = entry.id;
+        var capturedName = entry.name;
+        _rowFocus.Add(
+            new RowFocus
             {
-                Element = row,
-                OnActivate = () =>
+                Visibility = new FocusNavigator.FocusItem
                 {
-                    if (capturedStatus == 0 || capturedStatus == 1)
-                        OnOpenLobby(capturedCode, capturedStatus);
-                    return true;
+                    Element = toggleBtn,
+                    OnActivate = () =>
+                    {
+                        toggleAction();
+                        return true;
+                    },
                 },
+                Copy = new FocusNavigator.FocusItem
+                {
+                    Element = copyBtn,
+                    OnActivate = () =>
+                    {
+                        copyAction();
+                        return true;
+                    },
+                },
+                Main =
+                    mainBtn == null
+                        ? (FocusNavigator.FocusItem?)null
+                        : new FocusNavigator.FocusItem
+                        {
+                            Element = mainBtn,
+                            OnActivate = () =>
+                            {
+                                if (capturedStatus == 3)
+                                    OnRetryGeneration(capturedId);
+                                else
+                                    OnOpenLobby(capturedCode, capturedStatus);
+                                return true;
+                            },
+                        },
+                Delete =
+                    deleteBtn == null
+                        ? (FocusNavigator.FocusItem?)null
+                        : new FocusNavigator.FocusItem
+                        {
+                            Element = deleteBtn,
+                            OnActivate = () =>
+                            {
+                                OnDeletePressed(capturedId, capturedName);
+                                return true;
+                            },
+                        },
             }
         );
 
