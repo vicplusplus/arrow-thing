@@ -123,6 +123,9 @@ public sealed class GameController : MonoBehaviour
     // Roster sidebar component for co-op (Phase 7).
     private CoopSidebar _coopSidebar;
 
+    // Completion results overlay (Phase 8), shown on lobby_completed.
+    private CoopResultsScreen _coopResults;
+
     // Previous roster snapshot, used to diff for "joined" toasts (Phase 7).
     private HashSet<Guid> _previousRosterIds = new();
     private bool _rosterDiffPrimed;
@@ -182,6 +185,7 @@ public sealed class GameController : MonoBehaviour
     private void OnDestroy()
     {
         _focusNavigator?.Dispose();
+        _coopResults?.Dispose();
         _coopSidebar?.Dispose();
         _coopPlayerTimer?.Dispose();
         _coopSession?.Dispose();
@@ -631,10 +635,41 @@ public sealed class GameController : MonoBehaviour
 
     private void OnCoopLobbyCompleted()
     {
-        if (GlobalToast.Instance != null)
-            GlobalToast.Instance.ShowInfo("Board cleared!");
         if (_inputHandler != null)
             _inputHandler.SetInputEnabled(false);
+        if (GlobalToast.Instance != null)
+            GlobalToast.Instance.ShowInfo("Board cleared!");
+        ShowCoopResultsOverlay();
+    }
+
+    private void ShowCoopResultsOverlay()
+    {
+        if (_coopResults != null || _coopSession == null)
+            return;
+        if (hudUIDocument == null || hudUIDocument.rootVisualElement == null)
+            return;
+        _coopResults = new CoopResultsScreen(
+            hudUIDocument.rootVisualElement,
+            _coopSession.Roster,
+            _coopUserId,
+            _coopLobbyCode,
+            onViewReplay: LaunchCoopReplay
+        );
+        _coopResults.Show();
+    }
+
+    private async void LaunchCoopReplay()
+    {
+        var api = new ApiClient();
+        var result = await api.GetLobbyReplayAsync(_coopLobbyCode);
+        if (!result.Success)
+        {
+            if (GlobalToast.Instance != null)
+                GlobalToast.Instance.ShowError(result.Error ?? "Replay unavailable");
+            return;
+        }
+        GameSettings.StartReplay(result.Data);
+        SceneNav.Push("Replay");
     }
 
     /// <summary>
