@@ -118,22 +118,31 @@ public class LeaderboardService
         if (score == null)
             return null;
 
-        var rank =
-            await _db.Scores.CountAsync(s =>
-                s.BoardWidth == width
-                && s.BoardHeight == height
-                && !s.User.Flagged
-                && s.Time < score.Time
-            ) + 1;
-
-        var totalEntries = await _db.Scores.CountAsync(s =>
-            s.BoardWidth == width && s.BoardHeight == height && !s.User.Flagged
-        );
+        // One Postgres pass returns both the total non-flagged entries at this
+        // size and the count strictly faster than this player. Two FILTERed
+        // aggregates share the same scan over the (BoardWidth, BoardHeight,
+        // Time) index — half the round-trips and roughly half the wall time
+        // versus running the COUNTs sequentially.
+        var counts = await _db
+            .Database.SqlQueryRaw<RankCountsRow>(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE NOT u."Flagged")::int AS "Total",
+                    COUNT(*) FILTER (WHERE NOT u."Flagged" AND s."Time" < {2})::int AS "Beats"
+                FROM "Scores" s
+                INNER JOIN "Users" u ON s."UserId" = u."Id"
+                WHERE s."BoardWidth" = {0} AND s."BoardHeight" = {1}
+                """,
+                width,
+                height,
+                score.Time
+            )
+            .SingleAsync();
 
         return new PlayerEntryDto
         {
-            Rank = rank,
-            TotalEntries = totalEntries,
+            Rank = counts.Beats + 1,
+            TotalEntries = counts.Total,
             Time = score.Time,
             GameId = score.GameId.ToString(),
             Flagged = score.User.Flagged,
@@ -156,9 +165,10 @@ public class LeaderboardService
 
         var repArea = representative.BoardWidth * representative.BoardHeight;
 
-        // Compute rank and total via SQL using DISTINCT ON — avoids loading all scores.
-        var rankResult = await _db
-            .Database.SqlQueryRaw<int>(
+        // Single round-trip: build the DISTINCT ON CTE once, then aggregate
+        // both totals from it — avoids two CTE materializations.
+        var counts = await _db
+            .Database.SqlQueryRaw<RankCountsRow>(
                 """
                 WITH representatives AS (
                     SELECT DISTINCT ON (s."UserId")
@@ -171,30 +181,20 @@ public class LeaderboardService
                              (s."BoardWidth" * s."BoardHeight") DESC,
                              s."Time" ASC
                 )
-                SELECT COUNT(*)::int AS "Value"
+                SELECT
+                    COUNT(*)::int AS "Total",
+                    COUNT(*) FILTER (WHERE area > {0} OR (area = {0} AND "Time" < {1}))::int AS "Beats"
                 FROM representatives
-                WHERE area > {0} OR (area = {0} AND "Time" < {1})
                 """,
                 repArea,
                 representative.Time
             )
             .SingleAsync();
 
-        var totalEntries = await _db
-            .Database.SqlQueryRaw<int>(
-                """
-                SELECT COUNT(DISTINCT s."UserId")::int AS "Value"
-                FROM "Scores" s
-                INNER JOIN "Users" u ON s."UserId" = u."Id"
-                WHERE NOT u."Flagged"
-                """
-            )
-            .SingleAsync();
-
         return new PlayerEntryDto
         {
-            Rank = rankResult + 1,
-            TotalEntries = totalEntries,
+            Rank = counts.Beats + 1,
+            TotalEntries = counts.Total,
             Time = representative.Time,
             GameId = representative.GameId.ToString(),
             BoardWidth = representative.BoardWidth,
@@ -203,13 +203,23 @@ public class LeaderboardService
         };
     }
 
+    /// <summary>
+    /// Row shape for the combined rank+total query. Two FILTERed aggregates
+    /// share one Postgres scan; hand-deserialized via SqlQueryRaw.
+    /// </summary>
+    private class RankCountsRow
+    {
+        public int Total { get; set; }
+        public int Beats { get; set; }
+    }
+
     public async Task<string?> GetReplayAsync(string gameIdStr)
     {
         if (!Guid.TryParse(gameIdStr, out var gameId))
             return null;
 
         var score = await _db.Scores.FirstOrDefaultAsync(s => s.GameId == gameId);
-        return score?.ReplayJson;
+        return score == null ? null : ArrowThing.Server.Games.ReplayStorage.Get(score);
     }
 }
 

@@ -75,6 +75,10 @@ public class AppDbContext : DbContext
             entity.HasKey(s => s.Id);
             entity.Property(s => s.Time).IsRequired();
             entity.Property(s => s.ReplayJson).IsRequired();
+            // Phase 4: nullable bytea, holds the gzipped replay JSON. Null
+            // on legacy rows until backfilled. Read path falls back to the
+            // text column when this is null/empty.
+            entity.Property(s => s.ReplayJsonGz).HasColumnType("bytea");
             entity.Property(s => s.CreatedAt).IsRequired();
             entity.Property(s => s.UpdatedAt).IsRequired();
 

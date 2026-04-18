@@ -369,6 +369,16 @@ Structured logging via **Serilog** (console + Grafana Loki push). HTTP request l
 
 Infrastructure services (`loki`, `prometheus`, `grafana`) run as Docker containers alongside the existing `api`, `worker`, `db`, `redis`, and `nginx` services. None are publicly exposed — Prometheus, Loki, and Redis are internal-only (`expose:`), Grafana binds to `127.0.0.1:3000`. Pre-provisioned dashboards cover server health, admin actions, and score submission flow.
 
+### Storage compression
+
+`Score.ReplayJson` (legacy `text` column) is paired with `Score.ReplayJsonGz` (`bytea`, nullable). All writes go through `ReplayStorage.Set(score, json)` which gzips into the bytea column and clears the text column; reads go through `ReplayStorage.Get(score)` which prefers gz and falls back to text for legacy rows. `GzipUtil` is the single GZipStream + UTF-8 wrapper. New top-50 scores still gzip+base64 the inline `boardSnapshot` field on top of the row-level compression — the double-compression overhead is negligible and it lets the snapshot be hex-streamed individually for the replay viewer.
+
+Legacy text rows are migrated lazily by `ReplayBackfillService`, a `BackgroundService` that wakes 15s after startup and walks `Scores WHERE ReplayJsonGz IS NULL AND ReplayJson != ''` in batches of 50 with a 100ms inter-batch delay. Idempotent — re-runs pick up only un-migrated rows. A follow-up PR can drop the legacy text column once the table is fully migrated.
+
+`LeaderboardService.GetPlayerEntryAsync` and `GetPlayerEntryAllAsync` collapse the rank+total pair into one Postgres round-trip via `COUNT(*) FILTER (...)` over a single index scan. The board-size endpoint shares the `(BoardWidth, BoardHeight, Time)` index for both aggregates; the global endpoint builds the DISTINCT ON CTE once and aggregates both totals from it. Cuts wall time roughly in half on `/api/leaderboards/players/me`.
+
+ASP.NET response compression (`AddResponseCompression` with Brotli + Gzip providers, level Fastest, scoped to JSON content types) sits before `UseCors` so that `/api/replays/{gameId}` and `/api/leaderboards/*` payloads ship compressed when the client sends `Accept-Encoding`. Browsers do this by default; non-browser clients are unaffected.
+
 ## Score Integrity
 
 ### Threat Model
