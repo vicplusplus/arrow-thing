@@ -116,6 +116,10 @@ public sealed class GameController : MonoBehaviour
     // the clearer's color. Lazy-initialized in co-op mode only.
     private TapIndicatorPool _coopTapPool;
 
+    // Per-player solve timer for co-op (Phase 7). Starts on first local
+    // accepted clear, reports every 5 s via timer_update.
+    private CoopPlayerTimer _coopPlayerTimer;
+
     // 1, 2, 4, 8, 16, 30 seconds (capped).
     private static readonly float[] CoopReconnectDelays = { 1f, 2f, 4f, 8f, 16f, 30f };
 
@@ -207,6 +211,11 @@ public sealed class GameController : MonoBehaviour
                 _ = _coopClient.SendAsync(CoopMessage.Heartbeat(Application.isFocused, lastInput));
             }
         }
+
+        // Per-player solve timer (Phase 7). Ticks only while focused; emits
+        // timer_update every 5 s so other players see our time advance.
+        if (_coopPlayerTimer != null)
+            _coopPlayerTimer.Tick(Time.unscaledDeltaTime);
 
         // Auto-reconnect driver: fires a single reconnect attempt when the
         // backoff timer expires. Additional retries are scheduled by the
@@ -530,6 +539,8 @@ public sealed class GameController : MonoBehaviour
             parent: transform
         );
 
+        _coopPlayerTimer = new CoopPlayerTimer(_coopClient);
+
         // Create the session wrapper + wire server event handlers.
         _coopSession = new CoopSession(_coopClient, _board, _coopUserId);
         _coopSession.RemoteCleared += OnCoopRemoteCleared;
@@ -552,7 +563,14 @@ public sealed class GameController : MonoBehaviour
     private void OnCoopRemoteCleared(CoopSession.ClearedEvent evt)
     {
         if (evt.IsLocal)
+        {
+            // Our own accepted tap: start the per-player timer on the first
+            // clear, and schedule a prompt timer_update so the sidebar row
+            // advances immediately.
+            if (_coopPlayerTimer != null)
+                _coopPlayerTimer.NoteAcceptedClear();
             return; // already animated locally via optimistic clear
+        }
         if (evt.Arrow == null || _boardView == null)
             return;
 
