@@ -48,7 +48,7 @@ public class CookieAuthTests : IClassFixture<TestFactory>, IDisposable
             c =>
             {
                 Assert.Contains("httponly", c, StringComparison.OrdinalIgnoreCase);
-                Assert.Contains("samesite=strict", c, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("samesite=lax", c, StringComparison.OrdinalIgnoreCase);
                 Assert.Contains("path=/", c, StringComparison.OrdinalIgnoreCase);
             }
         );

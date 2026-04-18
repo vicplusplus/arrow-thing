@@ -6,7 +6,14 @@ namespace ArrowThing.Server.Auth;
 /// Writes + clears the <c>arrow_access</c> and <c>arrow_refresh</c> HttpOnly
 /// cookies that carry the Phase 1D auth session. Bound to
 /// <c>Auth:Cookies</c> config so dev (no Domain, optionally not Secure) and
-/// prod (<c>.arrow-thing.com</c>, Secure, SameSite=Strict) can differ.
+/// prod (<c>.arrow-thing.com</c>, Secure, SameSite=Lax) can differ.
+///
+/// SameSite=Lax (not Strict): cross-subdomain XHR from <c>arrow-thing.com</c>
+/// to <c>api.arrow-thing.com</c> is same-site per the spec, but Firefox's
+/// privacy posture rejects Strict cookies set via XHR response in some
+/// configurations. Lax is accepted everywhere and still blocks the CSRF
+/// attack class we care about (cross-site POST), with the Origin-check
+/// middleware in Program.cs as defense in depth.
 ///
 /// The tokens are also returned in the JSON response body (see <c>AuthResponse</c>)
 /// so bearer-based clients — currently the Unity editor and any future native
@@ -55,7 +62,7 @@ public class CookieIssuer
         {
             HttpOnly = true,
             Secure = _options.Secure,
-            SameSite = SameSiteMode.Strict,
+            SameSite = SameSiteMode.Lax,
             Path = "/",
             Expires = expires,
         };
