@@ -53,8 +53,9 @@ public sealed class CoopHubController : NavigableScene
 
     private readonly List<RowFocus> _rowFocus = new();
 
-    // Host size sliders (range [100, 400], snap step 50)
-    private const int HostMinDim = 100;
+    // Host size sliders. Min 20 for easier multiplayer testing; max stays
+    // at 400 since large boards are the real target. Snap step 10.
+    private const int HostMinDim = 20;
     private const int HostMaxDim = 400;
     private SnapSlider _hostWidthSlider;
     private SnapSlider _hostHeightSlider;
