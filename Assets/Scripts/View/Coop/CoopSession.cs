@@ -249,7 +249,7 @@ public sealed class CoopSession : IDisposable
         {
             foreach (var id in remove)
             {
-                var guid = ParseGuid(id.Value<string>());
+                var guid = ParseGuid((string)id);
                 if (guid != Guid.Empty)
                     _roster.Remove(guid);
             }

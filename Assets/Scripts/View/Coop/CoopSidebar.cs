@@ -30,7 +30,7 @@ public sealed class CoopSidebar
     private VisualElement _rows;
     private Button _showAllBtn;
 
-    private VisualElement _pill;
+    private Button _pill;
     private Label _pillLabel;
 
     private VisualElement _modal;
