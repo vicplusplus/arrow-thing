@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
@@ -40,6 +41,13 @@ public sealed class CoopSession : IDisposable
     /// <summary>Fired when the last arrow is cleared and the server broadcasts completion.</summary>
     public event Action LobbyCompleted;
 
+    /// <summary>Fired after any <c>roster_full</c> or <c>roster_patch</c> is applied.</summary>
+    public event Action RosterUpdated;
+
+    /// <summary>Current roster state, keyed by user id. Mutated only on the main thread.</summary>
+    public IReadOnlyDictionary<Guid, CoopPlayer> Roster => _roster;
+
+    private readonly Dictionary<Guid, CoopPlayer> _roster = new();
     private long _nextClientSeq;
     private bool _disposed;
 
@@ -116,6 +124,12 @@ public sealed class CoopSession : IDisposable
                 IsCompleted = true;
                 LobbyCompleted?.Invoke();
                 break;
+            case "roster_full":
+                HandleRosterFull(msg);
+                break;
+            case "roster_patch":
+                HandleRosterPatch(msg);
+                break;
         }
     }
 
@@ -127,6 +141,39 @@ public sealed class CoopSession : IDisposable
         var tapX = msg.Payload.Value<float>("tapX");
         var tapY = msg.Payload.Value<float>("tapY");
         var seq = msg.Payload.Value<long>("seq");
+        var newCount = msg.Payload.Value<int?>("newClearCount") ?? 0;
+        var colorHex = msg.Payload.Value<string>("color") ?? "";
+        var displayName = msg.Payload.Value<string>("displayName") ?? "";
+
+        // Apply the authoritative clear-count + attribution to the roster
+        // eagerly. The eventual roster_patch confirms it but we don't want
+        // to wait 500 ms for the sidebar to tick.
+        if (playerId != Guid.Empty)
+        {
+            if (_roster.TryGetValue(playerId, out var existing))
+            {
+                _roster[playerId] = existing.With(
+                    clearCount: newCount,
+                    color: string.IsNullOrEmpty(colorHex) ? existing.Color : ParseColor(colorHex),
+                    displayName: string.IsNullOrEmpty(displayName)
+                        ? existing.DisplayName
+                        : displayName
+                );
+            }
+            else if (!string.IsNullOrEmpty(displayName))
+            {
+                _roster[playerId] = new CoopPlayer(
+                    playerId,
+                    displayName,
+                    ParseColor(colorHex),
+                    newCount,
+                    0,
+                    online: true,
+                    isLocal: playerId == YourUserId
+                );
+            }
+            RosterUpdated?.Invoke();
+        }
 
         var cell = new Cell(Mathf.RoundToInt(tapX), Mathf.RoundToInt(tapY));
         if (!Board.Contains(cell))
@@ -134,9 +181,27 @@ public sealed class CoopSession : IDisposable
 
         var arrow = Board.GetArrowAt(cell);
         if (arrow == null)
-            return; // already cleared locally via optimistic animation — dedup
+        {
+            // Local board already removed the arrow (our optimistic path, or
+            // a prior cleared broadcast we already applied). Still raise the
+            // event so callers can spawn the remote tap indicator if this
+            // wasn't our own tap.
+            RemoteCleared?.Invoke(
+                new ClearedEvent
+                {
+                    PlayerId = playerId,
+                    Arrow = null,
+                    TapWorld = new Vector3(tapX, tapY, 0f),
+                    Seq = seq,
+                    IsLocal = playerId == YourUserId,
+                    Color = ParseColor(colorHex),
+                    NewClearCount = newCount,
+                    DisplayName = displayName,
+                }
+            );
+            return;
+        }
 
-        // Apply the clear to local board state.
         if (Board.IsClearable(arrow))
             Board.RemoveArrow(arrow);
 
@@ -148,8 +213,91 @@ public sealed class CoopSession : IDisposable
                 TapWorld = new Vector3(tapX, tapY, 0f),
                 Seq = seq,
                 IsLocal = playerId == YourUserId,
+                Color = ParseColor(colorHex),
+                NewClearCount = newCount,
+                DisplayName = displayName,
             }
         );
+    }
+
+    private void HandleRosterFull(CoopMessage msg)
+    {
+        if (msg.Payload == null)
+            return;
+        _roster.Clear();
+        var players = msg.Payload["players"];
+        if (players != null)
+        {
+            foreach (var p in players)
+                ApplyRosterEntry(p);
+        }
+        RosterUpdated?.Invoke();
+    }
+
+    private void HandleRosterPatch(CoopMessage msg)
+    {
+        if (msg.Payload == null)
+            return;
+        var upsert = msg.Payload["upsert"];
+        if (upsert != null)
+        {
+            foreach (var p in upsert)
+                ApplyRosterEntry(p);
+        }
+        var remove = msg.Payload["remove"];
+        if (remove != null)
+        {
+            foreach (var id in remove)
+            {
+                var guid = ParseGuid(id.Value<string>());
+                if (guid != Guid.Empty)
+                    _roster.Remove(guid);
+            }
+        }
+        RosterUpdated?.Invoke();
+    }
+
+    private void ApplyRosterEntry(Newtonsoft.Json.Linq.JToken entry)
+    {
+        var id = ParseGuid(entry.Value<string>("userId"));
+        if (id == Guid.Empty)
+            return;
+        var displayName = entry.Value<string>("displayName") ?? "";
+        var color = ParseColor(entry.Value<string>("color") ?? "#FFFFFF");
+        var clearCount = entry.Value<int?>("clearCount") ?? 0;
+        var accumulatedMillis = entry.Value<long?>("accumulatedMillis") ?? 0;
+        var online = entry.Value<bool?>("online") ?? false;
+        _roster[id] = new CoopPlayer(
+            id,
+            displayName,
+            color,
+            clearCount,
+            accumulatedMillis,
+            online,
+            isLocal: id == YourUserId
+        );
+    }
+
+    private static Color32 ParseColor(string hex)
+    {
+        if (string.IsNullOrEmpty(hex))
+            return new Color32(255, 255, 255, 255);
+        var s = hex.StartsWith("#") ? hex.Substring(1) : hex;
+        if (s.Length != 6)
+            return new Color32(255, 255, 255, 255);
+        try
+        {
+            return new Color32(
+                Convert.ToByte(s.Substring(0, 2), 16),
+                Convert.ToByte(s.Substring(2, 2), 16),
+                Convert.ToByte(s.Substring(4, 2), 16),
+                255
+            );
+        }
+        catch
+        {
+            return new Color32(255, 255, 255, 255);
+        }
     }
 
     private void HandleRejectedDep(CoopMessage msg)
@@ -200,10 +348,20 @@ public sealed class CoopSession : IDisposable
     public struct ClearedEvent
     {
         public Guid PlayerId;
+
+        /// <summary>
+        /// Arrow at the tapped cell, if we could still find it locally. Null
+        /// when our optimistic path already removed it or when we raced with
+        /// a prior broadcast — in that case, the caller should not re-play
+        /// the clear animation.
+        /// </summary>
         public Arrow Arrow;
         public Vector3 TapWorld;
         public long Seq;
         public bool IsLocal;
+        public Color32 Color;
+        public int NewClearCount;
+        public string DisplayName;
     }
 
     public struct RejectedDepEvent

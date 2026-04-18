@@ -54,6 +54,13 @@ public class CoopMessage
             ),
         };
 
+    public static CoopMessage TimerUpdate(long accumulatedMillis) =>
+        new CoopMessage
+        {
+            Type = "timer_update",
+            Payload = JToken.FromObject(new { accumulatedMillis }),
+        };
+
     public string Serialize() => JsonConvert.SerializeObject(this);
 
     public static CoopMessage Deserialize(string json) =>
