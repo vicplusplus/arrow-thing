@@ -8,7 +8,6 @@ COPY Assets/Scripts/Domain/ Assets/Scripts/Domain/
 COPY server/ArrowThing.sln server/
 COPY server/ArrowThing.Domain/ArrowThing.Domain.csproj server/ArrowThing.Domain/
 COPY server/ArrowThing.Server/ArrowThing.Server.csproj server/ArrowThing.Server/
-COPY server/ArrowThing.Server.Tests/ArrowThing.Server.Tests.csproj server/ArrowThing.Server.Tests/
 COPY server/ArrowThing.Worker/ArrowThing.Worker.csproj server/ArrowThing.Worker/
 RUN dotnet restore server/ArrowThing.Worker/ArrowThing.Worker.csproj
 
@@ -21,4 +20,10 @@ RUN dotnet publish server/ArrowThing.Worker/ArrowThing.Worker.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /app/publish .
+
+# Non-root at runtime (see Dockerfile's note). No HEALTHCHECK here — the
+# worker doesn't serve HTTP; docker's `unless-stopped` restart policy
+# handles crash recovery.
+USER app
+
 ENTRYPOINT ["dotnet", "ArrowThing.Worker.dll"]

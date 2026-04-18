@@ -120,3 +120,91 @@ Once the CD deploy succeeds and the health check passes:
 
 1. Hetzner Cloud console → old server → **Delete**
 2. Delete your local secret copies: `rm env-backup origin.pem origin-key.pem`
+
+---
+
+# Operational runbooks
+
+Procedures for common incidents. All assume you've SSH'd in as `deploy@<vps>` and that `cd /home/deploy/arrow-thing` puts you at the compose root.
+
+## Rolling back to a previous image
+
+The deploy workflow tags each build with `:latest` and `:<commit-sha>`, so a rollback is `docker compose up` against a past SHA.
+
+```bash
+# Find the previous good SHA from the GitHub Actions deploy-server history
+# (workflow run → "Build and push API" → tag log), or list recent local pulls:
+docker images | grep arrow-thing
+
+# Retag the old image as :latest and canary-roll (API first, worker after).
+PREV_SHA=<commit-sha>
+docker tag ghcr.io/vicplusplus/arrow-thing-api:$PREV_SHA \
+           ghcr.io/vicplusplus/arrow-thing-api:latest
+docker tag ghcr.io/vicplusplus/arrow-thing-worker:$PREV_SHA \
+           ghcr.io/vicplusplus/arrow-thing-worker:latest
+
+docker compose up -d --no-deps api
+# Wait for healthy, then:
+docker compose up -d --no-deps worker
+docker compose restart nginx
+```
+
+Rollback does NOT run down-migrations. If the bad deploy ran a schema migration, you need to either fix-forward (ship a new release that handles both schemas) or restore the database from backup — see below.
+
+## Manually removing a score
+
+1. Find the score id via the admin CLI:
+   ```bash
+   ./server/admin.sh --prod flagged-users     # if the user was flagged too
+   ./server/admin.sh --prod leaderboard 10 10
+   ```
+2. Remove it:
+   ```bash
+   curl -X POST "https://api.arrow-thing.com/api/admin/scores/<score-id>/remove" \
+     -H "X-Admin-Key: $PROD_ADMIN_API_KEY"
+   ```
+3. The endpoint deletes the row and invalidates the leaderboard cache. No manual Redis step needed.
+
+## Recovering from a botched migration
+
+EF Core migrations are forward-only. Rolling back requires either fix-forward or a restore.
+
+```bash
+# Option A — fix-forward (preferred).
+# Write a new migration that undoes the bad changes, cut a patch release,
+# let the normal deploy flow run it.
+
+# Option B — restore from the nightly pgdump (see setup.sh for cron details).
+ls -lt /home/deploy/arrow-thing/backups/   # pick the last good one
+docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+    < /home/deploy/arrow-thing/backups/<backup>.sql
+# Then roll API back to the image that matches that schema (see above).
+```
+
+## Restarting after a crash
+
+Containers have `restart: unless-stopped`, so a crash-loop is already automatic. If something's stuck:
+
+```bash
+docker compose ps                       # identify the unhealthy service
+docker compose logs --tail=200 <service>
+docker compose restart <service>
+```
+
+Full stack restart without touching data:
+
+```bash
+docker compose down                     # does NOT remove named volumes
+docker compose up -d
+```
+
+## Redis outage
+
+Phase 2 made Redis optional: `/api/scores` and `/api/lobbies` return 503, `/health` and leaderboard reads keep working. If Redis is down for more than a few minutes:
+
+```bash
+docker compose restart redis
+docker compose logs --tail=100 redis    # check for OOM / disk errors
+```
+
+Score-submission retries will rebuild the queue after Redis comes back; no manual replay needed.

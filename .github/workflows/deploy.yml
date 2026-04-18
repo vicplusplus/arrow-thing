@@ -16,7 +16,25 @@ permissions:
   contents: read
 
 jobs:
+  validate-tag:
+    # Reject non-semver tags before the expensive Unity build. A tag like
+    # release-2026-04-17 sneaks past the sed that writes bundleVersion.
+    if: ${{ github.event_name == 'release' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check tag format
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+            echo "ERROR: release tag '$TAG' must match ^v[0-9]+\.[0-9]+(\.[0-9]+)?$"
+            echo "Examples: v1.0, v1.0.0, v2.13.4"
+            exit 1
+          fi
+          echo "Tag $TAG is valid."
+
   build-webgl:
+    needs: validate-tag
+    if: ${{ !cancelled() && (needs.validate-tag.result == 'success' || needs.validate-tag.result == 'skipped') }}
     runs-on: ubuntu-latest
 
     steps:
