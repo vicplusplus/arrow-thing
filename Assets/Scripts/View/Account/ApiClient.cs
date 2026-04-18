@@ -32,6 +32,9 @@ public class ApiClient
 
     [DllImport("__Internal")]
     private static extern void EnableCredentialsForApi(string apiOrigin);
+
+    [DllImport("__Internal")]
+    private static extern string ApiUrl_Resolve();
 #else
     private const bool UseCookieAuth = false;
 #endif
@@ -101,6 +104,22 @@ public class ApiClient
 #endif
 
 #if UNITY_WEBGL && !UNITY_EDITOR
+        // Allow the hosting page to override the API URL — either via a
+        // `?api=<url>` query param or automatically when served from
+        // localhost. Lets a local WebGL build talk to a local API without
+        // rebuilding.
+        try
+        {
+            var resolved = ApiUrl_Resolve();
+            if (!string.IsNullOrEmpty(resolved))
+                _baseUrl = resolved;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] ApiUrl_Resolve failed: {e.Message}");
+        }
+        Debug.Log($"[ApiClient] Using API base URL: {_baseUrl}");
+
         // Patch XHR so the browser attaches the arrow_access / arrow_refresh
         // cookies on API calls. Idempotent on the JS side but we also guard
         // here so we don't invoke the P/Invoke more than once.
