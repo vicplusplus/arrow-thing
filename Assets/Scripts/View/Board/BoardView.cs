@@ -34,6 +34,7 @@ public sealed class BoardView : MonoBehaviour
     private readonly Dictionary<Arrow, List<int>> _arrowChunks = new();
     private readonly Dictionary<Arrow, ArrowView> _interactionViews = new();
     private readonly Dictionary<Arrow, Color> _arrowColors = new();
+    private BoardTrailRenderer _trailRenderer;
     private bool _highlightsActive;
     private static readonly Color HighlightColor = new(0f, 0.875f, 1f);
 
@@ -85,6 +86,11 @@ public sealed class BoardView : MonoBehaviour
                 (board.Width + BoardSpatialIndex.BucketSize - 1) / BoardSpatialIndex.BucketSize;
             _bucketsY =
                 (board.Height + BoardSpatialIndex.BucketSize - 1) / BoardSpatialIndex.BucketSize;
+
+            var trailGo = new GameObject("Trails");
+            trailGo.transform.SetParent(transform, false);
+            _trailRenderer = trailGo.AddComponent<BoardTrailRenderer>();
+            _trailRenderer.Init(board, settings);
         }
 
         if (spawnArrows)
@@ -137,6 +143,8 @@ public sealed class BoardView : MonoBehaviour
             BoardChunkRenderer chunk = GetOrCreateChunk(key);
             chunk.AddArrow(arrow, color);
         }
+
+        _trailRenderer.AddArrow(arrow);
     }
 
     private List<int> ComputeChunkKeys(Arrow arrow)
@@ -194,6 +202,9 @@ public sealed class BoardView : MonoBehaviour
                     view.SetBaseColor(settings.arrowBodyColor, settings.arrowHeadColor);
             }
         }
+
+        if (_useCulling && _trailRenderer != null)
+            _trailRenderer.ApplyTheme(settings);
     }
 
     /// <summary>
@@ -383,6 +394,7 @@ public sealed class BoardView : MonoBehaviour
             _arrowChunks.Remove(arrow);
         }
         _arrowColors.Remove(arrow);
+        _trailRenderer.RemoveArrow(arrow);
     }
 
     /// <summary>
@@ -512,16 +524,19 @@ public sealed class BoardView : MonoBehaviour
     }
 
     /// <summary>
-    /// Shows or hides trail lines on all remaining arrows.
-    /// Note: trails are not currently rendered in culling mode (chunk meshes
-    /// don't include trail geometry).
+    /// Shows or hides trail lines on all remaining arrows. In culling mode,
+    /// trails are rendered as a single combined mesh via <see cref="BoardTrailRenderer"/>.
     /// </summary>
     public void SetAllTrailsVisible(bool visible)
     {
         _trailVisible = visible;
 
         if (_useCulling)
-            return; // Trails not supported in culling mode.
+        {
+            if (_trailRenderer != null)
+                _trailRenderer.gameObject.SetActive(visible);
+            return;
+        }
 
         foreach (ArrowView view in _arrowViews.Values)
             view.SetTrailVisible(visible);
