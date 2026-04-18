@@ -201,6 +201,7 @@ builder.Services.AddSingleton<LeaderboardCache>(sp => new LeaderboardCache(
 // Phase 4: lazy backfill of legacy ReplayJson text rows into the gzipped
 // bytea column. Idempotent — exits when no rows remain.
 builder.Services.AddHostedService<ArrowThing.Server.Games.ReplayBackfillService>();
+builder.Services.AddHostedService<LobbyRetentionService>();
 
 // Production-secret guard. Must run after all config sources have been added so the
 // Jwt:Secret / Admin:ApiKey values are visible. Blocks deploys that boot with empty,
