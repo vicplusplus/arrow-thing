@@ -51,6 +51,15 @@ public sealed class TapIndicatorPool
 
     public void Spawn(Vector3 worldPos, bool isReject)
     {
+        Spawn(worldPos, isReject ? RejectColor : ClearColor);
+    }
+
+    /// <summary>
+    /// Spawn a ring with an explicit color. Used by co-op to tint remote
+    /// taps in the clearer's color.
+    /// </summary>
+    public void Spawn(Vector3 worldPos, Color color)
+    {
         TapIndicator ind;
         if (_pool.Count > 0)
             ind = _pool.Dequeue();
@@ -58,7 +67,12 @@ public sealed class TapIndicatorPool
             ind = CreateIndicator();
 
         worldPos.z = -1f; // render in front of arrows
-        ind.Play(worldPos, isReject ? RejectColor : ClearColor, _duration, _maxScale, OnReturn);
+        // Keep the default 80 % alpha envelope even when a hex tint is
+        // supplied — indicator rings should read as translucent accents,
+        // not solid color blocks.
+        if (color.a > 0.99f)
+            color.a = 0.8f;
+        ind.Play(worldPos, color, _duration, _maxScale, OnReturn);
     }
 
     private void OnReturn(TapIndicator indicator)

@@ -112,6 +112,10 @@ public sealed class GameController : MonoBehaviour
     private float _coopReconnectAt;
     private bool _coopReconnectInFlight;
 
+    // Per-clear tap indicator pool for co-op: remote taps spawn a ring in
+    // the clearer's color. Lazy-initialized in co-op mode only.
+    private TapIndicatorPool _coopTapPool;
+
     // 1, 2, 4, 8, 16, 30 seconds (capped).
     private static readonly float[] CoopReconnectDelays = { 1f, 2f, 4f, 8f, 16f, 30f };
 
@@ -517,6 +521,15 @@ public sealed class GameController : MonoBehaviour
         // Enable auto-reconnect now that we have a working session.
         _coopShouldReconnect = true;
 
+        // Tap indicator pool for remote-player taps. Uses the theme-aware
+        // ring color as a fallback when no player color is known.
+        _coopTapPool = new TapIndicatorPool(
+            sprite: null,
+            duration: 0.4f,
+            maxScale: 1.5f,
+            parent: transform
+        );
+
         // Create the session wrapper + wire server event handlers.
         _coopSession = new CoopSession(_coopClient, _board, _coopUserId);
         _coopSession.RemoteCleared += OnCoopRemoteCleared;
@@ -540,8 +553,21 @@ public sealed class GameController : MonoBehaviour
     {
         if (evt.IsLocal)
             return; // already animated locally via optimistic clear
-        if (evt.Arrow != null && _boardView != null)
-            _boardView.ClearArrowAnimated(evt.Arrow);
+        if (evt.Arrow == null || _boardView == null)
+            return;
+
+        // Remote clear: tint the pull-out in the clearer's color and spawn a
+        // tap indicator ring in the same color, so the action is attributed
+        // visually without needing an always-on player overlay.
+        Color tint = new Color32(
+            evt.Color.r,
+            evt.Color.g,
+            evt.Color.b,
+            evt.Color.a == 0 ? (byte)255 : evt.Color.a
+        );
+        _boardView.ClearArrowAnimated(evt.Arrow, flashColor: tint);
+        if (_coopTapPool != null)
+            _coopTapPool.Spawn(evt.TapWorld, tint);
     }
 
     private void OnCoopRemoteRejectedDep(CoopSession.RejectedDepEvent evt)

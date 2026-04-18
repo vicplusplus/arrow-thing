@@ -427,9 +427,11 @@ public sealed class BoardView : MonoBehaviour
 
     /// <summary>
     /// Removes an arrow from the view dictionary and plays the pull-out animation.
-    /// Used by the replay viewer for animated clears without gameplay events.
+    /// Used by the replay viewer and by co-op for remote clears. Optional
+    /// <paramref name="flashColor"/> briefly tints the arrow at the start of
+    /// the slide — co-op uses it to attribute clears to player colors.
     /// </summary>
-    public void ClearArrowAnimated(Arrow arrow)
+    public void ClearArrowAnimated(Arrow arrow, Color? flashColor = null)
     {
         if (_useCulling)
         {
@@ -438,11 +440,14 @@ public sealed class BoardView : MonoBehaviour
 
             ArrowView view = PromoteToInteractionView(arrow);
             RemoveArrowFromChunks(arrow);
-            view.PlayPullOut(onComplete: () =>
-            {
-                _interactionViews.Remove(arrow);
-                Destroy(view.gameObject);
-            });
+            view.PlayPullOut(
+                onComplete: () =>
+                {
+                    _interactionViews.Remove(arrow);
+                    Destroy(view.gameObject);
+                },
+                flashColor: flashColor
+            );
             return;
         }
 
@@ -450,7 +455,7 @@ public sealed class BoardView : MonoBehaviour
             return;
 
         _arrowViews.Remove(arrow);
-        av.PlayPullOut(onComplete: () => Destroy(av.gameObject));
+        av.PlayPullOut(onComplete: () => Destroy(av.gameObject), flashColor: flashColor);
     }
 
     /// <summary>
