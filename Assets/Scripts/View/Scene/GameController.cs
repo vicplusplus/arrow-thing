@@ -120,6 +120,9 @@ public sealed class GameController : MonoBehaviour
     // accepted clear, reports every 5 s via timer_update.
     private CoopPlayerTimer _coopPlayerTimer;
 
+    // Roster sidebar component for co-op (Phase 7).
+    private CoopSidebar _coopSidebar;
+
     // 1, 2, 4, 8, 16, 30 seconds (capped).
     private static readonly float[] CoopReconnectDelays = { 1f, 2f, 4f, 8f, 16f, 30f };
 
@@ -174,6 +177,8 @@ public sealed class GameController : MonoBehaviour
     private void OnDestroy()
     {
         _focusNavigator?.Dispose();
+        _coopSidebar?.Dispose();
+        _coopPlayerTimer?.Dispose();
         _coopSession?.Dispose();
         _coopClient?.Dispose();
         SettingsController.IsOpenChanged -= OnSettingsOpenChanged;
@@ -554,6 +559,11 @@ public sealed class GameController : MonoBehaviour
                 GlobalToast.Instance.ShowError("Slow down");
         };
         _coopSession.LobbyCompleted += OnCoopLobbyCompleted;
+
+        // Mount the sidebar into the HUD root. Safe to do before WireHud()
+        // since we only need the UIDocument's root.
+        if (hudUIDocument != null && hudUIDocument.rootVisualElement != null)
+            _coopSidebar = new CoopSidebar(_coopSession, hudUIDocument.rootVisualElement);
 
         WireHud();
         WireInput();

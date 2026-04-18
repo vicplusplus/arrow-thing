@@ -285,3 +285,158 @@
 .hub--narrow .hub-toolbar {
     flex-wrap: wrap;
 }
+
+/* ── Phase 7: roster sidebar (in-game) ─────────────────────────────────── */
+
+.coop-sidebar {
+    position: absolute;
+    top: 70px;
+    right: 12px;
+    width: 220px;
+    max-height: 60%;
+    padding: 8px;
+    border-radius: 8px;
+    background-color: var(--panel-bg, rgba(30, 30, 36, 0.85));
+    border-width: 1px;
+    border-color: var(--panel-border, rgba(255, 255, 255, 0.08));
+    flex-direction: column;
+}
+
+.coop-sidebar__header {
+    flex-direction: row;
+    align-items: center;
+    padding-bottom: 6px;
+    border-bottom-width: 1px;
+    border-bottom-color: var(--panel-border, rgba(255, 255, 255, 0.08));
+    margin-bottom: 4px;
+}
+
+.coop-sidebar__title {
+    flex-grow: 1;
+    -unity-font-style: bold;
+    font-size: 14px;
+    color: var(--text-primary, rgb(240, 240, 245));
+}
+
+.coop-sidebar__scroll {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-height: 0;
+}
+
+.coop-sidebar__showall {
+    margin-top: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    border-radius: 4px;
+    background-color: var(--button-bg, rgba(255, 255, 255, 0.05));
+    color: var(--text-secondary, rgb(200, 200, 210));
+    border-width: 0;
+}
+.coop-sidebar__showall:hover {
+    background-color: var(--button-hover-bg, rgba(255, 255, 255, 0.10));
+}
+
+.coop-roster-row {
+    flex-direction: row;
+    align-items: center;
+    padding: 3px 2px;
+    border-radius: 3px;
+}
+.coop-roster-row--self {
+    background-color: rgba(255, 255, 255, 0.06);
+}
+.coop-roster-row--offline {
+    opacity: 0.45;
+}
+
+.coop-roster-row__dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 6px;
+    margin-right: 6px;
+    flex-shrink: 0;
+}
+
+.coop-roster-row__name {
+    flex-grow: 1;
+    flex-shrink: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: var(--text-primary, rgb(240, 240, 245));
+}
+
+.coop-roster-row__time {
+    margin-right: 6px;
+    font-size: 12px;
+    color: var(--text-secondary, rgb(180, 180, 190));
+    -unity-font-style: normal;
+}
+
+.coop-roster-row__count {
+    min-width: 30px;
+    -unity-text-align: middle-right;
+    font-size: 12px;
+    -unity-font-style: bold;
+    color: var(--text-primary, rgb(240, 240, 245));
+}
+
+/* Narrow-mode pill — replaces the sidebar under NarrowThresholdPx. */
+.coop-sidebar-pill {
+    position: absolute;
+    top: 70px;
+    right: 12px;
+    padding: 6px 12px;
+    border-radius: 20px;
+    background-color: var(--panel-bg, rgba(30, 30, 36, 0.85));
+    border-width: 1px;
+    border-color: var(--panel-border, rgba(255, 255, 255, 0.08));
+    color: var(--text-primary, rgb(240, 240, 245));
+    font-size: 13px;
+    -unity-font-style: bold;
+    flex-direction: row;
+    align-items: center;
+}
+.coop-sidebar-pill__label {
+    margin-left: 4px;
+    font-size: 11px;
+    -unity-font-style: normal;
+    color: var(--text-secondary, rgb(180, 180, 190));
+}
+
+/* All-players modal */
+.coop-roster-modal__box {
+    width: 420px;
+    max-width: 90%;
+    max-height: 80%;
+    padding: 12px;
+}
+.coop-roster-modal__header {
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 8px;
+}
+.coop-roster-modal__title {
+    flex-grow: 1;
+    font-size: 16px;
+    -unity-font-style: bold;
+    color: var(--text-primary, rgb(240, 240, 245));
+}
+.coop-roster-modal__close {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    font-size: 18px;
+    background-color: rgba(0, 0, 0, 0);
+    color: var(--text-secondary, rgb(180, 180, 190));
+    border-width: 0;
+}
+.coop-roster-modal__close:hover {
+    color: var(--text-primary, rgb(240, 240, 245));
+}
+.coop-roster-modal__scroll {
+    flex-grow: 1;
+    min-height: 200px;
+}
