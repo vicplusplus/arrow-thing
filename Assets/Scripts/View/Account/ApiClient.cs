@@ -1111,16 +1111,15 @@ public class ApiClient
         var body = JsonUtility.ToJson(new UpdateCoopColorRequestDto { coopColor = hex });
         try
         {
-            using var request = new UnityWebRequest($"{_baseUrl}/api/auth/me/coop-color", "PATCH");
-            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
-            request.downloadHandler = new DownloadHandlerBuffer();
-            request.SetRequestHeader("Content-Type", "application/json");
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = new UnityWebRequest($"{_baseUrl}/api/auth/me/coop-color", "PATCH");
+                r.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+                r.downloadHandler = new DownloadHandlerBuffer();
+                r.SetRequestHeader("Content-Type", "application/json");
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -1144,19 +1143,15 @@ public class ApiClient
     {
         try
         {
-            using var request = new UnityWebRequest(
-                $"{_baseUrl}/api/lobbies/{lobbyId}/retry-gen",
-                "POST"
-            );
-            request.uploadHandler = new UploadHandlerRaw(new byte[0]);
-            request.downloadHandler = new DownloadHandlerBuffer();
-            request.SetRequestHeader("Content-Type", "application/json");
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = new UnityWebRequest($"{_baseUrl}/api/lobbies/{lobbyId}/retry-gen", "POST");
+                r.uploadHandler = new UploadHandlerRaw(new byte[0]);
+                r.downloadHandler = new DownloadHandlerBuffer();
+                r.SetRequestHeader("Content-Type", "application/json");
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -1179,16 +1174,15 @@ public class ApiClient
         var body = JsonUtility.ToJson(new RenameLobbyRequestDto { name = name });
         try
         {
-            using var request = new UnityWebRequest($"{_baseUrl}/api/lobbies/{lobbyId}", "PATCH");
-            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
-            request.downloadHandler = new DownloadHandlerBuffer();
-            request.SetRequestHeader("Content-Type", "application/json");
-            request.SetRequestHeader("Authorization", $"Bearer {Token}");
-            request.timeout = 10;
-
-            var op = request.SendWebRequest();
-            while (!op.isDone)
-                await Task.Yield();
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = new UnityWebRequest($"{_baseUrl}/api/lobbies/{lobbyId}", "PATCH");
+                r.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+                r.downloadHandler = new DownloadHandlerBuffer();
+                r.SetRequestHeader("Content-Type", "application/json");
+                r.timeout = 10;
+                return r;
+            });
 
             if (request.result == UnityWebRequest.Result.Success)
             {
