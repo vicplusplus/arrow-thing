@@ -98,6 +98,13 @@ public class CoopHub
         if (!_rooms.TryGetValue(code, out var room))
             return;
 
+        if (msg.Type == "lobby_failed")
+            _logger.LogWarning(
+                "[CoopHub] lobby_failed for {Code}: {Reason}",
+                code,
+                msg.Reason ?? "unknown"
+            );
+
         CoopMessage? envelope = msg.Type switch
         {
             "gen_progress" => new CoopMessage
@@ -109,7 +116,11 @@ public class CoopHub
             "lobby_failed" => new CoopMessage
             {
                 Type = "lobby_failed",
-                Payload = ToJsonElement(new DisconnectPayload(msg.Reason ?? "unknown")),
+                // Never forward the raw worker exception message to clients —
+                // it can leak server internals (stack trace snippets, SQL
+                // fragments, etc.). Clients only need a closed set of coarse
+                // reason codes; the full message is already in the server logs.
+                Payload = ToJsonElement(new DisconnectPayload("generation_failed")),
             },
             _ => null,
         };
@@ -347,17 +358,28 @@ public class CoopHub
         }
         finally
         {
-            room.Connections.TryRemove(userId, out _);
-            // Broadcast the offline transition BEFORE removing the room —
-            // other connected clients need to see the status flip.
-            if (!room.Connections.IsEmpty)
+            // Compare-and-remove: a fast reconnect from the same user can
+            // replace our entry in `Connections` before this finally runs. If
+            // we blindly removed by userId we'd kick the live socket and trip
+            // a spurious 60 s eviction. Only fire the offline roster patch /
+            // eviction when we actually removed our own entry.
+            var removed = (
+                (ICollection<KeyValuePair<Guid, ConnectionEntry>>)room.Connections
+            ).Remove(new KeyValuePair<Guid, ConnectionEntry>(userId, entry));
+            if (removed)
             {
-                QueueRosterBroadcast(code, userId);
-            }
-            else
-            {
-                _rooms.TryRemove(code, out _);
-                ScheduleGameStateEviction(code);
+                if (room.Connections.IsEmpty)
+                {
+                    _rooms.TryRemove(code, out _);
+                    ScheduleGameStateEviction(code);
+                }
+                else
+                {
+                    // Broadcast the offline transition BEFORE the room is
+                    // torn down — other connected clients need to see the
+                    // status flip.
+                    QueueRosterBroadcast(code, userId);
+                }
             }
 
             _logger.LogInformation(

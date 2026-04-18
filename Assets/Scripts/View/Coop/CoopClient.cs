@@ -75,13 +75,19 @@ public class CoopClient : IDisposable
 
     /// <summary>
     /// Tears down the existing socket (if any) and reconnects with the
-    /// params from the most recent <see cref="ConnectAsync"/>. Caller is
+    /// params from the most recent <see cref="ConnectAsync"/>. When
+    /// <paramref name="refreshedToken"/> is non-null it replaces the cached
+    /// access token — callers should refresh the JWT before reconnecting
+    /// because the 15-minute access token from the original connect is almost
+    /// certainly expired by the time a reconnect loop runs. Caller is
     /// responsible for sending <c>hello</c> after this returns.
     /// </summary>
-    public async Task ReconnectAsync()
+    public async Task ReconnectAsync(string refreshedToken = null)
     {
         if (_lastBaseWsUrl == null)
             throw new InvalidOperationException("Never connected — nothing to reconnect to.");
+        if (refreshedToken != null)
+            _lastToken = refreshedToken;
         CleanupSocket();
         await ConnectAsync(_lastBaseWsUrl, _lastCode, _lastToken);
     }
@@ -220,10 +226,12 @@ public class CoopClient : IDisposable
         return Task.CompletedTask;
     }
 
-    public async Task ReconnectAsync()
+    public async Task ReconnectAsync(string refreshedToken = null)
     {
         if (_lastBaseWsUrl == null)
             throw new InvalidOperationException("Never connected — nothing to reconnect to.");
+        if (refreshedToken != null)
+            _lastToken = refreshedToken;
         if (_handle >= 0)
         {
             CoopWS_Close(_handle);

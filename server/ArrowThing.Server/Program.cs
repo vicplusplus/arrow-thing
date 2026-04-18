@@ -975,6 +975,10 @@ app.MapPost(
     .RequireAuthorization();
 
 // WebSocket: /ws/coop/{code}?token={jwt}
+// WebGL cookie-mode clients can't set Authorization headers on a WebSocket
+// upgrade and keep access tokens in HttpOnly cookies (no JS visibility), so
+// when the ?token= query is empty we fall back to the arrow_access cookie
+// that the browser attaches automatically on same-site upgrades.
 app.MapGet(
     "/ws/coop/{code}",
     async (
@@ -991,6 +995,8 @@ app.MapGet(
             return Results.BadRequest(new { error = "WebSocket request expected." });
 
         var token = ctx.Request.Query["token"].FirstOrDefault();
+        if (string.IsNullOrEmpty(token))
+            token = ctx.Request.Cookies[CookieIssuer.AccessCookieName];
         var hubLogger = loggerFactory.CreateLogger("CoopHub");
         var userId = await CoopHub.ValidateTokenAsync(token, jwtHelper, db, hubLogger);
         if (userId == null)
