@@ -30,8 +30,29 @@ public class CoopMessage
 
     public static CoopMessage Goodbye() => new CoopMessage { Type = "goodbye" };
 
-    public static CoopMessage Heartbeat(long seq) =>
-        new CoopMessage { Type = "heartbeat", Seq = seq };
+    public static CoopMessage Heartbeat(bool focused, DateTime lastInputUtc) =>
+        new CoopMessage
+        {
+            Type = "heartbeat",
+            Payload = JToken.FromObject(
+                new { focused, lastInputTsUtc = lastInputUtc.ToString("O") }
+            ),
+        };
+
+    public static CoopMessage ClearAttempt(float tapX, float tapY, long clientSeq) =>
+        new CoopMessage
+        {
+            Type = "clear_attempt",
+            Payload = JToken.FromObject(
+                new
+                {
+                    tapX,
+                    tapY,
+                    clientTsUtc = DateTime.UtcNow.ToString("O"),
+                    clientSeq,
+                }
+            ),
+        };
 
     public string Serialize() => JsonConvert.SerializeObject(this);
 

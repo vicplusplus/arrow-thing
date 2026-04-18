@@ -74,6 +74,26 @@ When running in the **Unity Editor**, `ApiClient` automatically uses `http://loc
 
 Make sure the server is running before testing account or leaderboard features in the editor.
 
+### WebGL build → Local Server
+
+WebGL builds (needed to test multiplayer against a local server) resolve the API URL at boot via `Assets/Plugins/WebGL/ApiUrlOverride.jslib`:
+
+1. **Serve the WebGL build from `localhost` / `127.0.0.1`.** The jslib auto-detects the hostname and rewrites the API base to `http://<hostname>:5000`. The WebSocket URL is derived (`ws://localhost:5000/ws/coop/...`).
+2. **Or pass `?api=<url>` on the page URL**, e.g. `http://localhost:8080/?api=http://192.168.1.10:5000` — useful when testing across devices on a LAN.
+3. **Otherwise** (any non-localhost host with no override) the production URL wins.
+
+Common dev ports for the WebGL page (`3000`, `5500`, `8000`, `8080`, on both `localhost` and `127.0.0.1`) are pre-allowed in `appsettings.Development.json`'s CORS list. Add more there if you serve from a different port.
+
+Serve a WebGL build with Python's built-in server from the build output directory:
+
+```bash
+cd <unity-build-output>
+python -m http.server 8080
+# open http://localhost:8080/
+```
+
+Check the browser console for `[ApiClient] Using API base URL: ...` to confirm the resolver picked up your local server.
+
 ## Seeding Test Data
 
 To populate the leaderboard with dummy scores (e.g., for testing rank > 50):

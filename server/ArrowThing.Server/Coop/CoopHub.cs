@@ -23,6 +23,17 @@ public class CoopHub
     private readonly GenerationProgressBus _progressBus;
     private readonly ILogger<CoopHub> _logger;
     private readonly ConcurrentDictionary<string, LobbyRoom> _rooms = new();
+
+    /// <summary>
+    /// Per-lobby live gameplay state (Board + event Seq counter + mutex).
+    /// Hydrated lazily on the first clear_attempt or hello for an Active lobby.
+    /// Evicted 60 s after the last client disconnects.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, LobbyGameState> _gameStates = new();
+
+    /// <summary>Hold state in memory for this long after the last disconnect.</summary>
+    private static readonly TimeSpan EvictionGrace = TimeSpan.FromSeconds(60);
+
     private bool _busSubscribed;
 
     // Upper bound on a single inbound message. Coop traffic is small game-state
@@ -220,6 +231,13 @@ public class CoopHub
         var entry = new ConnectionEntry(socket);
         room.Connections[userId] = entry;
 
+        // Cancel any pending eviction — a client reconnected within the grace window.
+        if (_gameStates.TryGetValue(code, out var reuseState))
+        {
+            reuseState.EvictionCts?.Cancel();
+            reuseState.EvictionCts = null;
+        }
+
         _logger.LogInformation(
             "[CoopHub] User {UserId} connected to lobby {Code} (now {Count} connected)",
             userId,
@@ -307,7 +325,10 @@ public class CoopHub
         {
             room.Connections.TryRemove(userId, out _);
             if (room.Connections.IsEmpty)
+            {
                 _rooms.TryRemove(code, out _);
+                ScheduleGameStateEviction(code);
+            }
 
             _logger.LogInformation(
                 "[CoopHub] User {UserId} disconnected from lobby {Code}",
@@ -315,6 +336,41 @@ public class CoopHub
                 code
             );
         }
+    }
+
+    /// <summary>
+    /// Schedule the in-memory game state to be evicted after the grace window.
+    /// If a client reconnects within the window, HandleConnectionAsync cancels
+    /// the token and the state survives.
+    /// </summary>
+    private void ScheduleGameStateEviction(string normalizedCode)
+    {
+        if (!_gameStates.TryGetValue(normalizedCode, out var state))
+            return;
+
+        state.LastActiveAt = DateTime.UtcNow;
+        var cts = new CancellationTokenSource();
+        state.EvictionCts = cts;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(EvictionGrace, cts.Token);
+                if (_gameStates.TryRemove(normalizedCode, out _))
+                {
+                    _logger.LogInformation(
+                        "[CoopHub] Evicted game state for lobby {Code} after {Grace}s idle",
+                        normalizedCode,
+                        EvictionGrace.TotalSeconds
+                    );
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Client reconnected; state survives.
+            }
+        });
     }
 
     private async Task HandleMessageAsync(
@@ -331,8 +387,12 @@ public class CoopHub
                 await HandleHelloAsync(entry, lobby, userId, ct);
                 break;
 
+            case "clear_attempt":
+                await HandleClearAttemptAsync(msg, entry, lobby, userId, ct);
+                break;
+
             case "heartbeat":
-                // Phase 3: receipt only, no reply. Phase 6+ will track AFK state.
+                HandleHeartbeat(msg, entry);
                 break;
 
             case "echo":
@@ -366,6 +426,405 @@ public class CoopHub
                 break;
         }
     }
+
+    // ── Phase 6: gameplay sync ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the in-memory game state for a lobby, hydrating from DB on miss.
+    /// Thread-safe: multiple callers will only hydrate once via double-checked
+    /// locking. Lobby must be Active — Generating/Failed/Completed/Deleted
+    /// return null.
+    /// </summary>
+    private async Task<LobbyGameState?> GetOrHydrateGameStateAsync(string normalizedCode)
+    {
+        if (_gameStates.TryGetValue(normalizedCode, out var existing))
+            return existing;
+
+        // Hydrate. Serialize across callers for the same lobby so we only do
+        // this work once. GetOrAdd with factory isn't async-safe, so we use
+        // the usual two-phase: try, build, TryAdd, check again.
+        Lobby? lobby;
+        byte[]? snapshotBytes;
+        long nextSeq;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            lobby = await db.Lobbies.FirstOrDefaultAsync(l => l.Code == normalizedCode);
+            if (lobby == null || lobby.Status != LobbyStatus.Active)
+                return null;
+
+            var snapRepo = scope.ServiceProvider.GetRequiredService<LobbySnapshotRepository>();
+            var snap = await snapRepo.LoadAsync(lobby.Id);
+            snapshotBytes = snap?.Data;
+            if (snapshotBytes == null)
+                return null;
+
+            // Next Seq is one past the max existing event for this lobby.
+            var maxSeq = await db
+                .LobbyEvents.Where(e => e.LobbyId == lobby.Id)
+                .Select(e => (long?)e.Seq)
+                .MaxAsync();
+            nextSeq = (maxSeq ?? -1) + 1;
+        }
+
+        var board = BinarySnapshot.DecodeFull(snapshotBytes);
+
+        // Replay accepted clears so the in-memory board matches persisted state.
+        // DB query re-opened because we're outside the original scope; also
+        // outside the lobby-wide lock, which is fine because replay is
+        // idempotent and we'll TryAdd below.
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var events = await db
+                .LobbyEvents.Where(e =>
+                    e.LobbyId == lobby.Id && e.Type == LobbyEventType.ClearAccepted
+                )
+                .OrderBy(e => e.Seq)
+                .ToListAsync();
+
+            foreach (var ev in events)
+            {
+                if (!ev.TapX.HasValue || !ev.TapY.HasValue)
+                    continue;
+                var cell = TapToCell(ev.TapX.Value, ev.TapY.Value);
+                if (!board.Contains(cell))
+                    continue;
+                var arrow = board.GetArrowAt(cell);
+                if (arrow != null && board.IsClearable(arrow))
+                    board.RemoveArrow(arrow);
+            }
+        }
+
+        var state = new LobbyGameState(board, (int)lobby.Seed, lobby.MaxArrowLength, nextSeq);
+        if (_gameStates.TryAdd(normalizedCode, state))
+        {
+            _logger.LogInformation(
+                "[CoopHub] Hydrated game state for lobby {Code}: {ArrowCount} arrows, nextSeq={Seq}",
+                normalizedCode,
+                board.Arrows.Count,
+                nextSeq
+            );
+            return state;
+        }
+
+        // Lost the race — another hydrate call won. Use theirs.
+        return _gameStates.TryGetValue(normalizedCode, out var winner) ? winner : state;
+    }
+
+    /// <summary>
+    /// Round-to-nearest cell conversion, matching the client-side
+    /// <c>BoardCoords.WorldToCell</c>. World units are 1 per cell, centered
+    /// on integer coordinates.
+    /// </summary>
+    private static Cell TapToCell(float tapX, float tapY)
+    {
+        int x = (int)Math.Round(tapX);
+        int y = (int)Math.Round(tapY);
+        return new Cell(x, y);
+    }
+
+    private async Task HandleClearAttemptAsync(
+        CoopMessage msg,
+        ConnectionEntry entry,
+        Lobby lobby,
+        Guid userId,
+        CancellationToken ct
+    )
+    {
+        // Rate limit check (token bucket, per connection).
+        var now = DateTime.UtcNow;
+        lock (entry)
+        {
+            var elapsed = (now - entry.LastRefillAt).TotalSeconds;
+            entry.Tokens = Math.Min(
+                ConnectionEntry.ClearRateCapacity,
+                entry.Tokens + elapsed * ConnectionEntry.ClearRateRefillPerSecond
+            );
+            entry.LastRefillAt = now;
+
+            if (entry.Tokens < 1.0)
+            {
+                // Over-rate: drop silently, track sustained duration.
+                entry.OverRateSince ??= now;
+                if (
+                    (now - entry.OverRateSince.Value).TotalSeconds
+                    >= ConnectionEntry.ClearRateSustainedDisconnectSeconds
+                )
+                {
+                    // Fall through: send rejected_rate + disconnect below (outside lock).
+                }
+                else
+                {
+                    // Silent drop.
+                    return;
+                }
+            }
+            else
+            {
+                entry.Tokens -= 1.0;
+                entry.OverRateSince = null;
+            }
+        }
+
+        // If we're in sustained over-rate, disconnect.
+        if (
+            entry.OverRateSince.HasValue
+            && (DateTime.UtcNow - entry.OverRateSince.Value).TotalSeconds
+                >= ConnectionEntry.ClearRateSustainedDisconnectSeconds
+        )
+        {
+            var clientSeq =
+                msg.Payload?.Deserialize<ClearAttemptPayload>(JsonOptions)?.ClientSeq ?? 0;
+            await SendAsync(
+                entry,
+                new CoopMessage
+                {
+                    Type = "rejected_rate",
+                    Payload = ToJsonElement(new RejectedRatePayload(clientSeq, 5000)),
+                },
+                ct
+            );
+            await SendAsync(
+                entry,
+                new CoopMessage
+                {
+                    Type = "disconnect",
+                    Payload = ToJsonElement(new DisconnectPayload("rate_limited")),
+                },
+                ct
+            );
+            await entry.Socket.CloseAsync(
+                WebSocketCloseStatus.NormalClosure,
+                "rate_limited",
+                CancellationToken.None
+            );
+            return;
+        }
+
+        // Parse payload.
+        ClearAttemptPayload? payload;
+        try
+        {
+            payload = msg.Payload?.Deserialize<ClearAttemptPayload>(JsonOptions);
+        }
+        catch
+        {
+            return; // malformed
+        }
+        if (payload == null)
+            return;
+
+        var code = NormalizeCode(lobby.Code);
+        var state = await GetOrHydrateGameStateAsync(code);
+        if (state == null)
+        {
+            // Lobby not active — silently ignore. Status should already reflect this.
+            return;
+        }
+
+        entry.LastInputAt = DateTime.UtcNow;
+
+        var cell = TapToCell(payload.TapX, payload.TapY);
+
+        await state.Mutex.WaitAsync(ct);
+        try
+        {
+            if (!state.Board.Contains(cell))
+            {
+                // Tap landed outside the board (user clicked on empty space).
+                // Treat as race — private reject to attempter only.
+                await SendAsync(
+                    entry,
+                    new CoopMessage
+                    {
+                        Type = "rejected_race",
+                        Payload = ToJsonElement(
+                            new RejectedRacePayload(payload.ClientSeq, "out_of_bounds")
+                        ),
+                    },
+                    ct
+                );
+                return;
+            }
+
+            var arrow = state.Board.GetArrowAt(cell);
+            if (arrow == null)
+            {
+                // Already cleared by someone else. Private reject.
+                await SendAsync(
+                    entry,
+                    new CoopMessage
+                    {
+                        Type = "rejected_race",
+                        Payload = ToJsonElement(
+                            new RejectedRacePayload(payload.ClientSeq, "race_lost")
+                        ),
+                    },
+                    ct
+                );
+                return;
+            }
+
+            if (!state.Board.IsClearable(arrow))
+            {
+                // Dependency not satisfied. Non-clearable taps are filtered
+                // client-side; reaching the server means either a client bug
+                // or a cheater bypassing the local guard. Reply privately to
+                // the sender (so a legit client can correct its local state)
+                // and don't persist or broadcast — non-clearable taps don't
+                // modify board state and shouldn't pollute the event log.
+                await SendAsync(
+                    entry,
+                    new CoopMessage
+                    {
+                        Type = "rejected_dep",
+                        Payload = ToJsonElement(
+                            new RejectedDepPayload(
+                                userId,
+                                payload.TapX,
+                                payload.TapY,
+                                DateTime.UtcNow.ToString("O"),
+                                0
+                            )
+                        ),
+                    },
+                    ct
+                );
+                return;
+            }
+
+            // Accepted: mutate board, persist event, broadcast.
+            state.Board.RemoveArrow(arrow);
+            var acceptSeq = state.NextSeq++;
+            await PersistEventAsync(
+                lobby.Id,
+                acceptSeq,
+                LobbyEventType.ClearAccepted,
+                userId,
+                payload.TapX,
+                payload.TapY
+            );
+
+            await BroadcastAsync(
+                code,
+                new CoopMessage
+                {
+                    Type = "cleared",
+                    Seq = acceptSeq,
+                    Payload = ToJsonElement(
+                        new ClearedPayload(
+                            userId,
+                            payload.TapX,
+                            payload.TapY,
+                            DateTime.UtcNow.ToString("O"),
+                            acceptSeq
+                        )
+                    ),
+                }
+            );
+
+            // Completion: last arrow cleared → transition to Completed + broadcast.
+            if (state.Board.Arrows.Count == 0)
+            {
+                var completeSeq = state.NextSeq++;
+                var completedAt = DateTime.UtcNow;
+                using (var scope = _scopeFactory.CreateScope())
+                {
+                    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var lobbyRow = await db.Lobbies.FindAsync(lobby.Id);
+                    if (lobbyRow != null && lobbyRow.Status == LobbyStatus.Active)
+                    {
+                        lobbyRow.Status = LobbyStatus.Completed;
+                        lobbyRow.CompletedAt = completedAt;
+                        lobbyRow.LastActivityAt = completedAt;
+                        db.LobbyEvents.Add(
+                            new LobbyEvent
+                            {
+                                LobbyId = lobby.Id,
+                                Seq = completeSeq,
+                                Type = LobbyEventType.LobbyCompleted,
+                                CreatedAt = completedAt,
+                            }
+                        );
+                        await db.SaveChangesAsync();
+                    }
+                }
+                await BroadcastAsync(
+                    code,
+                    new CoopMessage
+                    {
+                        Type = "lobby_completed",
+                        Seq = completeSeq,
+                        Payload = ToJsonElement(
+                            new LobbyCompletedPayload(completedAt.ToString("O"))
+                        ),
+                    }
+                );
+            }
+        }
+        finally
+        {
+            state.Mutex.Release();
+        }
+    }
+
+    private async Task PersistEventAsync(
+        Guid lobbyId,
+        long seq,
+        LobbyEventType type,
+        Guid userId,
+        float tapX,
+        float tapY
+    )
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        db.LobbyEvents.Add(
+            new LobbyEvent
+            {
+                LobbyId = lobbyId,
+                Seq = seq,
+                Type = type,
+                UserId = userId,
+                TapX = tapX,
+                TapY = tapY,
+                CreatedAt = DateTime.UtcNow,
+            }
+        );
+        await db.SaveChangesAsync();
+    }
+
+    private void HandleHeartbeat(CoopMessage msg, ConnectionEntry entry)
+    {
+        HeartbeatPayload? payload;
+        try
+        {
+            payload = msg.Payload?.Deserialize<HeartbeatPayload>(JsonOptions);
+        }
+        catch
+        {
+            return;
+        }
+        if (payload == null)
+            return;
+
+        entry.LastHeartbeatAt = DateTime.UtcNow;
+        entry.Focused = payload.Focused;
+        if (
+            DateTime.TryParse(
+                payload.LastInputTsUtc,
+                null,
+                System.Globalization.DateTimeStyles.RoundtripKind,
+                out var lastInput
+            )
+        )
+        {
+            entry.LastInputAt = lastInput;
+        }
+    }
+
+    // ── Existing methods ─────────────────────────────────────────────────────
 
     private async Task HandleHelloAsync(
         ConnectionEntry entry,
@@ -450,9 +909,39 @@ public class CoopHub
                 await db.SaveChangesAsync();
             }
 
-            if (current.Status == LobbyStatus.Active)
+            // Snapshot loading is handled below (after the scope) so we can
+            // re-encode from live in-memory state if hydrated.
+        }
+
+        // Prefer re-encoding from live in-memory game state — it reflects all
+        // clears applied since the lobby went Active. Falls back to the raw
+        // DB snapshot when the state hasn't been hydrated yet (e.g., first
+        // connect for a long-idle Active lobby).
+        if (current.Status == LobbyStatus.Active)
+        {
+            var state = await GetOrHydrateGameStateAsync(NormalizeCode(current.Code));
+            if (state != null)
             {
-                var snapRepo = scope.ServiceProvider.GetRequiredService<LobbySnapshotRepository>();
+                await state.Mutex.WaitAsync(ct);
+                try
+                {
+                    snapshotBytes = BinarySnapshot.EncodeFull(
+                        state.Board,
+                        state.Seed,
+                        state.MaxArrowLength,
+                        gzip: true
+                    );
+                }
+                finally
+                {
+                    state.Mutex.Release();
+                }
+            }
+            else
+            {
+                using var snapScope = _scopeFactory.CreateScope();
+                var snapRepo =
+                    snapScope.ServiceProvider.GetRequiredService<LobbySnapshotRepository>();
                 var snap = await snapRepo.LoadAsync(current.Id);
                 snapshotBytes = snap?.Data;
             }
@@ -670,6 +1159,32 @@ internal class ConnectionEntry
     /// can't race with the welcome write to the same socket.
     /// </summary>
     public bool Ready { get; set; }
+
+    // --- Phase 6: rate limit (token bucket, 10 tokens cap, 10/sec refill) ---
+
+    /// <summary>Current rate-limit token count. Starts full.</summary>
+    public double Tokens { get; set; } = ClearRateCapacity;
+
+    /// <summary>Timestamp of the last token bucket refill.</summary>
+    public DateTime LastRefillAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// First time an over-rate drop was observed since the last normal rate.
+    /// Cleared once the bucket replenishes. If sustained past
+    /// <see cref="ClearRateSustainedDisconnectSeconds"/> seconds, the
+    /// connection is force-disconnected.
+    /// </summary>
+    public DateTime? OverRateSince { get; set; }
+
+    public const double ClearRateCapacity = 10.0;
+    public const double ClearRateRefillPerSecond = 10.0;
+    public const double ClearRateSustainedDisconnectSeconds = 5.0;
+
+    // --- Phase 6: heartbeat / activity tracking (AFK logic is Phase 7) ---
+
+    public DateTime LastHeartbeatAt { get; set; } = DateTime.UtcNow;
+    public bool Focused { get; set; } = true;
+    public DateTime LastInputAt { get; set; } = DateTime.UtcNow;
 
     public ConnectionEntry(WebSocket socket)
     {
