@@ -1,0 +1,82 @@
+name: CI (Unity)
+
+# Unity tests run on pull_request_target so repo secrets (UNITY_LICENSE) are
+# available. For PRs from forks, require the `safe-to-test` label so untrusted
+# code only runs with explicit maintainer approval. Checkout uses the PR HEAD
+# SHA so the run actually tests the PR's code, not the base branch.
+#
+# This is a separate workflow from ci.yml so that pull_request and
+# pull_request_target don't produce duplicate/skipped check entries on the
+# same PR.
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  checks: write
+  contents: read
+
+jobs:
+  test:
+    if: |
+      github.actor != 'dependabot[bot]' &&
+      (
+        github.event.pull_request.head.repo.full_name == github.repository ||
+        contains(github.event.pull_request.labels.*.name, 'safe-to-test')
+      )
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Run EditMode tests
+        uses: game-ci/unity-test-runner@0ff419b913a3630032cbe0de48a0099b5a9f0ed9 # v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          testMode: EditMode
+          customParameters: -nographics
+
+  test-playmode:
+    if: |
+      github.actor != 'dependabot[bot]' &&
+      (
+        github.event.pull_request.head.repo.full_name == github.repository ||
+        contains(github.event.pull_request.labels.*.name, 'safe-to-test')
+      )
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Run PlayMode tests
+        uses: game-ci/unity-test-runner@0ff419b913a3630032cbe0de48a0099b5a9f0ed9 # v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          testMode: PlayMode
+          customParameters:
