@@ -1,6 +1,7 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <Style src="../Shared/Shared.uss" />
     <Style src="GameHud.uss" />
+    <Style src="../Coop/Coop.uss" />
 
     <ui:VisualElement name="loading-overlay" class="loading-overlay">
         <ui:Label name="loading-label" class="loading-label" text="Generating..." />

@@ -136,8 +136,10 @@ public class CoopGameplayTests : IClassFixture<TestFactory>, IDisposable
     }
 
     /// <summary>
-    /// Connect + hello + drain snapshot, returning the live socket ready
-    /// for gameplay messages.
+    /// Connect + hello + drain snapshot + roster_full, returning the live
+    /// socket ready for gameplay messages. Roster patches that arrive during
+    /// the test (e.g. from the player's own online-flip) are filtered out
+    /// by <see cref="ReceiveClassifiedAsync"/>.
     /// </summary>
     private async Task<WebSocket> ConnectAndHandshakeAsync(string code, string token)
     {
@@ -146,7 +148,26 @@ public class CoopGameplayTests : IClassFixture<TestFactory>, IDisposable
         await ReceiveTextAsync(socket); // welcome
         await ReceiveTextAsync(socket); // snapshot meta
         await ReceiveBinaryAsync(socket); // snapshot binary
+        await ReceiveTextAsync(socket); // roster_full
         return socket;
+    }
+
+    /// <summary>
+    /// Drain text messages until we see one whose Type is NOT in the ignore
+    /// list. Use to skip throttled roster patches that arrive unpredictably
+    /// alongside the message a test actually cares about.
+    /// </summary>
+    private static async Task<CoopMessage> ReceiveIgnoringAsync(
+        WebSocket socket,
+        params string[] ignoreTypes
+    )
+    {
+        while (true)
+        {
+            var msg = await ReceiveTextAsync(socket);
+            if (Array.IndexOf(ignoreTypes, msg.Type) < 0)
+                return msg;
+        }
     }
 
     private static Arrow FindClearableArrow(Board board)
@@ -263,26 +284,60 @@ public class CoopGameplayTests : IClassFixture<TestFactory>, IDisposable
         var aliceReply = await ReceiveTextAsync(aliceSocket);
         Assert.Equal("rejected_dep", aliceReply.Type);
 
-        // Bob should see nothing for this attempt. Give the server a small
-        // window to broadcast if it were going to, then verify silence.
-        using var silenceCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
-        var gotBroadcast = false;
+        // Bob should see no gameplay broadcast for this attempt. Drain any
+        // roster patches (from alice's online flip) and assert that no
+        // cleared/rejected-anything message arrives within the window.
+        using var silenceCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(800));
+        var gotGameplayBroadcast = false;
         try
         {
-            var buffer = new byte[4096];
-            var result = await bobSocket.ReceiveAsync(
-                new ArraySegment<byte>(buffer),
-                silenceCts.Token
-            );
-            // Any inbound message would be a broadcast we didn't expect.
-            if (result.Count > 0)
-                gotBroadcast = true;
+            while (!silenceCts.IsCancellationRequested)
+            {
+                var (data, type) = await ReceiveWithTokenAsync(bobSocket, silenceCts.Token);
+                if (type != WebSocketMessageType.Text)
+                    continue;
+                var msg = JsonSerializer.Deserialize<CoopMessage>(data, JsonOptions)!;
+                if (
+                    msg.Type != "roster_patch"
+                    && msg.Type != "roster_full"
+                    && msg.Type != "heartbeat"
+                )
+                {
+                    gotGameplayBroadcast = true;
+                    break;
+                }
+            }
         }
         catch (OperationCanceledException)
         {
-            // Expected: no broadcast arrived within the window.
+            // Expected: only roster/heartbeat traffic in the window.
         }
-        Assert.False(gotBroadcast, "Non-clearable taps must not broadcast to other players");
+        catch (System.Net.WebSockets.WebSocketException)
+        {
+            // Socket cancelled — treat as silence.
+        }
+        Assert.False(
+            gotGameplayBroadcast,
+            "Non-clearable taps must not broadcast to other players"
+        );
+    }
+
+    private static async Task<(byte[] Data, WebSocketMessageType Type)> ReceiveWithTokenAsync(
+        WebSocket socket,
+        CancellationToken ct
+    )
+    {
+        var ms = new MemoryStream();
+        var buffer = new byte[8192];
+        WebSocketReceiveResult result;
+        do
+        {
+            result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
+            if (result.MessageType == WebSocketMessageType.Close)
+                return (ms.ToArray(), result.MessageType);
+            ms.Write(buffer, 0, result.Count);
+        } while (!result.EndOfMessage);
+        return (ms.ToArray(), result.MessageType);
     }
 
     [Fact]
@@ -372,10 +427,11 @@ public class CoopGameplayTests : IClassFixture<TestFactory>, IDisposable
         }
 
         // After the last clear the server should push `lobby_completed`
-        // (usually as a separate message after the final `cleared`).
+        // (usually as a separate message after the final `cleared`; roster
+        // patches may interleave, which we ignore).
         if (!completed && board.Arrows.Count == 0)
         {
-            var msg = await ReceiveTextAsync(socket);
+            var msg = await ReceiveIgnoringAsync(socket, "roster_patch", "roster_full");
             completed = msg.Type == "lobby_completed";
         }
 

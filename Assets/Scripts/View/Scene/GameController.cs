@@ -112,6 +112,22 @@ public sealed class GameController : MonoBehaviour
     private float _coopReconnectAt;
     private bool _coopReconnectInFlight;
 
+    // Per-clear tap indicator pool for co-op: remote taps spawn a ring in
+    // the clearer's color. Lazy-initialized in co-op mode only.
+    private TapIndicatorPool _coopTapPool;
+
+    // Per-player solve timer for co-op (Phase 7). Starts on first local
+    // accepted clear, reports every 5 s via timer_update.
+    private CoopPlayerTimer _coopPlayerTimer;
+
+    // Roster sidebar component for co-op (Phase 7).
+    private CoopSidebar _coopSidebar;
+
+    // Previous roster snapshot, used to diff for "joined" toasts (Phase 7).
+    private HashSet<Guid> _previousRosterIds = new();
+    private bool _rosterDiffPrimed;
+    private float _lastRateLimitToastAt = -999f;
+
     // 1, 2, 4, 8, 16, 30 seconds (capped).
     private static readonly float[] CoopReconnectDelays = { 1f, 2f, 4f, 8f, 16f, 30f };
 
@@ -166,6 +182,8 @@ public sealed class GameController : MonoBehaviour
     private void OnDestroy()
     {
         _focusNavigator?.Dispose();
+        _coopSidebar?.Dispose();
+        _coopPlayerTimer?.Dispose();
         _coopSession?.Dispose();
         _coopClient?.Dispose();
         SettingsController.IsOpenChanged -= OnSettingsOpenChanged;
@@ -203,6 +221,11 @@ public sealed class GameController : MonoBehaviour
                 _ = _coopClient.SendAsync(CoopMessage.Heartbeat(Application.isFocused, lastInput));
             }
         }
+
+        // Per-player solve timer (Phase 7). Ticks only while focused; emits
+        // timer_update every 5 s so other players see our time advance.
+        if (_coopPlayerTimer != null)
+            _coopPlayerTimer.Tick(Time.unscaledDeltaTime);
 
         // Auto-reconnect driver: fires a single reconnect attempt when the
         // backoff timer expires. Additional retries are scheduled by the
@@ -517,6 +540,25 @@ public sealed class GameController : MonoBehaviour
         // Enable auto-reconnect now that we have a working session.
         _coopShouldReconnect = true;
 
+        // Tap indicator pool for remote-player taps. Uses the theme-aware
+        // ring color as a fallback when no player color is known.
+        _coopTapPool = new TapIndicatorPool(
+            sprite: null,
+            duration: 0.4f,
+            maxScale: 1.5f,
+            parent: transform
+        );
+
+        // Pass the input handler's last-input timestamp so the timer pauses
+        // during extended idle even when the window keeps focus. Purely
+        // local; not surfaced as a UI status.
+        _coopPlayerTimer = new CoopPlayerTimer(
+            _coopClient,
+            isFocusedProvider: () => Application.isFocused,
+            lastInputProvider: () =>
+                _inputHandler != null ? _inputHandler.LastInputTimeUtc : DateTime.UtcNow
+        );
+
         // Create the session wrapper + wire server event handlers.
         _coopSession = new CoopSession(_coopClient, _board, _coopUserId);
         _coopSession.RemoteCleared += OnCoopRemoteCleared;
@@ -526,10 +568,20 @@ public sealed class GameController : MonoBehaviour
         };
         _coopSession.LocalRejectedRate += _ =>
         {
+            // Throttle to once per 3 s so a burst doesn't stack toasts.
+            if (Time.unscaledTime - _lastRateLimitToastAt < 3f)
+                return;
+            _lastRateLimitToastAt = Time.unscaledTime;
             if (GlobalToast.Instance != null)
                 GlobalToast.Instance.ShowError("Slow down");
         };
         _coopSession.LobbyCompleted += OnCoopLobbyCompleted;
+        _coopSession.RosterUpdated += OnCoopRosterUpdated;
+
+        // Mount the sidebar into the HUD root. Safe to do before WireHud()
+        // since we only need the UIDocument's root.
+        if (hudUIDocument != null && hudUIDocument.rootVisualElement != null)
+            _coopSidebar = new CoopSidebar(_coopSession, hudUIDocument.rootVisualElement);
 
         WireHud();
         WireInput();
@@ -539,9 +591,29 @@ public sealed class GameController : MonoBehaviour
     private void OnCoopRemoteCleared(CoopSession.ClearedEvent evt)
     {
         if (evt.IsLocal)
+        {
+            // Our own accepted tap: start the per-player timer on the first
+            // clear, and schedule a prompt timer_update so the sidebar row
+            // advances immediately.
+            if (_coopPlayerTimer != null)
+                _coopPlayerTimer.NoteAcceptedClear();
             return; // already animated locally via optimistic clear
-        if (evt.Arrow != null && _boardView != null)
-            _boardView.ClearArrowAnimated(evt.Arrow);
+        }
+        if (evt.Arrow == null || _boardView == null)
+            return;
+
+        // Remote clear: tint the pull-out in the clearer's color and spawn a
+        // tap indicator ring in the same color, so the action is attributed
+        // visually without needing an always-on player overlay.
+        Color tint = new Color32(
+            evt.Color.r,
+            evt.Color.g,
+            evt.Color.b,
+            evt.Color.a == 0 ? (byte)255 : evt.Color.a
+        );
+        _boardView.ClearArrowAnimated(evt.Arrow, flashColor: tint);
+        if (_coopTapPool != null)
+            _coopTapPool.Spawn(evt.TapWorld, tint);
     }
 
     private void OnCoopRemoteRejectedDep(CoopSession.RejectedDepEvent evt)
@@ -565,6 +637,40 @@ public sealed class GameController : MonoBehaviour
             _inputHandler.SetInputEnabled(false);
     }
 
+    /// <summary>
+    /// Roster-diff watcher: toasts "name joined" whenever a new user id
+    /// appears in the roster after the initial snapshot. The initial
+    /// <c>roster_full</c> (priming) doesn't fire joined toasts for already-
+    /// present players.
+    /// </summary>
+    private void OnCoopRosterUpdated()
+    {
+        if (_coopSession == null)
+            return;
+
+        if (!_rosterDiffPrimed)
+        {
+            _previousRosterIds = new HashSet<Guid>(_coopSession.Roster.Keys);
+            _rosterDiffPrimed = true;
+            return;
+        }
+
+        foreach (var kvp in _coopSession.Roster)
+        {
+            if (kvp.Key == _coopUserId)
+                continue;
+            if (_previousRosterIds.Contains(kvp.Key))
+                continue;
+            var name = string.IsNullOrEmpty(kvp.Value.DisplayName)
+                ? "Someone"
+                : kvp.Value.DisplayName;
+            if (GlobalToast.Instance != null)
+                GlobalToast.Instance.ShowInfo($"{name} joined");
+        }
+
+        _previousRosterIds = new HashSet<Guid>(_coopSession.Roster.Keys);
+    }
+
     private static float GetReconnectDelay(int attempt)
     {
         if (attempt < 0)
@@ -573,6 +679,8 @@ public sealed class GameController : MonoBehaviour
             attempt = CoopReconnectDelays.Length - 1;
         return CoopReconnectDelays[attempt];
     }
+
+    private const int ReconnectToastGiveUpAttempt = 6;
 
     private async Task AttemptCoopReconnectAsync()
     {
@@ -588,12 +696,20 @@ public sealed class GameController : MonoBehaviour
         catch (Exception e)
         {
             Debug.LogWarning($"[GameController] Co-op reconnect failed: {e.Message}");
-            // Schedule another attempt. The Disconnected handler (fired by
-            // CoopClient on the failure) also schedules one; to avoid double-
-            // scheduling, the Disconnected handler checks _coopReconnectInFlight.
             _coopReconnectInFlight = false;
             _coopReconnectAt = Time.unscaledTime + GetReconnectDelay(_coopReconnectAttempt);
             _coopReconnectAttempt++;
+
+            // After walking the full backoff ladder, surface a persistent
+            // "lost connection" toast so the player knows we're still
+            // trying but something's wrong — auto-reconnect keeps going.
+            if (
+                _coopReconnectAttempt == ReconnectToastGiveUpAttempt
+                && GlobalToast.Instance != null
+            )
+            {
+                GlobalToast.Instance.ShowError("Lost connection — still retrying");
+            }
         }
     }
 

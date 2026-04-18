@@ -311,30 +311,60 @@ public sealed class ArrowView : MonoBehaviour
 
     /// <summary>
     /// Plays the pull-out animation for a clearable arrow. The arrow slides
-    /// head-first off the board and is destroyed on completion.
+    /// head-first off the board and is destroyed on completion. Optional
+    /// <paramref name="flashColor"/> briefly tints the arrow at the start of
+    /// the slide — used by co-op remote clears to attribute the clear to
+    /// another player's color.
     /// </summary>
-    public void PlayPullOut(Action onComplete = null)
+    public void PlayPullOut(Action onComplete = null, Color? flashColor = null)
     {
         StopAllCoroutines();
-        StartCoroutine(PullOutCoroutine(onComplete));
+        StartCoroutine(PullOutCoroutine(onComplete, flashColor));
     }
 
-    private IEnumerator PullOutCoroutine(Action onComplete)
+    private IEnumerator PullOutCoroutine(Action onComplete, Color? flashColor)
     {
         float duration = _settings.clearSlideDuration;
         AnimationCurve curve = _settings.clearSlideCurve;
         float extensionDist = _arcLengths[1];
-        // Max offset: slide until the tail clears the original path end
         float maxOffset = extensionDist + _totalArcLength;
         float elapsed = 0f;
+
+        // Flash envelope: ramp from 1 → 0 over the first ~30 % of the slide.
+        // Uses the existing _FlashColor / _FlashT shader pair, temporarily
+        // overriding the color to the attribution tint.
+        bool hasFlash = flashColor.HasValue;
+        float flashDuration = duration * 0.3f;
+        if (hasFlash)
+        {
+            _materialInstance.SetColor(FlashColorId, flashColor.Value);
+            _headMaterialInstance.SetColor(FlashColorId, flashColor.Value);
+        }
 
         while (elapsed < duration)
         {
             float t = curve.Evaluate(elapsed / duration);
             float slideOffset = Mathf.Lerp(0f, maxOffset, t);
             ApplySlideOffset(slideOffset);
+
+            if (hasFlash)
+            {
+                float flashT =
+                    elapsed < flashDuration ? 1f - Mathf.Clamp01(elapsed / flashDuration) : 0f;
+                _materialInstance.SetFloat(FlashTId, flashT);
+                _headMaterialInstance.SetFloat(FlashTId, flashT);
+            }
+
             elapsed += Time.deltaTime;
             yield return null;
+        }
+
+        if (hasFlash)
+        {
+            _materialInstance.SetFloat(FlashTId, 0f);
+            _headMaterialInstance.SetFloat(FlashTId, 0f);
+            _materialInstance.SetColor(FlashColorId, _settings.rejectFlashColor);
+            _headMaterialInstance.SetColor(FlashColorId, _settings.rejectFlashColor);
         }
 
         onComplete?.Invoke();
