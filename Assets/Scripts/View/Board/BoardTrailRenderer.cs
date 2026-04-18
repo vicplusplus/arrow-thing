@@ -35,8 +35,7 @@ public sealed class BoardTrailRenderer : MonoBehaviour
         _board = board;
         _settings = settings;
         _halfWidth = settings.arrowBodyWidth * 0.5f;
-        _extensionDist =
-            Mathf.Max(board.Width, board.Height) * settings.pathExtensionMultiplier;
+        _extensionDist = Mathf.Max(board.Width, board.Height) * settings.pathExtensionMultiplier;
 
         _meshFilter = gameObject.AddComponent<MeshFilter>();
         _meshRenderer = gameObject.AddComponent<MeshRenderer>();
@@ -126,8 +125,7 @@ public sealed class BoardTrailRenderer : MonoBehaviour
     {
         _settings = settings;
         _halfWidth = settings.arrowBodyWidth * 0.5f;
-        _extensionDist =
-            Mathf.Max(_board.Width, _board.Height) * settings.pathExtensionMultiplier;
+        _extensionDist = Mathf.Max(_board.Width, _board.Height) * settings.pathExtensionMultiplier;
 
         Material src =
             settings.arrowTrailMaterial != null
