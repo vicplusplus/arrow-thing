@@ -1408,6 +1408,15 @@ public class CoopHub
         if (payload == null || payload.AccumulatedMillis < 0)
             return;
 
+        // Cheap throttle before the DB round-trip: drop updates that arrive
+        // faster than the legitimate 5 s client cadence. Without this a
+        // malicious client can send monotonically-increasing values 10x/sec
+        // and amplify one WS frame into a DB write + roster broadcast each.
+        var nowUtc = DateTime.UtcNow;
+        if (nowUtc - entry.LastTimerUpdateAt < ConnectionEntry.TimerUpdateMinInterval)
+            return;
+        entry.LastTimerUpdateAt = nowUtc;
+
         using (var scope = _scopeFactory.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -1562,6 +1571,22 @@ internal class ConnectionEntry
     public DateTime LastHeartbeatAt { get; set; } = DateTime.UtcNow;
     public bool Focused { get; set; } = true;
     public DateTime LastInputAt { get; set; } = DateTime.UtcNow;
+
+    // --- Phase 5: timer_update rate limit ---
+
+    /// <summary>
+    /// Last time this connection's <c>timer_update</c> actually hit the
+    /// database. Subsequent updates within <see cref="TimerUpdateMinInterval"/>
+    /// are dropped before the EF round-trip so a spammer can't amplify one
+    /// WS message into a DB write + roster broadcast.
+    /// </summary>
+    public DateTime LastTimerUpdateAt { get; set; } = DateTime.MinValue;
+
+    /// <summary>
+    /// The legit client sends timer_update on a 5 s cadence, so 2 s gives a
+    /// 2.5× safety margin before we start throttling.
+    /// </summary>
+    public static readonly TimeSpan TimerUpdateMinInterval = TimeSpan.FromSeconds(2);
 
     public ConnectionEntry(WebSocket socket)
     {

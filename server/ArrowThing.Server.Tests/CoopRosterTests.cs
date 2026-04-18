@@ -314,7 +314,9 @@ public class CoopRosterTests : IClassFixture<TestFactory>, IDisposable
 
         // Give the server time to reject the backward value. Then send a
         // monotone tick and verify the persisted value stayed at 10000+.
-        await Task.Delay(200);
+        // Wait past ConnectionEntry.TimerUpdateMinInterval (2 s) so the next
+        // send isn't dropped by the per-connection timer_update rate limit.
+        await Task.Delay(TimeSpan.FromSeconds(2.1));
         await SendAsync(
             socket,
             new CoopMessage
@@ -345,6 +347,93 @@ public class CoopRosterTests : IClassFixture<TestFactory>, IDisposable
                 return;
         }
         throw new Xunit.Sdk.XunitException($"Never observed timer >= 15000; last seen {lastSeen}");
+    }
+
+    [Fact]
+    public async Task TimerUpdate_RateLimitedPerConnection()
+    {
+        // Phase 5: a malicious client can't amplify timer_update into a DB
+        // write + roster broadcast every WS frame — the server drops any
+        // update that arrives within TimerUpdateMinInterval (2s) of the last
+        // accepted one. First value lands, burst values are dropped; only
+        // after the window expires does a new value land.
+        var (auth, lobby, _) = await SetupActiveLobbyAsync("timer-rate");
+        using var socket = await ConnectAndHandshakeAsync(lobby.Code, auth.Token);
+        await ReceiveUntilAsync(socket, "roster_full");
+
+        await SendAsync(
+            socket,
+            new CoopMessage
+            {
+                Type = "timer_update",
+                Payload = JsonSerializer.SerializeToElement(
+                    new TimerUpdatePayload(1000),
+                    JsonOptions
+                ),
+            }
+        );
+        var firstPatch = await ReceiveUntilAsync(socket, "roster_patch");
+        Assert.Equal(
+            1000,
+            firstPatch
+                .Payload!.Value.Deserialize<RosterPatchPayload>(JsonOptions)!
+                .Upsert[0]
+                .AccumulatedMillis
+        );
+
+        // Immediately burst 5 more monotone values. All should be dropped
+        // by the rate limit — no roster_patch lands and no DB write fires.
+        for (long v = 2000; v <= 6000; v += 1000)
+        {
+            await SendAsync(
+                socket,
+                new CoopMessage
+                {
+                    Type = "timer_update",
+                    Payload = JsonSerializer.SerializeToElement(
+                        new TimerUpdatePayload(v),
+                        JsonOptions
+                    ),
+                }
+            );
+        }
+
+        // Brief window to let any errant broadcast land, then assert none did.
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(400));
+        try
+        {
+            var buffer = new byte[4096];
+            await socket.ReceiveAsync(new ArraySegment<byte>(buffer), cts.Token);
+            throw new Xunit.Sdk.XunitException(
+                "Received a burst roster_patch — rate limit didn't kick in"
+            );
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected: no broadcast within 400ms.
+        }
+
+        // Wait past the throttle window. The next update should land.
+        await Task.Delay(TimeSpan.FromSeconds(2.1));
+        await SendAsync(
+            socket,
+            new CoopMessage
+            {
+                Type = "timer_update",
+                Payload = JsonSerializer.SerializeToElement(
+                    new TimerUpdatePayload(7000),
+                    JsonOptions
+                ),
+            }
+        );
+        var afterPatch = await ReceiveUntilAsync(socket, "roster_patch");
+        Assert.Equal(
+            7000,
+            afterPatch
+                .Payload!.Value.Deserialize<RosterPatchPayload>(JsonOptions)!
+                .Upsert[0]
+                .AccumulatedMillis
+        );
     }
 
     [Fact]

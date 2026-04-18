@@ -242,14 +242,31 @@ public sealed class InputHandler : MonoBehaviour
 
     private void HandleTouchPinch()
     {
-        if (Touch.activeTouches.Count < 2)
+        // Snapshot then re-check Count immediately before indexing: the
+        // EnhancedTouch collection is rebuilt in place on InputSystem updates
+        // and a finger can be lifted between the Count gate and the []
+        // access. A single-frame shrink is rare but an IndexOutOfRangeException
+        // mid-pinch would crash the session.
+        var active = Touch.activeTouches;
+        if (active.Count < 2)
         {
             _lastPinchDistance = 0f;
             return;
         }
 
-        var touch0 = Touch.activeTouches[0];
-        var touch1 = Touch.activeTouches[1];
+        Touch touch0,
+            touch1;
+        try
+        {
+            touch0 = active[0];
+            touch1 = active[1];
+        }
+        catch (IndexOutOfRangeException)
+        {
+            _lastPinchDistance = 0f;
+            return;
+        }
+
         float currentDistance = Vector2.Distance(touch0.screenPosition, touch1.screenPosition);
 
         if (_lastPinchDistance > 0f && currentDistance > 0f)

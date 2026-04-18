@@ -2,7 +2,9 @@
 
 Design and phased implementation plan for co-op boards — shared persistent puzzles that any number of registered players can chip away at, in real time when they overlap and asynchronously when they don't.
 
-This document is the single source of truth for co-op design decisions until the feature ships. Each phase below corresponds to its own PR. When a phase lands, its section is updated with an "Implemented" note and the `docs/TechnicalDesign.md` is updated to match. Small per-phase `docs/TODO.md` files may be used for the phase in progress (per the feature workflow in `CLAUDE.md`) and deleted when the phase merges.
+**Status (v0.7.4+):** All eight phases have merged. The architecture notes below capture the shape the feature took; for the authoritative, kept-current reference read `docs/TechnicalDesign.md § Co-op Server`. Phase sections remain as a design history — they are not kept in sync with further work on the shipped code.
+
+This document is the single source of truth for co-op design decisions. Each phase below corresponds to its own PR. Small per-phase `docs/TODO.md` files may be used for the phase in progress (per the feature workflow in `CLAUDE.md`) and deleted when the phase merges.
 
 ## Overview
 

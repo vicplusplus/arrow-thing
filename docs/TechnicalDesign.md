@@ -394,6 +394,8 @@ Per-connection Serilog `LogContext` properties (`LobbyCode`, `UserId`) are pushe
 
 Rejected clear attempts emit one structured `[CoopHub] clear rejected reason=... tap=(x,y) clientSeq=...` log line at `Information` level. With `LobbyCode` / `UserId` already in scope, this is enough to audit bot-like behavior — a user whose rejects are all `dep` at high cadence bypasses the client-side clearability guard.
 
+`HandleTimerUpdateAsync` drops updates that arrive within `ConnectionEntry.TimerUpdateMinInterval` (2 s) of the last accepted one, before the DB round-trip. The legitimate client cadence is 5 s, so the throttle has ~2.5× headroom; a malicious client can't amplify one WS frame into one `LobbyRegistrations` update + one `roster_patch` broadcast per frame.
+
 ## Score Integrity
 
 ### Threat Model
@@ -500,6 +502,13 @@ The menu UI (UI Toolkit) is designed and tested for desktop resolutions only. On
 **Why it's deferred:** fixing this properly requires either responsive USS (viewport-relative units, media-query-like breakpoints) or a PanelSettings scale mode tuned per platform. Both approaches need dedicated design and testing across device sizes — it's a separate UX pass, not a quick CSS fix. The GDD targets mobile-first for shipping, but desktop is sufficient for MVP gameplay validation.
 
 **Unblocks:** all gameplay and input (including touch/pinch) work correctly on mobile. Only the menu UI is affected.
+
+### Accessibility — open items
+
+Two a11y items surfaced in the Phase 5 audit but ship here only as documentation — both are tuning/validation problems that need human eyes on a real device, not code changes:
+
+- **Tap hit slop on dense boards.** `BoardCoords.WorldToCell` already uses `Mathf.RoundToInt`, so a tap anywhere in a cell's full ±0.5 world-unit extent resolves correctly. On high-density boards (e.g. 100×100 on a phone) the cell's screen-space footprint can drop below finger-tip width, and the fix has to live at the camera-zoom layer (per-device minimum zoom / cell pixel size). Requires device testing to tune meaningful min-zoom targets; no blind change is safe.
+- **Colorblind palette.** `CoopColorPalette` (12 hues for co-op attribution) and the solo arrow palette in `VisualSettings.asset` both include red/green/orange groups that collapse under deuteranopia / protanopia. A proper fix adopts a colorblind-safe palette (e.g. IBM's 8-color-blind-safe set) and either reworks existing themes or adds a dedicated Colorblind theme. The right move is palette design + simulator validation + user testing with colorblind players, not a one-shot hex-code swap.
 
 ## Testing Strategy
 
