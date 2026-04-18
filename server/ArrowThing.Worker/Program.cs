@@ -44,6 +44,7 @@ builder.Services.AddSingleton<LeaderboardCache>(sp => new LeaderboardCache(
 // Co-op generation worker dependencies
 builder.Services.AddSingleton<AccountConcurrencyLimiter>();
 builder.Services.AddSingleton<GenerationProgressBus>();
+builder.Services.AddSingleton<CoopMetrics>();
 builder.Services.AddScoped<LobbySnapshotRepository>();
 
 builder.Services.AddHostedService<VerificationWorker>();
