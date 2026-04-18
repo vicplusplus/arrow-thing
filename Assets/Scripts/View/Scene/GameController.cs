@@ -123,6 +123,11 @@ public sealed class GameController : MonoBehaviour
     // Roster sidebar component for co-op (Phase 7).
     private CoopSidebar _coopSidebar;
 
+    // Previous roster snapshot, used to diff for "joined" toasts (Phase 7).
+    private HashSet<Guid> _previousRosterIds = new();
+    private bool _rosterDiffPrimed;
+    private float _lastRateLimitToastAt = -999f;
+
     // 1, 2, 4, 8, 16, 30 seconds (capped).
     private static readonly float[] CoopReconnectDelays = { 1f, 2f, 4f, 8f, 16f, 30f };
 
@@ -555,10 +560,15 @@ public sealed class GameController : MonoBehaviour
         };
         _coopSession.LocalRejectedRate += _ =>
         {
+            // Throttle to once per 3 s so a burst doesn't stack toasts.
+            if (Time.unscaledTime - _lastRateLimitToastAt < 3f)
+                return;
+            _lastRateLimitToastAt = Time.unscaledTime;
             if (GlobalToast.Instance != null)
                 GlobalToast.Instance.ShowError("Slow down");
         };
         _coopSession.LobbyCompleted += OnCoopLobbyCompleted;
+        _coopSession.RosterUpdated += OnCoopRosterUpdated;
 
         // Mount the sidebar into the HUD root. Safe to do before WireHud()
         // since we only need the UIDocument's root.
@@ -619,6 +629,40 @@ public sealed class GameController : MonoBehaviour
             _inputHandler.SetInputEnabled(false);
     }
 
+    /// <summary>
+    /// Roster-diff watcher: toasts "name joined" whenever a new user id
+    /// appears in the roster after the initial snapshot. The initial
+    /// <c>roster_full</c> (priming) doesn't fire joined toasts for already-
+    /// present players.
+    /// </summary>
+    private void OnCoopRosterUpdated()
+    {
+        if (_coopSession == null)
+            return;
+
+        if (!_rosterDiffPrimed)
+        {
+            _previousRosterIds = new HashSet<Guid>(_coopSession.Roster.Keys);
+            _rosterDiffPrimed = true;
+            return;
+        }
+
+        foreach (var kvp in _coopSession.Roster)
+        {
+            if (kvp.Key == _coopUserId)
+                continue;
+            if (_previousRosterIds.Contains(kvp.Key))
+                continue;
+            var name = string.IsNullOrEmpty(kvp.Value.DisplayName)
+                ? "Someone"
+                : kvp.Value.DisplayName;
+            if (GlobalToast.Instance != null)
+                GlobalToast.Instance.ShowInfo($"{name} joined");
+        }
+
+        _previousRosterIds = new HashSet<Guid>(_coopSession.Roster.Keys);
+    }
+
     private static float GetReconnectDelay(int attempt)
     {
         if (attempt < 0)
@@ -627,6 +671,8 @@ public sealed class GameController : MonoBehaviour
             attempt = CoopReconnectDelays.Length - 1;
         return CoopReconnectDelays[attempt];
     }
+
+    private const int ReconnectToastGiveUpAttempt = 6;
 
     private async Task AttemptCoopReconnectAsync()
     {
@@ -642,12 +688,20 @@ public sealed class GameController : MonoBehaviour
         catch (Exception e)
         {
             Debug.LogWarning($"[GameController] Co-op reconnect failed: {e.Message}");
-            // Schedule another attempt. The Disconnected handler (fired by
-            // CoopClient on the failure) also schedules one; to avoid double-
-            // scheduling, the Disconnected handler checks _coopReconnectInFlight.
             _coopReconnectInFlight = false;
             _coopReconnectAt = Time.unscaledTime + GetReconnectDelay(_coopReconnectAttempt);
             _coopReconnectAttempt++;
+
+            // After walking the full backoff ladder, surface a persistent
+            // "lost connection" toast so the player knows we're still
+            // trying but something's wrong — auto-reconnect keeps going.
+            if (
+                _coopReconnectAttempt == ReconnectToastGiveUpAttempt
+                && GlobalToast.Instance != null
+            )
+            {
+                GlobalToast.Instance.ShowError("Lost connection — still retrying");
+            }
         }
     }
 
