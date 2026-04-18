@@ -17,11 +17,14 @@ using Newtonsoft.Json.Linq;
 ///        canonical encoder shared with co-op wire transport). v4 readers
 ///        with cell-array snapshots are still loaded transparently via the
 ///        custom converter on the boardSnapshot field.
+///   v6 — added optional <see cref="roster"/> + per-event <see cref="ReplayEvent.playerId"/>
+///        for co-op attribution. Solo replays leave these null and remain
+///        wire-compatible with v5 readers (unknown fields are ignored).
 /// </summary>
 public sealed class ReplayData
 {
     /// <summary>Format version — increment if the schema changes incompatibly.</summary>
-    public int version = 5;
+    public int version = 6;
 
     /// <summary>UUID string. Uniquely identifies this game session.</summary>
     public string gameId;
@@ -52,6 +55,15 @@ public sealed class ReplayData
 
     /// <summary>Ordered event log (by seq). Never null; always at least one session_start.</summary>
     public List<ReplayEvent> events = new List<ReplayEvent>();
+
+    /// <summary>
+    /// Co-op roster (v6+). One entry per player registered to the lobby.
+    /// Lets the replay viewer color-code taps + clear animations by mapping
+    /// <see cref="ReplayEvent.playerId"/> to a display name and color.
+    /// Null in solo replays — solo writers don't populate this.
+    /// </summary>
+    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+    public List<ReplayRosterEntry> roster;
 
     /// <summary>
     /// Solve time in seconds at board completion. -1 if the game is still in progress.
