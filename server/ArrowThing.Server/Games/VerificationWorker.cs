@@ -220,7 +220,7 @@ public class VerificationWorker : BackgroundService
                 existing.Seed = replay.seed;
                 existing.MaxArrowLength = replay.maxArrowLength;
                 existing.Time = verifyResult.VerifiedTime;
-                existing.ReplayJson = storedReplayJson;
+                ReplayStorage.Set(existing, storedReplayJson);
                 existing.UpdatedAt = now;
             }
             else
@@ -235,10 +235,10 @@ public class VerificationWorker : BackgroundService
                     BoardHeight = replay.boardHeight,
                     MaxArrowLength = replay.maxArrowLength,
                     Time = verifyResult.VerifiedTime,
-                    ReplayJson = storedReplayJson,
                     CreatedAt = now,
                     UpdatedAt = now,
                 };
+                ReplayStorage.Set(score, storedReplayJson);
                 db.Scores.Add(score);
             }
 
@@ -301,9 +301,15 @@ public class VerificationWorker : BackgroundService
             .Take(1)
             .FirstOrDefaultAsync();
 
-        if (displaced != null && HasSnapshot(displaced.ReplayJson))
+        if (displaced == null)
+            return;
+
+        // Read via the dual-column helper so the displaced row is rewritten
+        // into the gzipped column even if it was a legacy text-only row.
+        var current = ReplayStorage.Get(displaced);
+        if (HasSnapshot(current))
         {
-            displaced.ReplayJson = StripSnapshot(displaced.ReplayJson);
+            ReplayStorage.Set(displaced, StripSnapshot(current));
             await db.SaveChangesAsync();
         }
     }

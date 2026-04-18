@@ -16,7 +16,7 @@ public class LobbyService
 
     private const int MaxActiveLobbiesPerOwner = 5;
     public const int MaxRegistrationsPerUser = 50;
-    public const int MinBoardDimension = 100;
+    public const int MinBoardDimension = 20;
     public const int MaxBoardDimension = 400;
 
     // Rate limit: creating 400x400 boards is CPU-heavy. Block delete-and-recreate

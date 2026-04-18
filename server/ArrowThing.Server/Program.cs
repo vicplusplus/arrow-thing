@@ -163,6 +163,24 @@ builder.Services.AddCors(options =>
         }
     );
 });
+
+// Response compression for the JSON-heavy read endpoints. Brotli > Gzip when
+// both are accepted; falls back to Gzip for older clients. Replays + the
+// global leaderboard are the largest payloads; all JSON paths benefit.
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProvider>();
+    options.Providers.Add<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProvider>();
+    options.MimeTypes = ["application/json", "application/json; charset=utf-8", "text/json"];
+});
+builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProviderOptions>(
+    o => o.Level = System.IO.Compression.CompressionLevel.Fastest
+);
+builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProviderOptions>(
+    o => o.Level = System.IO.Compression.CompressionLevel.Fastest
+);
+
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<AuditLogService>();
 builder.Services.AddScoped<RefreshTokenService>();
@@ -178,6 +196,10 @@ builder.Services.Configure<LobbyOptions>(builder.Configuration.GetSection("Lobby
 builder.Services.AddSingleton<LeaderboardCache>(sp => new LeaderboardCache(
     sp.GetService<IConnectionMultiplexer>()
 ));
+
+// Phase 4: lazy backfill of legacy ReplayJson text rows into the gzipped
+// bytea column. Idempotent — exits when no rows remain.
+builder.Services.AddHostedService<ArrowThing.Server.Games.ReplayBackfillService>();
 
 // Production-secret guard. Must run after all config sources have been added so the
 // Jwt:Secret / Admin:ApiKey values are visible. Blocks deploys that boot with empty,
@@ -310,6 +332,10 @@ app.UseSerilogRequestLogging(opts =>
 app.UseWebSockets();
 
 // CORS before auth so preflights don't need a JWT.
+// Response compression must be early in the pipeline so it sees the body
+// before serialization is finalized. Sits before CORS/auth/etc.
+app.UseResponseCompression();
+
 app.UseCors(CorsPolicyName);
 
 // Defense-in-depth CSRF check: mutating verbs on cookie-authed requests
