@@ -140,11 +140,10 @@ public class ApiClient
         // Cookie mode persists nothing about the token itself — the browser
         // holds it. We still track the displayName / email locally so the UI
         // can render before the first /me call.
-        if (!UseCookieAuth)
-        {
-            Token = PlayerPrefs.GetString(TokenPrefKey, "");
-            RefreshToken = PlayerPrefs.GetString(RefreshTokenPrefKey, "");
-        }
+#if !UNITY_WEBGL || UNITY_EDITOR
+        Token = PlayerPrefs.GetString(TokenPrefKey, "");
+        RefreshToken = PlayerPrefs.GetString(RefreshTokenPrefKey, "");
+#endif
         DisplayName = PlayerPrefs.GetString(DisplayNamePrefKey, "");
         Email = PlayerPrefs.GetString(EmailPrefKey, "");
     }
