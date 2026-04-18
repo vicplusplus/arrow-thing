@@ -370,6 +370,121 @@ public sealed class GameController : MonoBehaviour
 
     // --- Co-op mode setup ---
 
+    /// <summary>
+    /// Completed-lobby path: fetch the v6 replay once, synthesize a roster
+    /// from its header, and render the results overlay. Skips all the
+    /// board/camera/input/WS plumbing — this view is read-only and static.
+    /// </summary>
+    private IEnumerator CoopCompletedSetup(ApiClient api)
+    {
+        var fetchTask = api.GetLobbyReplayAsync(_coopLobbyCode);
+        while (!fetchTask.IsCompleted)
+            yield return null;
+
+        var result = fetchTask.Result;
+        if (!result.Success || result.Data == null)
+        {
+            HideLoading();
+            if (GlobalToast.Instance != null)
+                GlobalToast.Instance.ShowError(result.Error ?? "Replay unavailable");
+            SceneNav.Pop();
+            yield break;
+        }
+
+        var replay = result.Data;
+        var roster = new Dictionary<Guid, CoopPlayer>();
+
+        // Count per-player clears from events.
+        var countsByPlayer = new Dictionary<Guid, int>();
+        if (replay.events != null)
+        {
+            foreach (var evt in replay.events)
+            {
+                if (evt.type == ReplayEventType.Clear && evt.playerId != null)
+                {
+                    countsByPlayer.TryGetValue(evt.playerId.Value, out int c);
+                    countsByPlayer[evt.playerId.Value] = c + 1;
+                }
+            }
+        }
+
+        if (replay.roster != null)
+        {
+            foreach (var entry in replay.roster)
+            {
+                countsByPlayer.TryGetValue(entry.playerId, out int clears);
+                var color = ParseHex(entry.color);
+                roster[entry.playerId] = new CoopPlayer(
+                    entry.playerId,
+                    entry.displayName,
+                    color,
+                    clears,
+                    accumulatedMillis: 0,
+                    online: false,
+                    isLocal: entry.playerId == _coopUserId
+                );
+            }
+        }
+
+        // Best-effort: identify the local player. The replay endpoint
+        // requires registration, so we expect one of the roster entries
+        // to be us — match against the display name saved in PlayerPrefs
+        // since we don't have a guaranteed user-id source here.
+        if (_coopUserId == Guid.Empty && replay.roster != null)
+        {
+            foreach (var entry in replay.roster)
+            {
+                if (entry.displayName == GameSettings.DisplayName)
+                {
+                    _coopUserId = entry.playerId;
+                    if (roster.TryGetValue(entry.playerId, out var p))
+                        roster[entry.playerId] = p.With();
+                    break;
+                }
+            }
+        }
+
+        HideLoading();
+
+        if (hudUIDocument != null && hudUIDocument.rootVisualElement != null)
+        {
+            _coopResults = new CoopResultsScreen(
+                hudUIDocument.rootVisualElement,
+                roster,
+                _coopUserId,
+                _coopLobbyCode,
+                onViewReplay: () =>
+                {
+                    GameSettings.StartReplay(replay);
+                    SceneNav.Push("Replay");
+                }
+            );
+            _coopResults.Show();
+        }
+    }
+
+    private static Color32 ParseHex(string hex)
+    {
+        if (string.IsNullOrEmpty(hex))
+            return new Color32(255, 255, 255, 255);
+        var s = hex.StartsWith("#") ? hex.Substring(1) : hex;
+        if (s.Length != 6)
+            return new Color32(255, 255, 255, 255);
+        try
+        {
+            return new Color32(
+                Convert.ToByte(s.Substring(0, 2), 16),
+                Convert.ToByte(s.Substring(2, 2), 16),
+                Convert.ToByte(s.Substring(4, 2), 16),
+                255
+            );
+        }
+        catch
+        {
+            return new Color32(255, 255, 255, 255);
+        }
+    }
+
     private IEnumerator CoopSetup()
     {
         ResolveHudElements();
@@ -381,6 +496,16 @@ public sealed class GameController : MonoBehaviour
         {
             Debug.LogError("[GameController] Co-op mode requires login.");
             SceneNav.Pop();
+            yield break;
+        }
+
+        // Completed-lobby path: skip the WS game-state flow and instead
+        // fetch the v6 replay to render the results screen. Set by
+        // CoopHubController when the user opens a Completed lobby.
+        if (GameSettings.IsCompletedLobbyView)
+        {
+            GameSettings.IsCompletedLobbyView = false;
+            yield return CoopCompletedSetup(api);
             yield break;
         }
 
