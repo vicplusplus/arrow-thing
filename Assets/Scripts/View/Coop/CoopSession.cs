@@ -40,9 +40,6 @@ public sealed class CoopSession : IDisposable
     /// <summary>Fired when the last arrow is cleared and the server broadcasts completion.</summary>
     public event Action LobbyCompleted;
 
-    /// <summary>Fired when the WS connection is re-establishing. bool=true while reconnecting, false on reconnect.</summary>
-    public event Action<bool> Reconnecting;
-
     private long _nextClientSeq;
     private bool _disposed;
 
