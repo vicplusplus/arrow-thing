@@ -25,9 +25,16 @@ public sealed class CoopPlayerTimer
     /// <summary>Also emit right after a clear, throttled to this many ms.</summary>
     private const float PostClearEmitDelaySec = 0.1f;
 
+    /// <summary>
+    /// Pause the timer after this many seconds of no input. Keeps effort
+    /// time accurate when a player walks away with the tab focused.
+    /// </summary>
+    public const float IdleTimeoutSec = 60f;
+
     private readonly Action<long> _emit;
     private readonly Func<bool> _isFocusedProvider;
     private readonly Func<float> _timeProvider;
+    private readonly Func<DateTime> _lastInputProvider;
     private long _accumulatedMillis;
     private bool _started;
     private bool _disposed;
@@ -40,10 +47,14 @@ public sealed class CoopPlayerTimer
 
     /// <summary>
     /// Wire the timer to a CoopClient. This is the production constructor;
-    /// tests use the <see cref="CoopPlayerTimer(Action{long}, Func{bool}, Func{float})"/>
+    /// tests use the <see cref="CoopPlayerTimer(Action{long}, Func{bool}, Func{float}, Func{DateTime})"/>
     /// overload to stub I/O + clock.
     /// </summary>
-    public CoopPlayerTimer(CoopClient client, Func<bool> isFocusedProvider = null)
+    public CoopPlayerTimer(
+        CoopClient client,
+        Func<bool> isFocusedProvider = null,
+        Func<DateTime> lastInputProvider = null
+    )
         : this(
             emit: millis =>
             {
@@ -57,23 +68,24 @@ public sealed class CoopPlayerTimer
                 }
             },
             isFocusedProvider: isFocusedProvider,
-            timeProvider: () => Time.unscaledTime
+            timeProvider: () => Time.unscaledTime,
+            lastInputProvider: lastInputProvider
         ) { }
 
     /// <summary>
-    /// Testable constructor: <paramref name="emit"/> receives accumulated
-    /// millis each time the timer decides to report, <paramref name="timeProvider"/>
-    /// supplies a stubbable clock (seconds).
+    /// Testable constructor. All providers stubbable.
     /// </summary>
     public CoopPlayerTimer(
         Action<long> emit,
         Func<bool> isFocusedProvider = null,
-        Func<float> timeProvider = null
+        Func<float> timeProvider = null,
+        Func<DateTime> lastInputProvider = null
     )
     {
         _emit = emit ?? throw new ArgumentNullException(nameof(emit));
         _isFocusedProvider = isFocusedProvider ?? (() => Application.isFocused);
         _timeProvider = timeProvider ?? (() => Time.unscaledTime);
+        _lastInputProvider = lastInputProvider;
     }
 
     /// <summary>Mark the timer as started. Idempotent.</summary>
@@ -84,7 +96,11 @@ public sealed class CoopPlayerTimer
 
     /// <summary>
     /// Advance the timer by <paramref name="deltaSeconds"/>. No-op when not
-    /// started, disposed, or while the focus provider returns false.
+    /// started, disposed, while unfocused, or when idle — idle means the
+    /// last input was more than <see cref="IdleTimeoutSec"/> seconds ago
+    /// (only checked if a last-input provider was supplied). The idle
+    /// condition pauses effort-time tracking for players who walk away
+    /// without alt-tabbing.
     /// </summary>
     public void Tick(float deltaSeconds)
     {
@@ -92,6 +108,12 @@ public sealed class CoopPlayerTimer
             return;
         if (!_isFocusedProvider())
             return;
+        if (_lastInputProvider != null)
+        {
+            var idleSec = (DateTime.UtcNow - _lastInputProvider()).TotalSeconds;
+            if (idleSec > IdleTimeoutSec)
+                return;
+        }
 
         _accumulatedMillis += (long)(deltaSeconds * 1000.0);
         _emitAccum += deltaSeconds;

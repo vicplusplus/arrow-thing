@@ -549,7 +549,15 @@ public sealed class GameController : MonoBehaviour
             parent: transform
         );
 
-        _coopPlayerTimer = new CoopPlayerTimer(_coopClient);
+        // Pass the input handler's last-input timestamp so the timer pauses
+        // during extended idle even when the window keeps focus. Purely
+        // local; not surfaced as a UI status.
+        _coopPlayerTimer = new CoopPlayerTimer(
+            _coopClient,
+            isFocusedProvider: () => Application.isFocused,
+            lastInputProvider: () =>
+                _inputHandler != null ? _inputHandler.LastInputTimeUtc : DateTime.UtcNow
+        );
 
         // Create the session wrapper + wire server event handlers.
         _coopSession = new CoopSession(_coopClient, _board, _coopUserId);

@@ -11,6 +11,7 @@ public class CoopPlayerTimerTests
     private List<long> _emitted;
     private float _nowSec;
     private bool _focused;
+    private System.DateTime _lastInput;
     private CoopPlayerTimer _timer;
 
     [SetUp]
@@ -19,6 +20,7 @@ public class CoopPlayerTimerTests
         _emitted = new List<long>();
         _nowSec = 0f;
         _focused = true;
+        _lastInput = System.DateTime.UtcNow;
         _timer = new CoopPlayerTimer(
             emit: millis => _emitted.Add(millis),
             isFocusedProvider: () => _focused,
@@ -124,5 +126,36 @@ public class CoopPlayerTimerTests
         _timer.Dispose();
         Advance(10f); // should NOT emit
         Assert.AreEqual(1, _emitted.Count);
+    }
+
+    [Test]
+    public void Tick_PausesWhenLastInputIsOlderThanIdleTimeout()
+    {
+        // Rebuild timer with an input-timestamp provider.
+        var timer = new CoopPlayerTimer(
+            emit: millis => _emitted.Add(millis),
+            isFocusedProvider: () => _focused,
+            timeProvider: () => _nowSec,
+            lastInputProvider: () => _lastInput
+        );
+        timer.Start();
+
+        _lastInput = System.DateTime.UtcNow;
+        _nowSec += 1f;
+        timer.Tick(1f);
+        Assert.AreEqual(1000, timer.AccumulatedMillis);
+
+        // Simulate 61 s of wall-clock idle — last input is now older than
+        // the idle timeout.
+        _lastInput = System.DateTime.UtcNow - System.TimeSpan.FromSeconds(61);
+        _nowSec += 10f;
+        timer.Tick(10f);
+        Assert.AreEqual(1000, timer.AccumulatedMillis, "Timer should not accumulate while idle");
+
+        // Fresh input resumes the timer.
+        _lastInput = System.DateTime.UtcNow;
+        _nowSec += 2f;
+        timer.Tick(2f);
+        Assert.AreEqual(3000, timer.AccumulatedMillis);
     }
 }
