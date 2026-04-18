@@ -36,11 +36,13 @@ public class LobbyService
     private readonly AppDbContext _db;
     private readonly LobbyOptions _options;
     private readonly IConnectionMultiplexer? _redis;
+    private readonly CoopMetrics _metrics;
     private readonly ILogger<LobbyService> _logger;
 
     public LobbyService(
         AppDbContext db,
         IOptions<LobbyOptions> options,
+        CoopMetrics metrics,
         ILogger<LobbyService> logger,
         IConnectionMultiplexer? redis = null
     )
@@ -48,6 +50,7 @@ public class LobbyService
         _db = db;
         _options = options.Value;
         _redis = redis;
+        _metrics = metrics;
         _logger = logger;
     }
 
@@ -164,6 +167,7 @@ public class LobbyService
         );
         await _db.SaveChangesAsync();
 
+        _metrics.LobbiesCreated.Add(1);
         await EnqueueGenerationJobAsync(lobby);
 
         return (BuildResponse(lobby, owner.DisplayName), 201, null);
@@ -208,6 +212,7 @@ public class LobbyService
         lobby.LastActivityAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
+        _metrics.GenerationRetries.Add(1);
         await EnqueueGenerationJobAsync(lobby);
 
         return (new MessageResponse("Generation re-enqueued."), 200, null);
