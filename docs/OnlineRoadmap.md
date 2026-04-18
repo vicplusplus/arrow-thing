@@ -146,9 +146,9 @@ Email-based authentication with verification, password reset, and email change f
 
 ## Planned Features
 
-### Co-op boards
+### Co-op boards — **implemented**
 
-Persistent shared puzzles that any number of registered players can chip away at, in real time when they overlap and asynchronously when they don't. Per-player timer and clear count, live sidebar, per-lobby results screen (no global co-op leaderboard). Built on a new WebSocket session layer on top of the existing REST server. Design and phased implementation plan: [`docs/CoopRoadmap.md`](CoopRoadmap.md). Status: designed only, no phases merged yet.
+Shipped through the eight-phase plan in [`docs/CoopRoadmap.md`](CoopRoadmap.md). Persistent shared puzzles that any number of registered players can chip away at, in real time when they overlap and asynchronously when they don't. Per-player timer + clear count with a live sidebar, per-lobby results screen, snapshot-based replay playback with playerId tinting. Built on a new WebSocket session layer on top of the existing REST server. See the CoopRoadmap for the phase-by-phase status; `docs/TechnicalDesign.md § Co-op Server` is the authoritative architecture reference.
 
 ### PvP
 
