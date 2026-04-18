@@ -25,22 +25,55 @@ public sealed class CoopPlayerTimer
     /// <summary>Also emit right after a clear, throttled to this many ms.</summary>
     private const float PostClearEmitDelaySec = 0.1f;
 
-    private readonly CoopClient _client;
+    private readonly Action<long> _emit;
+    private readonly Func<bool> _isFocusedProvider;
+    private readonly Func<float> _timeProvider;
     private long _accumulatedMillis;
     private bool _started;
     private bool _disposed;
     private float _emitAccum;
     private bool _scheduledPostClearEmit;
     private float _postClearEmitAt;
-    private Func<bool> _isFocusedProvider;
 
     public long AccumulatedMillis => _accumulatedMillis;
     public bool IsRunning => _started && !_disposed;
 
+    /// <summary>
+    /// Wire the timer to a CoopClient. This is the production constructor;
+    /// tests use the <see cref="CoopPlayerTimer(Action{long}, Func{bool}, Func{float})"/>
+    /// overload to stub I/O + clock.
+    /// </summary>
     public CoopPlayerTimer(CoopClient client, Func<bool> isFocusedProvider = null)
+        : this(
+            emit: millis =>
+            {
+                try
+                {
+                    _ = client.SendAsync(CoopMessage.TimerUpdate(millis));
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[CoopPlayerTimer] Failed to send timer_update: {e.Message}");
+                }
+            },
+            isFocusedProvider: isFocusedProvider,
+            timeProvider: () => Time.unscaledTime
+        ) { }
+
+    /// <summary>
+    /// Testable constructor: <paramref name="emit"/> receives accumulated
+    /// millis each time the timer decides to report, <paramref name="timeProvider"/>
+    /// supplies a stubbable clock (seconds).
+    /// </summary>
+    public CoopPlayerTimer(
+        Action<long> emit,
+        Func<bool> isFocusedProvider = null,
+        Func<float> timeProvider = null
+    )
     {
-        _client = client;
+        _emit = emit ?? throw new ArgumentNullException(nameof(emit));
         _isFocusedProvider = isFocusedProvider ?? (() => Application.isFocused);
+        _timeProvider = timeProvider ?? (() => Time.unscaledTime);
     }
 
     /// <summary>Mark the timer as started. Idempotent.</summary>
@@ -63,7 +96,7 @@ public sealed class CoopPlayerTimer
         _accumulatedMillis += (long)(deltaSeconds * 1000.0);
         _emitAccum += deltaSeconds;
 
-        if (_scheduledPostClearEmit && Time.unscaledTime >= _postClearEmitAt)
+        if (_scheduledPostClearEmit && _timeProvider() >= _postClearEmitAt)
         {
             _scheduledPostClearEmit = false;
             EmitNow();
@@ -85,7 +118,7 @@ public sealed class CoopPlayerTimer
         if (!_started)
             Start();
         _scheduledPostClearEmit = true;
-        _postClearEmitAt = Time.unscaledTime + PostClearEmitDelaySec;
+        _postClearEmitAt = _timeProvider() + PostClearEmitDelaySec;
     }
 
     /// <summary>
@@ -97,14 +130,7 @@ public sealed class CoopPlayerTimer
         _emitAccum = 0f;
         if (_disposed)
             return;
-        try
-        {
-            _ = _client.SendAsync(CoopMessage.TimerUpdate(_accumulatedMillis));
-        }
-        catch (Exception e)
-        {
-            Debug.LogWarning($"[CoopPlayerTimer] Failed to send timer_update: {e.Message}");
-        }
+        _emit(_accumulatedMillis);
     }
 
     public void Dispose()
