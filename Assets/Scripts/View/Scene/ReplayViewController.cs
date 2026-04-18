@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -41,6 +42,7 @@ public sealed class ReplayViewController : MonoBehaviour
     private CameraController _camCtrl;
     private ReplayPlayer _player;
     private ReplayData _replayData;
+    private Dictionary<Guid, Color> _rosterColors;
 
     // UI elements
     private VisualElement _loadingOverlay;
@@ -104,6 +106,16 @@ public sealed class ReplayViewController : MonoBehaviour
             return;
         }
 
+        // Build the playerId → color map up front for v6 co-op replays.
+        // Solo replays leave replay.roster null, so the lookup stays empty
+        // and ColorForPlayer returns white.
+        _rosterColors = new Dictionary<Guid, Color>();
+        if (_replayData.roster != null)
+        {
+            foreach (var entry in _replayData.roster)
+                _rosterColors[entry.playerId] = ParseHexColor(entry.color);
+        }
+
         if (mainCamera == null)
             mainCamera = Camera.main;
         if (mainCamera != null)
@@ -142,6 +154,40 @@ public sealed class ReplayViewController : MonoBehaviour
         {
             var (clearColor, rejectColor) = TapColorsForTheme(theme);
             _tapPool.UpdateColors(clearColor, rejectColor);
+        }
+    }
+
+    /// <summary>
+    /// Look up a player's color from the replay's roster (v6+). Returns
+    /// white when unknown — makes solo replays a no-op since their
+    /// <c>playerId</c> is null and this isn't called.
+    /// </summary>
+    private Color ColorForPlayer(Guid playerId)
+    {
+        if (_rosterColors != null && _rosterColors.TryGetValue(playerId, out var c))
+            return c;
+        return Color.white;
+    }
+
+    private static Color ParseHexColor(string hex)
+    {
+        if (string.IsNullOrEmpty(hex))
+            return Color.white;
+        var s = hex.StartsWith("#") ? hex.Substring(1) : hex;
+        if (s.Length != 6)
+            return Color.white;
+        try
+        {
+            return new Color(
+                Convert.ToByte(s.Substring(0, 2), 16) / 255f,
+                Convert.ToByte(s.Substring(2, 2), 16) / 255f,
+                Convert.ToByte(s.Substring(4, 2), 16) / 255f,
+                1f
+            );
+        }
+        catch
+        {
+            return Color.white;
         }
     }
 
@@ -706,13 +752,20 @@ public sealed class ReplayViewController : MonoBehaviour
         {
             var worldPos = new Vector3(evt.posX ?? 0f, evt.posY ?? 0f, 0f);
             Cell cell = BoardCoords.WorldToCell(worldPos, _board.Width, _board.Height);
+            // Co-op replays (v6) carry an optional playerId; resolve the
+            // clearer's color from the replay roster so the pull-out + tap
+            // ring animate in their color. Solo replays leave playerId null,
+            // which yields a null flashColor and defaults behavior unchanged.
+            Color? flashColor = evt.playerId.HasValue
+                ? ColorForPlayer(evt.playerId.Value)
+                : (Color?)null;
+
             if (_board.Contains(cell))
             {
                 Arrow arrow = _board.GetArrowAt(cell);
                 if (arrow != null && _board.IsClearable(arrow))
                 {
-                    // Animated pull-out, then domain removal
-                    _boardView.ClearArrowAnimated(arrow);
+                    _boardView.ClearArrowAnimated(arrow, flashColor);
                     _board.RemoveArrow(arrow);
                 }
                 else
@@ -730,7 +783,12 @@ public sealed class ReplayViewController : MonoBehaviour
             }
 
             if (_tapPool != null)
-                _tapPool.Spawn(worldPos, false);
+            {
+                if (flashColor.HasValue)
+                    _tapPool.Spawn(worldPos, flashColor.Value);
+                else
+                    _tapPool.Spawn(worldPos, false);
+            }
 
             if (_highlightActive)
                 _boardView.UpdateClearableHighlights(_board, showTrails: true);

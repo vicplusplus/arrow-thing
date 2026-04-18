@@ -826,6 +826,12 @@ public sealed class CoopHubController : NavigableScene
             mainBtn.AddToClassList("lobby-row__open-btn");
             row.Add(mainBtn);
         }
+        else if (entry.status == 2) // Completed → view results
+        {
+            mainBtn = new Button(() => OnOpenLobby(entry.code, entry.status)) { text = "Results" };
+            mainBtn.AddToClassList("lobby-row__open-btn");
+            row.Add(mainBtn);
+        }
 
         // Delete button (owner only, non-completed)
         Button deleteBtn = null;
@@ -1047,10 +1053,11 @@ public sealed class CoopHubController : NavigableScene
                     GlobalToast.Instance.ShowError("Connection failed.");
             }
         }
-        else if (status == 2) // Completed
+        else if (status == 2) // Completed — show final results
         {
-            ShowError(_joinError, "This lobby has already been completed.");
-            _joinModal.RemoveFromClassList("modal--hidden");
+            GameSettings.ActiveLobbyCode = code;
+            GameSettings.IsCompletedLobbyView = true;
+            SceneNav.Push("Game");
         }
         else if (status == 3) // GenerationFailed
         {
@@ -1075,6 +1082,12 @@ public sealed class CoopHubController : NavigableScene
         {
             OpenHostingModal(code);
             _ = ConnectHostingClientAsync(code);
+        }
+        else if (status == 2) // Completed — show results from persisted replay
+        {
+            GameSettings.ActiveLobbyCode = code;
+            GameSettings.IsCompletedLobbyView = true;
+            SceneNav.Push("Game");
         }
     }
 

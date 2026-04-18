@@ -644,6 +644,34 @@ public class ApiClient
     }
 
     /// <summary>
+    /// Fetches the v6 co-op replay for the given lobby. Caller must be
+    /// registered in the lobby; 403 on non-participants, 404 on missing
+    /// lobby, 410 on stripped snapshot.
+    /// </summary>
+    public async Task<ApiResult<ReplayData>> GetLobbyReplayAsync(string code)
+    {
+        try
+        {
+            using var request = await SendAuthenticatedAsync(() =>
+                UnityWebRequest.Get($"{_baseUrl}/api/lobbies/{code}/replay")
+            );
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var body = request.downloadHandler.text;
+                var replay = Newtonsoft.Json.JsonConvert.DeserializeObject<ReplayData>(body);
+                return ApiResult<ReplayData>.Ok(replay);
+            }
+            var error = TryParseError(request.downloadHandler.text);
+            return ApiResult<ReplayData>.Fail(request.responseCode, error);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] GetLobbyReplay failed: {e.Message}");
+            return ApiResult<ReplayData>.Fail(0, "Network error");
+        }
+    }
+
+    /// <summary>
     /// Logs out locally. Best-effort fires <c>POST /api/auth/logout</c> to
     /// revoke the refresh token server-side; even if that call fails (offline,
     /// 5xx) the local session is still cleared so the user can sign back in.

@@ -565,7 +565,15 @@ Implementation notes vs. original plan:
 
 **Risk.** Medium. Per-player attribution touches the hot rendering path (tap indicators, clear animation). The timer's AFK detection is easy to get wrong — verify against the spec with EditMode tests before manual testing.
 
-### Phase 8 — Completion, results, replay v3, retention
+### Phase 8 — Completion, results, replay v6, retention
+
+**Status.** Implemented. Lobby completion shows a full-roster results overlay; Completed lobbies reopen into that same overlay from the hub without a WS session; co-op replays are fetched on demand in v6 format (per-event `playerId` + roster header) and play back with per-player tint; retention jobs strip old snapshots and reap idle lobbies daily.
+
+Deviations from the original roadmap:
+- **Replay format is v6, not v3.** Solo was already at v5 when P8 started. The bump is strictly additive — `roster` + per-event `playerId` are nullable with `NullValueHandling.Ignore`, so older readers see no new fields. There is no co-op-only schema; it's one unified format.
+- **No cached replay blob.** `LobbyReplayService.BuildAsync` constructs the v6 payload on request from `LobbySnapshots` + `LobbyEvents` + `LobbyRegistrations`. Traffic doesn't warrant a cache; the gzip storage PR gives us HTTP response compression for free.
+- **Results screen lives in `GameController`**, not a separate scene. Mounted on `LobbyCompleted` in live play, and via `GameSettings.IsCompletedLobbyView` + `CoopCompletedSetup` when the user reopens a Completed lobby from the hub (no WS in that path).
+- **Retention is always-on.** No feature flag. Hardcoded 30-day windows. `LobbyRetentionService : BackgroundService` with a 15-min initial delay + 24 h cadence.
 
 **Goal.** Close the loop. Results screen on lobby completion, read-only post-completion mode, unified co-op replay support, and the background jobs for snapshot stripping and idle-lobby TTL.
 

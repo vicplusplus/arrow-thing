@@ -189,6 +189,7 @@ builder.Services.AddScoped<GameService>();
 builder.Services.AddScoped<LeaderboardService>();
 builder.Services.AddScoped<LobbyService>();
 builder.Services.AddScoped<LobbySnapshotRepository>();
+builder.Services.AddScoped<LobbyReplayService>();
 builder.Services.AddSingleton<AccountConcurrencyLimiter>();
 builder.Services.AddSingleton<GenerationProgressBus>();
 builder.Services.AddSingleton<CoopHub>();
@@ -200,6 +201,7 @@ builder.Services.AddSingleton<LeaderboardCache>(sp => new LeaderboardCache(
 // Phase 4: lazy backfill of legacy ReplayJson text rows into the gzipped
 // bytea column. Idempotent — exits when no rows remain.
 builder.Services.AddHostedService<ArrowThing.Server.Games.ReplayBackfillService>();
+builder.Services.AddHostedService<LobbyRetentionService>();
 
 // Production-secret guard. Must run after all config sources have been added so the
 // Jwt:Secret / Admin:ApiKey values are visible. Blocks deploys that boot with empty,
@@ -912,6 +914,23 @@ app.MapGet(
             return response != null
                 ? Results.Ok(response)
                 : Results.Json(new { error }, statusCode: status);
+        }
+    )
+    .RequireAuthorization();
+
+app.MapGet(
+        "/api/lobbies/{code}/replay",
+        async (string code, LobbyReplayService replays, ClaimsPrincipal user) =>
+        {
+            var userId = Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var (replay, status, error) = await replays.BuildAsync(code, userId);
+            if (replay == null)
+                return Results.Json(new { error }, statusCode: status);
+            // ReplayData uses public fields, which System.Text.Json's default
+            // ASP.NET settings don't serialize. Round-trip through Newtonsoft
+            // (the canonical solo-save serializer) to keep wire + disk
+            // formats identical.
+            return Results.Content(replay.ToJson(), "application/json");
         }
     )
     .RequireAuthorization();

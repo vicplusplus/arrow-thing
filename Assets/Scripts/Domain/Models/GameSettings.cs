@@ -112,6 +112,14 @@ public static class GameSettings
     /// </summary>
     public static string ActiveLobbyCode { get; set; }
 
+    /// <summary>
+    /// When true, the next Game-scene load is expected to render a
+    /// completed lobby's final results (not a live WS session). Set by
+    /// CoopHubController when the user opens a Completed lobby from the
+    /// hub. Cleared when consumed by GameController.
+    /// </summary>
+    public static bool IsCompletedLobbyView { get; set; }
+
     /// <summary>Returns and clears PendingLobbyCode in one call.</summary>
     public static string ConsumePendingLobbyCode()
     {
@@ -137,6 +145,7 @@ public static class GameSettings
         ReplaySource = null;
         LeaderboardFocusGameId = null;
         PendingLobbyCode = null;
+        IsCompletedLobbyView = false;
         ActiveLobbyCode = null;
         Width = 0;
         Height = 0;
