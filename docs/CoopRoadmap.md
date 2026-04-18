@@ -529,6 +529,17 @@ Implementation notes vs. original plan:
 
 ### Phase 7 — Sidebar + per-player attribution + timer + tap propagation
 
+**Status.** Implemented. Live roster sidebar with top-10 + overflow modal + narrow-viewport pill; per-player color on remote clear animations and tap indicators; per-player solve timer with focus-based pause; player-joined / rate-limited / reconnect-give-up toasts. AFK tracking dropped — just online/offline.
+
+Implementation notes vs. original plan:
+- **Incremental roster** (diff-patches after initial full snapshot), not per-event `player_joined`/`player_left`. Scales to hundreds of players; server coalesces changes within a 500 ms window per lobby.
+- **Drop AFK flag entirely.** De-facto spectators are a legitimate pattern; don't style them specially.
+- **Top 10 + "Show all" modal** instead of always-visible full list. Pinned own row at top even outside top 10. Narrow viewports (< 500 px) collapse into a player-count pill that opens the modal on tap.
+- **No HUD session timer** in co-op mode. Each player's own time lives in their sidebar row; there is no shared/global timer. (Solo mode's HUD timer is unchanged.)
+- **Cleared payload extended** with `newClearCount`, `color`, `displayName`. The sidebar updates the instant a `cleared` broadcast lands without waiting for the throttled `roster_patch` echo.
+- **Heartbeat watchdog** on the server: sweep every 10 s, close sockets with no heartbeat in 30 s. Close fires the receive-loop unwind which queues the offline roster patch.
+- **Toast set**: player joined (roster diff), slow-down (rate-limited, throttled to once per 3 s), "Lost connection — still retrying" after the 6th failed reconnect. No per-clear toasts.
+
 **Goal.** Make co-op feel like co-op. The live sidebar, per-player colors on tap indicators and clear animations, the AFK-aware timer, and toast notifications for critical events.
 
 **Work.**
