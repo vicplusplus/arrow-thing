@@ -1,85 +1,110 @@
 # Phase 7 — Sidebar + per-player attribution + timer + toasts
 
-Make co-op **feel** like co-op: live roster, colors on tap indicators and clear animations, AFK-aware timer, toasts.
+Make co-op **feel** like co-op: live roster, colors on tap indicators and clear animations, per-player timers, toasts.
 
-Building on Phase 6:
-- `CoopSession` already exists and routes `cleared` / `rejected_race` / `lobby_completed`. Add `Roster` state + `RosterUpdated` event.
-- Non-clearable taps filtered client-side — no broadcast — so tap propagation only covers accepted clears. Simpler than the original Phase 7 plan.
-- GameController carries co-op mode (no separate scene). Sidebar lives there.
+## Design decisions (resolved)
 
-## Open design decisions (resolve before implementing)
-
-1. **Roster transport.** Single `roster` broadcast with the full list, or incremental `player_joined` / `player_left` + `player_updated` for field changes? Pick one.
-   - **Proposal**: full `roster` on every change. Simpler; payload is tiny (≤ 50 entries × ~100 bytes).
-2. **Disconnected players.** Show greyed-out in sidebar or hide until reconnect? The 60 s eviction grace means they may reconnect.
-   - **Proposal**: show with dim/offline indicator; full remove only on explicit leave (if we ever add that) or lobby expiry.
-3. **Clear count authority.** Client-increments-on-RemoteCleared vs. server-ships-count-on-cleared.
-   - **Proposal**: server authoritative. Every `cleared` payload carries the clearer's new `clearCount`; simpler and resilient to dropped messages.
-4. **Timer AFK pause trigger.** Focus-loss OR 60 s idle, OR only focus-loss?
-   - **Proposal**: BOTH — pause on `visibilitychange` hidden OR 60 s since last input. Resume on focus + any input.
-5. **Sidebar visibility toggle.** Always-visible panel with collapse, or button-only-opens?
-   - **Proposal**: always-visible on wide screens (≥ 768 px wide), player-count pill on narrow. Collapse button on wide screens.
+1. **Roster transport — incremental.** Server sends `roster_full` on hello and `roster_patch` (only changed/added/removed entries) on subsequent changes. Scales to hundreds of players without multi-MB broadcasts.
+2. **Server-authoritative clear counts.** Every `cleared` payload carries the clearer's new `clearCount` + `color` + `displayName`. No client-side lookup.
+3. **Disconnected players stay visible** (dimmed) until lobby expiry. Offline detection via WebSocket close + heartbeat watchdog (~30 s without heartbeat → mark offline + broadcast patch).
+4. **No AFK tracking in Phase 7.** Drop it entirely; just online/offline. De-facto spectators are a feature, not an exception worth styling. Revisit if a future mode needs it.
+5. **Sidebar shows top 10 by clear count** (pinned own row always visible even if outside top 10) + a "Show all (N)" button that opens a scrollable modal with the full roster. Narrow viewport collapses sidebar into a player-count pill.
+6. **Only clears propagate.** Non-clearable taps are already filtered client-side (Phase 6 follow-up); blocked-tap attribution deferred to future no-failed-clears mode.
+7. **Remove the HUD timer in co-op.** Each player sees their own elapsed time in their sidebar row. No shared/global session timer.
 
 ## Architecture
 
 ### Server
-- **`CoopHub` additions**
-  - New `ConnectionEntry` fields: already have `Focused`, `LastInputAt`. Add `ClearCount` to `LobbyRegistration` (DB column already exists from Phase 3 schema? verify). Add `AccumulatedMillis` (already exists).
-  - On connect + registration: broadcast full `roster` with all registered-for-lobby users and their current state.
-  - On disconnect: broadcast `roster` (marks player offline; doesn't delete registration).
-  - On accepted clear: increment `LobbyRegistration.ClearCount`, update `FirstClearAt` if null. Include the clearer's current counts in a follow-up `roster` broadcast (piggybacked after the `cleared` event) OR on the cleared payload itself.
-    - **Decision**: put `newClearCount` + `color` + `displayName` on the `cleared` payload. Avoids a second round-trip for the common case.
-  - New message handler: `timer_update { accumulatedMillis, firstClearAt }`. Persists to registration, refreshes LastActivityAt. Echoed in next roster.
-  - Heartbeat handler already stamps `Focused` + `LastInputAt`. On roster rebuild, AFK = `!Focused || (now - LastInputAt) > 60 s`.
-  - Throttle roster broadcasts: at most once every 500 ms per lobby. Accumulate pending changes; flush on a timer.
 
-- **Wire envelopes (new in Phase 7)**
-  - `roster` (broadcast): `{ players: [{ userId, displayName, color, clearCount, accumulatedMillis, afk, online }] }`
-  - `timer_update` (client→server): `{ accumulatedMillis }` (server takes `now - joinedAt` for FirstClearAt implicitly)
-  - `player_joined` / `player_left`: **skip in favor of full roster rebroadcast.**
-  - `cleared` payload gains: `newClearCount`, `color`. Existing `playerId` stays. (Bumps payload size ~30 bytes per broadcast.)
+**New/changed `CoopHub` messages**
+- `roster_full { players: [...] }` — sent once per connection immediately after `snapshot`. Full list of all registered-for-lobby users with current state.
+- `roster_patch { upsert: [...], remove: [userId] }` — broadcast on any roster change. Field-level diffing is overkill; we send the full updated entry for any changed user. Throttle: max 1 patch / 500 ms per lobby (accumulate pending changes, flush on a timer).
+- `cleared` payload extended: add `newClearCount: int`, `color: string`, `displayName: string`. (`playerId` already present.) Client applies counts locally and uses color for the tap indicator + clear flash.
+- `timer_update { accumulatedMillis }` (client → server). Server persists to `LobbyRegistrations.AccumulatedMillis` + stamps `LastActivityAt`. Triggers a patch with the sender's updated time.
+
+**Server state**
+- `LobbyRegistrations` columns we already have: `UserId`, `DisplayNameAtJoin`, `ColorAtJoin`, `ClearCount`, `AccumulatedMillis`, `FirstClearAt`, `JoinedAt`, `LastActivityAt`. Good — no schema migration needed.
+- On accepted clear: `registration.ClearCount++`, set `FirstClearAt` if null. Echo new count on `cleared` + queue a roster patch.
+- On `timer_update`: validate `accumulatedMillis` is non-decreasing (prevent time-travel), persist, queue patch.
+- On connect / disconnect: queue patch with the player's `online` flag flipped.
+
+**Watchdog for zombie connections**
+- Each `ConnectionEntry` gains a `LastHeartbeatAt`. (Already has `LastInputAt`.)
+- Background timer per lobby (or a single hub-wide sweeper): every 10 s, check all entries; if `now - LastHeartbeatAt > 30 s`, treat the connection as dead — close the socket, remove from `room.Connections`, broadcast roster patch marking offline.
 
 ### Client
-- **`CoopSession.Roster`** — `IReadOnlyDictionary<Guid, CoopPlayer>`. `CoopPlayer { Id, DisplayName, Color (hex string → Color32), ClearCount, AccumulatedMillis, Afk, Online }`. `RosterUpdated` event fires on every roster broadcast.
-- **`CoopPlayerTimer.cs` (new, view layer)** — tracks local player's `AccumulatedMillis`. Starts on first local clear-attempt submission (listen via `CoopSession` or inject callback). Pauses on `Application.isFocused == false` OR 60 s since last `InputHandler.LastInputTimeUtc`. Ticks in `Update`. Emits `timer_update` every 5 s via `CoopClient`.
-- **`CoopSidebar.cs` (new)** — UIToolkit component built in code (or UXML, TBD). Subscribes to `Roster`. Re-renders on update. Pinned own row at top; others sorted by `ClearCount DESC`. Each row: color dot + name + clear count + timer (MM:SS). Afk rows dimmed with "(afk)" suffix. Offline rows dimmed.
-- **`CoopSidebar.uxml` + `CoopSidebar.uss`** — or stylesheets in existing `Assets/UI/Coop/Coop.uss`.
-- **Narrow layout** — when panel width < 768 px, sidebar collapses into a player-count pill top-right (shows count + highest-rank indicator). Pill tap opens full-screen list overlay. Reuses the Coop Hub list styling where possible.
-- **`TapIndicatorPool.Spawn`** — gains optional `Color` tint parameter. Existing solo callers unchanged (null = white for clears, red for rejects).
-- **`ArrowView.ClearAnimated`** — gains optional `Color?` flashColor; 150 ms tint-flash before the pull-out when set.
-- **`GameController` co-op mode**
-  - Instantiate `CoopSidebar`, wire `CoopSession.RosterUpdated` → `CoopSidebar.Render`.
-  - Instantiate `CoopPlayerTimer`, wire to `InputHandler.LastInputTimeUtc` and `CoopClient.SendAsync(timer_update)` every 5 s.
-  - On `CoopSession.RemoteCleared`:
-    - If `!evt.IsLocal`, play `ClearArrowAnimated(evt.Arrow, flashColor: evt.PlayerColor)`.
-    - Also spawn a tap indicator in `evt.PlayerColor` at `evt.TapWorld`.
-  - Toasts:
-    - `player_joined` (diff from previous roster to new) → "Alice joined"
-    - `lobby_completed` → existing toast already in place; change to use display name.
-    - Rate-limited (server `rejected_rate`) → "Slow down" toast.
-    - Reconnect failed after N attempts (already exists but as log) → promote to toast.
+
+**`CoopSession.Roster`**
+- `IReadOnlyDictionary<Guid, CoopPlayer>` on `CoopSession`.
+- `CoopPlayer { Id, DisplayName, Color (hex → Color32), ClearCount, AccumulatedMillis, Online, IsLocal }`.
+- Events: `RosterUpdated` (fires once per `roster_full` / `roster_patch`).
+- On `cleared` handler: before firing `RemoteCleared`, apply the payload's `newClearCount` + `color` + `displayName` to the roster entry (in case the patch hasn't arrived yet).
+
+**`CoopPlayerTimer.cs` (new, view layer)**
+- Local-only. Tracks `AccumulatedMillis` for the local player.
+- Starts ticking on first `CoopSession.TrySubmitClear` that actually sends (i.e. first accepted clear-attempt).
+- Ticks in `Update()` using `Time.unscaledDeltaTime * 1000`.
+- Stops ticking on `Application.isFocused == false` OR tab hidden via `visibilityChange` (WebGL). Resumes on refocus.
+- Every 5 s (or 100 ms after an accepted clear, to keep the sidebar snappy): emits `timer_update { accumulatedMillis }` via `CoopClient.SendAsync`.
+- Stops permanently on `LobbyCompleted` or `Dispose`.
+
+**`CoopSidebar.cs` (new, view layer)**
+- UIToolkit, attached into `GameController`'s co-op-mode UI tree.
+- Data-bound to `CoopSession.Roster`.
+- Row: `[color dot] [display name] [MM:SS] [clear count]`. Pinned self row at top; top 9 others sorted by `ClearCount DESC, AccumulatedMillis ASC`. If more than 10 players, show a `Show all (N)` button that opens a modal with the full roster.
+- Offline rows dim to 40 % opacity with a "(offline)" suffix.
+- Narrow viewport (< 768 px panel width): collapses into a player-count pill top-right. Tapping the pill opens the all-players modal.
+- Re-renders on `RosterUpdated`. Efficient: only diffs the player rows, not the whole list.
+
+**`CoopAllPlayersModal.cs`** — thin overlay that reuses `.list-screen` / `.list-scroll` styling from `Shared.uss`. Scrollable ListView-style, same row template as sidebar minus the "..." truncation.
+
+**Tint plumbing**
+- `TapIndicatorPool.Spawn(Vector3 worldPos, Color color)` — adds color param. Existing solo callers wrap with white (clear) / red (reject) constants.
+- `ArrowView.ClearAnimated(Color? flashColor = null)` — brief tint flash (150 ms) before pull-out when color set.
+- `BoardView.ClearArrowAnimated(arrow, Color? flashColor = null)` — plumbs through to ArrowView.
+
+**`GameController` co-op-mode changes**
+- **Skip timer HUD entirely** in co-op mode. Solo path unchanged.
+- Instantiate `CoopSidebar` and `CoopPlayerTimer`; wire `CoopSession.RosterUpdated` → sidebar re-render.
+- On `CoopSession.RemoteCleared`:
+  - If `!evt.IsLocal`: `boardView.ClearArrowAnimated(evt.Arrow, evt.Color)` + `tapIndicatorPool.Spawn(evt.TapWorld, evt.Color)`.
+  - Apply `newClearCount` to roster.
+- Toasts:
+  - `player_joined` (derived from roster diff): `{name} joined`. Skip for the local player.
+  - Rate-limited (`rejected_rate`): "Slow down" toast, throttled to once per 3 s.
+  - Reconnect-failed after retry budget: "Reconnecting..." during backoff, "Lost connection" after giving up.
+
+## Wire format
+
+```
+server → client:  welcome, snapshot, <binary snapshot>, roster_full, roster_patch*, cleared+, lobby_completed
+client → server:  hello, clear_attempt, timer_update, heartbeat
+private rejects:  rejected_race, rejected_dep, rejected_rate (unchanged from Phase 6)
+```
 
 ## Implementation stages
 
-1. **Server protocol**: add `roster` broadcast on connect/disconnect/timer_update/accepted-clear. Extend `cleared` payload with `newClearCount` + `color` + `displayName`. Add `timer_update` handler. Throttle roster flushes.
-2. **Client roster state**: `CoopSession.Roster` + `RosterUpdated`. Parse inbound `roster`. Apply server-authoritative `newClearCount`/`color` on `cleared`.
-3. **Tint plumbing**: `TapIndicatorPool.Spawn(color)`, `ArrowView.ClearAnimated(flashColor)`, `CoopSession.ClearedEvent.Color`. Wire through remote-cleared handler.
-4. **Sidebar UI**: `CoopSidebar.cs` + USS. Mount in `GameController` co-op mode. Narrow layout pill fallback.
-5. **Timer**: `CoopPlayerTimer.cs` with AFK pause. 5 s `timer_update` emission. Sidebar displays per-player elapsed.
-6. **Toasts**: diff-based join toast; promote reconnect-failed.
+1. **Server protocol**: `roster_full` on connect, `roster_patch` with 500 ms throttle on change, extended `cleared` payload, `timer_update` handler with monotone-check, heartbeat watchdog.
+2. **Client roster state**: `CoopSession.Roster` + events, parse `roster_full`/`roster_patch`, apply `cleared` payload fields.
+3. **Tint plumbing**: TapIndicatorPool + ArrowView color params; wire from `RemoteCleared` handler.
+4. **Sidebar + modal UI** with narrow-layout pill.
+5. **CoopPlayerTimer** with focus-based pause, 5 s emit.
+6. **Toasts**: player_joined diff, rate-limited, reconnect-failed.
 7. **Tests**
-   - xUnit: `timer_update` round-trip, `roster` broadcast shape, accepted-clear payload carries new fields.
-   - Unity EditMode: `CoopPlayerTimer` AFK pause/resume logic with fake clock.
-   - Manual: two tabs/accounts, verify sidebar rows update live, colors match, AFK indicator when one tab blurs, disconnect indicator when one closes then 60 s eviction.
-8. **Docs**: update `CoopRoadmap.md` Phase 7 with implemented notes; update `TechnicalDesign.md` `Co-op Server` section.
+   - xUnit: roster_full shape on hello, roster_patch on clear, cleared payload carries new fields, timer_update monotone rejection, heartbeat watchdog marks offline.
+   - Unity EditMode: `CoopPlayerTimer` focus-loss pause/resume with fake clock.
+   - Manual test cases below.
+8. **Docs**: Phase 7 `Implemented` note in CoopRoadmap, update TechnicalDesign co-op section, delete TODO.md.
 
 ## Manual test cases
 
-1. **Two clients, colors differ.** Both log in with distinct `CoopColor` values; sidebar shows both rows with correct dots.
-2. **Clear count increments.** Client A clears an arrow; both clients see A's count go up.
-3. **Timer per-player.** Client A clears first; A's timer starts ticking. Client B is idle; B's timer stays at 00:00.
-4. **AFK detection.** Client A goes idle (focus loss) for > 1 s; within 500 ms the heartbeat + roster broadcast flags A as AFK. When A returns (focus + tap), the flag clears.
-5. **Disconnect offline indicator.** Client A closes tab; within 2 s roster marks A offline. 60 s later, state evicts — A still shown as offline until lobby completion.
-6. **Remote clear tint.** Client A clears; client B sees the arrow pull-out flash in A's color.
-7. **Narrow viewport.** Resize < 768 px; sidebar collapses into pill; pill shows correct count; tap opens list overlay.
-8. **Player joined toast.** B joins after A is already connected; A sees a transient "B joined" toast.
+1. Two clients, distinct colors, both visible in sidebar with correct dots.
+2. Client A clears an arrow; both clients see A's clear count increment.
+3. Client B sees A's clear animation flash in A's color + a tap indicator in A's color.
+4. Client A's timer ticks in the sidebar during active play; pauses when A's tab blurs.
+5. Client A closes tab: within 30 s A's row shows (offline) dimmed. Row stays in the list.
+6. Client A reconnects: row re-colors to online.
+7. Narrow viewport: sidebar collapses into pill; tap opens full modal.
+8. 12 clients in a lobby: top 10 shown, "Show all (12)" button opens full modal. Own row is pinned at top even if outside top 10.
+9. No HUD timer visible in co-op mode.
+10. Solo mode HUD timer still works normally (regression check).
