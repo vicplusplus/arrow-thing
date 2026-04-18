@@ -242,22 +242,47 @@ public class CoopGameplayTests : IClassFixture<TestFactory>, IDisposable
     }
 
     [Fact]
-    public async Task ClearAttempt_NonClearable_BroadcastsRejectedDep()
+    public async Task ClearAttempt_NonClearable_PrivateRejectToSenderOnly()
     {
-        var (auth, lobby, board) = await SetupActiveLobbyAsync("clear-dep");
+        // Non-clearable taps should be filtered client-side, but if a
+        // misbehaving or cheating client sends one anyway the server rejects
+        // it privately — never broadcast, never persisted.
+        var (aliceAuth, lobby, board) = await SetupActiveLobbyAsync("clear-dep");
         var blocked = FindNonClearableArrow(board);
         if (blocked == null)
+            return; // board has no blocked arrows — skip
+
+        // Bob joins as a second player so we can confirm he receives no
+        // broadcast when Alice sends a non-clearable clear_attempt.
+        var bobAuth = await RegisterAndVerifyAsync($"clear-dep-b-{Guid.NewGuid():N}@example.com");
+        using var bobSocket = await ConnectAndHandshakeAsync(lobby.Code, bobAuth.Token);
+
+        using var aliceSocket = await ConnectAndHandshakeAsync(lobby.Code, aliceAuth.Token);
+        await SendClearAttemptAsync(aliceSocket, blocked.HeadCell, clientSeq: 1);
+
+        var aliceReply = await ReceiveTextAsync(aliceSocket);
+        Assert.Equal("rejected_dep", aliceReply.Type);
+
+        // Bob should see nothing for this attempt. Give the server a small
+        // window to broadcast if it were going to, then verify silence.
+        using var silenceCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        var gotBroadcast = false;
+        try
         {
-            // Tiny 20x20 boards might rarely have zero non-clearable arrows;
-            // skip in that case rather than fail.
-            return;
+            var buffer = new byte[4096];
+            var result = await bobSocket.ReceiveAsync(
+                new ArraySegment<byte>(buffer),
+                silenceCts.Token
+            );
+            // Any inbound message would be a broadcast we didn't expect.
+            if (result.Count > 0)
+                gotBroadcast = true;
         }
-
-        using var socket = await ConnectAndHandshakeAsync(lobby.Code, auth.Token);
-        await SendClearAttemptAsync(socket, blocked.HeadCell, clientSeq: 1);
-
-        var reply = await ReceiveTextAsync(socket);
-        Assert.Equal("rejected_dep", reply.Type);
+        catch (OperationCanceledException)
+        {
+            // Expected: no broadcast arrived within the window.
+        }
+        Assert.False(gotBroadcast, "Non-clearable taps must not broadcast to other players");
     }
 
     [Fact]

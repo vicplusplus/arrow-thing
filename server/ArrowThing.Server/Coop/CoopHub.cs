@@ -668,32 +668,28 @@ public class CoopHub
 
             if (!state.Board.IsClearable(arrow))
             {
-                // Dependency not satisfied. Broadcast so everyone sees the reject indicator.
-                var seq = state.NextSeq++;
-                await PersistEventAsync(
-                    lobby.Id,
-                    seq,
-                    LobbyEventType.ClearRejectedDep,
-                    userId,
-                    payload.TapX,
-                    payload.TapY
-                );
-                await BroadcastAsync(
-                    code,
+                // Dependency not satisfied. Non-clearable taps are filtered
+                // client-side; reaching the server means either a client bug
+                // or a cheater bypassing the local guard. Reply privately to
+                // the sender (so a legit client can correct its local state)
+                // and don't persist or broadcast — non-clearable taps don't
+                // modify board state and shouldn't pollute the event log.
+                await SendAsync(
+                    entry,
                     new CoopMessage
                     {
                         Type = "rejected_dep",
-                        Seq = seq,
                         Payload = ToJsonElement(
                             new RejectedDepPayload(
                                 userId,
                                 payload.TapX,
                                 payload.TapY,
                                 DateTime.UtcNow.ToString("O"),
-                                seq
+                                0
                             )
                         ),
-                    }
+                    },
+                    ct
                 );
                 return;
             }

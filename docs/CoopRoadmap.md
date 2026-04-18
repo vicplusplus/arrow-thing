@@ -477,13 +477,14 @@ Each phase is a self-contained PR. Phases are intentionally ordered so every mer
 
 ### Phase 6 — Core gameplay sync
 
-**Status.** Implemented. Co-op is playable: tapping clearable arrows on one client broadcasts `cleared` to everyone in the lobby; non-clearable arrows broadcast `rejected_dep`; races resolve with a private `rejected_race` to the loser; per-user token bucket rate limit (10/10 refill); server holds the in-memory `LobbyGameState` for 60 s after last disconnect (eviction cancelled on any reconnect); heartbeat every 15 s; client auto-reconnects with 1/2/4/8/16/30 s backoff and re-requests the full snapshot; last-arrow clear broadcasts `lobby_completed` and transitions `Lobbies.Status` to `Completed`.
+**Status.** Implemented. Co-op is playable: tapping clearable arrows on one client broadcasts `cleared` to everyone in the lobby; races resolve with a private `rejected_race` to the loser; per-user token bucket rate limit (10/10 refill); server holds the in-memory `LobbyGameState` for 60 s after last disconnect (eviction cancelled on any reconnect); heartbeat every 15 s; client auto-reconnects with 1/2/4/8/16/30 s backoff and re-requests the full snapshot; last-arrow clear broadcasts `lobby_completed` and transitions `Lobbies.Status` to `Completed`.
 
 Implementation notes vs. original plan:
 - No separate `Coop Game` scene. `GameController` carries a co-op mode (wires `CoopSession` + `CoopClient`, heartbeat loop in `Update`, auto-reconnect driver). Avoids duplicating camera/HUD/input boilerplate.
 - `InputHandler` exposes an `onTapAttempt` delegate hook instead of forking a `CoopInputHandler`. When set, the hook owns the full clear flow (optimistic animation, wire send, accept/reject handling); when null, the solo path runs unchanged.
 - Per-lobby atomic processing uses `SemaphoreSlim` on `LobbyGameState.Mutex` (not a queue). Clear handlers acquire the mutex, mutate `Board`, broadcast, release.
 - `NextSeq` lives in-memory on `LobbyGameState`. On hydration after eviction, seq resets from the replayed event count; if the server restarts mid-lobby the seq starts from the event count in the DB.
+- **Non-clearable taps are filtered client-side** and never cross the wire — they don't modify board state so other players don't need to see them, and autoclickers don't generate server traffic. The server still validates on its side as defense-in-depth: a `clear_attempt` for a non-clearable arrow receives a private `rejected_dep` reply (no broadcast, no event-log row). The `rejected_dep` wire event therefore carries no per-lobby visibility — it exists only as a sender-correction signal for clients whose local view drifted. Broadcast-style "someone else tried a blocked arrow" visualization is reconsidered in later alt-modes (e.g. a no-failed-clears mode that exposes attribution on purpose).
 
 **Goal.** Actually play co-op. Clear attempts, race resolution, optimistic animation, reconnect with grace window. After this phase, co-op is functionally playable without the sidebar or attribution — it looks and feels like solo, just with other players' clears showing up.
 

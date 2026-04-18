@@ -63,9 +63,15 @@ public sealed class CoopSession : IDisposable
     /// <summary>
     /// Submit a tap at <paramref name="cell"/> as a clear attempt to the
     /// server. Returns the local-state <see cref="Arrow"/> at that cell if
-    /// present (so the caller can play the optimistic animation), or null
-    /// if nothing is there locally. A non-null return means a
-    /// <c>clear_attempt</c> was sent; null means nothing was sent.
+    /// present (so the caller can play the appropriate animation), or null
+    /// if nothing is there locally.
+    ///
+    /// Non-clearable taps are filtered locally and never cross the wire —
+    /// they don't modify board state so other players don't need to see
+    /// them, and this keeps autoclickers from generating server traffic.
+    /// The server still validates on its side as defense-in-depth; a
+    /// <c>clear_attempt</c> for a non-clearable arrow will receive a
+    /// private <c>rejected_dep</c> reply.
     /// </summary>
     public Arrow TrySubmitClear(Cell cell, Vector3 tapWorld)
     {
@@ -76,9 +82,12 @@ public sealed class CoopSession : IDisposable
         if (arrow == null)
             return null;
 
-        // Fire the wire message. Server will process atomically and respond
-        // with either `cleared`, `rejected_dep`, `rejected_race`, or
-        // `rejected_rate`.
+        // Local guard: only clearable taps hit the wire. The caller still
+        // gets the arrow reference back so it can play the blocked-tap
+        // bump animation locally.
+        if (!Board.IsClearable(arrow))
+            return arrow;
+
         var clientSeq = ++_nextClientSeq;
         _ = Client.SendAsync(CoopMessage.ClearAttempt(tapWorld.x, tapWorld.y, clientSeq));
 
