@@ -724,6 +724,27 @@ public class ApiClient
     /// </summary>
     public async Task<bool> RefreshAsync()
     {
+        return await RefreshInternalAsync();
+    }
+
+    /// <summary>
+    /// Refreshes the access token before an operation that can't use the
+    /// `SendAuthenticatedAsync` retry-on-401 pattern — specifically the co-op
+    /// WebSocket upgrade, which carries auth in the URL / cookie and has no
+    /// Bearer retry path. Called immediately before `ConnectAsync` /
+    /// `ReconnectAsync`: in cookie mode the browser picks up the freshly-issued
+    /// `arrow_access`; in bearer mode the caller reads `Token` after it returns.
+    /// No-op (returns true) when the caller isn't logged in at all.
+    /// </summary>
+    public async Task<bool> EnsureFreshTokenAsync()
+    {
+        if (!CanAttemptRefresh())
+            return false;
+        return await RefreshInternalAsync();
+    }
+
+    private async Task<bool> RefreshInternalAsync()
+    {
         if (!CanAttemptRefresh())
             return false;
 

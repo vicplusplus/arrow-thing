@@ -346,7 +346,7 @@ CORS is configured via `AddCors` with `AllowCredentials()` and explicit origins 
 
 The `SecurityStamp` invalidation middleware was retuned for this phase: a stale JWT now strips `context.User` to anonymous instead of short-circuiting with 401. Public endpoints (login, verify-code, etc.) therefore keep working when a user revisits with an old cookie; protected endpoints fail authorization naturally.
 
-Cookies are NOT used on the co-op WebSocket (`/ws/coop/{code}` still takes the JWT in the query string). Migrating that path is out of scope for Phase 1D.
+The co-op WebSocket (`/ws/coop/{code}`) accepts **either** a `?token=` query string (bearer / editor clients) **or** the `arrow_access` HttpOnly cookie that the browser attaches automatically on same-site upgrades — the server falls back to the cookie when the query is empty. Before every `ConnectAsync` / `ReconnectAsync`, the Unity client calls `ApiClient.EnsureFreshTokenAsync()` so the 15-minute access token (Phase 1C) is rotated — in cookie mode the browser picks up the freshly-issued cookie; in bearer mode `api.Token` is re-read. Without this, a WS reconnect after >15 minutes idle would 401 indefinitely. `CoopHub.HandleConnectionAsync` uses `ICollection.Remove(KeyValuePair)` so a fast reconnect from the same user doesn't kick its own live socket out of the room on the old handler's finally. `lobby_failed` disconnect payloads carry only the closed-set reason `generation_failed` — raw worker exception messages stay in the server logs and never reach untrusted clients.
 
 ### Refresh tokens
 

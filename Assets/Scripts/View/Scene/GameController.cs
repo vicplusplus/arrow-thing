@@ -587,6 +587,14 @@ public sealed class GameController : MonoBehaviour
                 GlobalToast.Instance.ShowInfo("Reconnecting...");
         };
 
+        // Refresh the access token before the WS upgrade so a stale 15-minute
+        // access JWT (or cookie) isn't rejected. In cookie mode the browser
+        // picks up the fresh arrow_access and attaches it to the upgrade; in
+        // bearer mode we re-read api.Token after the refresh returns.
+        var refreshTask = api.EnsureFreshTokenAsync();
+        while (!refreshTask.IsCompleted)
+            yield return null;
+
         var connectTask = _coopClient.ConnectAsync(api.BaseWsUrl, _coopLobbyCode, api.Token);
         while (!connectTask.IsCompleted)
             yield return null;
@@ -846,7 +854,13 @@ public sealed class GameController : MonoBehaviour
     {
         try
         {
-            await _coopClient.ReconnectAsync();
+            // Refresh the access token before the reconnect — the original
+            // 15-minute access JWT is almost certainly expired by the time a
+            // reconnect attempt runs. In cookie mode this rotates the
+            // arrow_access cookie the browser will attach to the WS upgrade.
+            var api = new ApiClient();
+            await api.EnsureFreshTokenAsync();
+            await _coopClient.ReconnectAsync(api.Token);
             await _coopClient.SendAsync(CoopMessage.Hello(0));
             _coopReconnectAttempt = 0;
             _coopReconnectInFlight = false;

@@ -938,6 +938,7 @@ public sealed class CoopHubController : NavigableScene
 
         try
         {
+            await _api.EnsureFreshTokenAsync();
             await _hostingClient.ConnectAsync(_api.BaseWsUrl, result.Data.code, _api.Token);
             await _hostingClient.SendAsync(CoopMessage.Hello(0));
         }
@@ -1042,6 +1043,7 @@ public sealed class CoopHubController : NavigableScene
 
             try
             {
+                await _api.EnsureFreshTokenAsync();
                 await _hostingClient.ConnectAsync(_api.BaseWsUrl, code, _api.Token);
                 await _hostingClient.SendAsync(CoopMessage.Hello(0));
             }
@@ -1099,6 +1101,7 @@ public sealed class CoopHubController : NavigableScene
         _hostingClient.Disconnected += OnHostingDisconnected;
         try
         {
+            await _api.EnsureFreshTokenAsync();
             await _hostingClient.ConnectAsync(_api.BaseWsUrl, code, _api.Token);
             await _hostingClient.SendAsync(CoopMessage.Hello(0));
         }
