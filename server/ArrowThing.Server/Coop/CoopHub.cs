@@ -9,6 +9,7 @@ using ArrowThing.Server.Data;
 using ArrowThing.Server.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Serilog.Context;
 
 namespace ArrowThing.Server.Coop;
 
@@ -21,6 +22,7 @@ public class CoopHub
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly GenerationProgressBus _progressBus;
+    private readonly CoopMetrics _metrics;
     private readonly ILogger<CoopHub> _logger;
     private readonly ConcurrentDictionary<string, LobbyRoom> _rooms = new();
 
@@ -66,11 +68,13 @@ public class CoopHub
     public CoopHub(
         IServiceScopeFactory scopeFactory,
         GenerationProgressBus progressBus,
+        CoopMetrics metrics,
         ILogger<CoopHub> logger
     )
     {
         _scopeFactory = scopeFactory;
         _progressBus = progressBus;
+        _metrics = metrics;
         _logger = logger;
         _heartbeatWatchdog = new Timer(
             _ => _ = SweepStaleConnectionsAsync(),
@@ -97,6 +101,11 @@ public class CoopHub
         var code = NormalizeCode(lobbyCode);
         if (!_rooms.TryGetValue(code, out var room))
             return;
+
+        // Bus messages arrive from the Redis subscription thread outside any
+        // HTTP request, so there's no CorrelationId in scope. LobbyCode is the
+        // natural correlation unit for lobby-wide events.
+        using var _lobbyScope = LogContext.PushProperty("LobbyCode", code);
 
         if (msg.Type == "lobby_failed")
             _logger.LogWarning(
@@ -262,9 +271,20 @@ public class CoopHub
     )
     {
         var code = NormalizeCode(lobby.Code);
+        // Push structured properties onto the Serilog scope for the entire
+        // connection lifetime so every log line emitted from this handler (and
+        // from awaited work spawned under it) is tagged with the lobby and
+        // user. Lets Grafana/Loki slice co-op logs by lobby without brittle
+        // string parsing. The HTTP middleware already pushes CorrelationId for
+        // the upgrade request — those three together (CorrelationId, LobbyCode,
+        // UserId) are sufficient to trace any one participant's session.
+        using var _lobbyScope = LogContext.PushProperty("LobbyCode", code);
+        using var _userScope = LogContext.PushProperty("UserId", userId);
+
         var room = _rooms.GetOrAdd(code, _ => new LobbyRoom(code));
         var entry = new ConnectionEntry(socket);
         room.Connections[userId] = entry;
+        _metrics.WsConnects.Add(1);
 
         // Cancel any pending eviction — a client reconnected within the grace window.
         if (_gameStates.TryGetValue(code, out var reuseState))
@@ -368,6 +388,10 @@ public class CoopHub
             ).Remove(new KeyValuePair<Guid, ConnectionEntry>(userId, entry));
             if (removed)
             {
+                // Only count a real disconnect — a reconnect-induced replace
+                // already has a matching Connects increment, so we'd double-
+                // count "disconnected without replacing" otherwise.
+                _metrics.WsDisconnects.Add(1);
                 if (room.Connections.IsEmpty)
                 {
                     _rooms.TryRemove(code, out _);
@@ -580,6 +604,24 @@ public class CoopHub
         return new Cell(x, y);
     }
 
+    /// <summary>
+    /// Emit one structured log line per rejected clear attempt so ops can
+    /// audit bot-like behavior and diff legitimate race losses from bugs.
+    /// LobbyCode + UserId come from the LogContext scope pushed in
+    /// HandleConnectionAsync; only the tap coords and reason need to be
+    /// attached here.
+    /// </summary>
+    private void LogReject(string reason, float tapX, float tapY, long clientSeq)
+    {
+        _logger.LogInformation(
+            "[CoopHub] clear rejected reason={Reason} tap=({TapX},{TapY}) clientSeq={ClientSeq}",
+            reason,
+            tapX,
+            tapY,
+            clientSeq
+        );
+    }
+
     private async Task HandleClearAttemptAsync(
         CoopMessage msg,
         ConnectionEntry entry,
@@ -632,6 +674,7 @@ public class CoopHub
         {
             var clientSeq =
                 msg.Payload?.Deserialize<ClearAttemptPayload>(JsonOptions)?.ClientSeq ?? 0;
+            _metrics.ClearsRejected.Add(1, new KeyValuePair<string, object?>("reason", "rate"));
             await SendAsync(
                 entry,
                 new CoopMessage
@@ -690,6 +733,8 @@ public class CoopHub
             {
                 // Tap landed outside the board (user clicked on empty space).
                 // Treat as race — private reject to attempter only.
+                LogReject("oob", payload.TapX, payload.TapY, payload.ClientSeq);
+                _metrics.ClearsRejected.Add(1, new KeyValuePair<string, object?>("reason", "oob"));
                 await SendAsync(
                     entry,
                     new CoopMessage
@@ -708,6 +753,8 @@ public class CoopHub
             if (arrow == null)
             {
                 // Already cleared by someone else. Private reject.
+                LogReject("race", payload.TapX, payload.TapY, payload.ClientSeq);
+                _metrics.ClearsRejected.Add(1, new KeyValuePair<string, object?>("reason", "race"));
                 await SendAsync(
                     entry,
                     new CoopMessage
@@ -730,6 +777,8 @@ public class CoopHub
                 // the sender (so a legit client can correct its local state)
                 // and don't persist or broadcast — non-clearable taps don't
                 // modify board state and shouldn't pollute the event log.
+                LogReject("dep", payload.TapX, payload.TapY, payload.ClientSeq);
+                _metrics.ClearsRejected.Add(1, new KeyValuePair<string, object?>("reason", "dep"));
                 await SendAsync(
                     entry,
                     new CoopMessage
@@ -751,6 +800,7 @@ public class CoopHub
             }
 
             // Accepted: mutate board, persist event, bump registration stats, broadcast.
+            _metrics.ClearsAccepted.Add(1);
             state.Board.RemoveArrow(arrow);
             var acceptSeq = state.NextSeq++;
             await PersistEventAsync(

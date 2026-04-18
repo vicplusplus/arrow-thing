@@ -92,7 +92,11 @@ builder
     .Services.AddOpenTelemetry()
     .WithMetrics(metrics =>
     {
-        metrics.AddAspNetCoreInstrumentation().AddRuntimeInstrumentation().AddPrometheusExporter();
+        metrics
+            .AddMeter(CoopMetrics.MeterName)
+            .AddAspNetCoreInstrumentation()
+            .AddRuntimeInstrumentation()
+            .AddPrometheusExporter();
     });
 
 // Database
@@ -192,6 +196,7 @@ builder.Services.AddScoped<LobbySnapshotRepository>();
 builder.Services.AddScoped<LobbyReplayService>();
 builder.Services.AddSingleton<AccountConcurrencyLimiter>();
 builder.Services.AddSingleton<GenerationProgressBus>();
+builder.Services.AddSingleton<CoopMetrics>();
 builder.Services.AddSingleton<CoopHub>();
 builder.Services.Configure<LobbyOptions>(builder.Configuration.GetSection("Lobby"));
 builder.Services.AddSingleton<LeaderboardCache>(sp => new LeaderboardCache(

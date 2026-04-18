@@ -2,6 +2,7 @@ using System.Text.Json;
 using ArrowThing.Server.Data;
 using ArrowThing.Server.Models;
 using Microsoft.EntityFrameworkCore;
+using Serilog.Context;
 using StackExchange.Redis;
 
 namespace ArrowThing.Server.Coop;
@@ -18,6 +19,7 @@ public class LobbyGenerationWorker : BackgroundService
     private readonly IConnectionMultiplexer _redis;
     private readonly AccountConcurrencyLimiter _limiter;
     private readonly GenerationProgressBus _progressBus;
+    private readonly CoopMetrics _metrics;
     private readonly ILogger<LobbyGenerationWorker> _logger;
 
     public LobbyGenerationWorker(
@@ -25,6 +27,7 @@ public class LobbyGenerationWorker : BackgroundService
         IConnectionMultiplexer redis,
         AccountConcurrencyLimiter limiter,
         GenerationProgressBus progressBus,
+        CoopMetrics metrics,
         ILogger<LobbyGenerationWorker> logger
     )
     {
@@ -32,6 +35,7 @@ public class LobbyGenerationWorker : BackgroundService
         _redis = redis;
         _limiter = limiter;
         _progressBus = progressBus;
+        _metrics = metrics;
         _logger = logger;
     }
 
@@ -98,6 +102,10 @@ public class LobbyGenerationWorker : BackgroundService
                 _logger.LogWarning("[Gen] Lobby {Id} not found, skipping job", job.LobbyId);
                 return;
             }
+            // Stamp the lobby code for the rest of this job so Grafana can
+            // line up [Gen] worker logs with [CoopHub] per-connection logs.
+            using var _lobbyScope = LogContext.PushProperty("LobbyCode", lobby.Code);
+
             if (lobby.Status != LobbyStatus.Generating)
             {
                 _logger.LogInformation(
@@ -116,6 +124,7 @@ public class LobbyGenerationWorker : BackgroundService
                 lobby.Seed
             );
 
+            var genStart = DateTime.UtcNow;
             try
             {
                 var board = new Board(lobby.Width, lobby.Height);
@@ -236,11 +245,14 @@ public class LobbyGenerationWorker : BackgroundService
 
                 await _progressBus.PublishCompleteAsync(lobby.Code);
 
+                var elapsed = (DateTime.UtcNow - genStart).TotalSeconds;
+                _metrics.GenerationDurationSeconds.Record(elapsed);
                 _logger.LogInformation(
-                    "[Gen] Lobby {Id} generated: {Count} arrows, snapshot {Bytes} bytes",
+                    "[Gen] Lobby {Id} generated: {Count} arrows, snapshot {Bytes} bytes in {Elapsed:F2}s",
                     lobby.Id,
                     board.Arrows.Count,
-                    bytes.Length
+                    bytes.Length,
+                    elapsed
                 );
             }
             catch (Exception ex)

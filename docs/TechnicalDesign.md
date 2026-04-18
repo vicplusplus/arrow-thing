@@ -386,6 +386,14 @@ Legacy text rows are migrated lazily by `ReplayBackfillService`, a `BackgroundSe
 
 ASP.NET response compression (`AddResponseCompression` with Brotli + Gzip providers, level Fastest, scoped to JSON content types) sits before `UseCors` so that `/api/replays/{gameId}` and `/api/leaderboards/*` payloads ship compressed when the client sends `Accept-Encoding`. Browsers do this by default; non-browser clients are unaffected.
 
+### Co-op observability
+
+`CoopMetrics` (Meter name `ArrowThing.Coop`, added to the OpenTelemetry metrics pipeline) exports five counters and one histogram that cover the co-op hot paths: `coop.lobbies.created`, `coop.lobbies.gen_retries`, `coop.lobbies.gen_duration` (histogram, seconds), `coop.ws.connects`, `coop.ws.disconnects`, `coop.clears.accepted`, `coop.clears.rejected{reason}`. The `reason` tag on `clears.rejected` carries the closed-set cause (`dep`, `race`, `oob`, `rate`) so Grafana can split legitimate race losses from dependency-bypass attempts without cardinality blowup. All counters feed the existing `/metrics` Prometheus scrape endpoint.
+
+Per-connection Serilog `LogContext` properties (`LobbyCode`, `UserId`) are pushed at the top of `CoopHub.HandleConnectionAsync`, so every log line emitted while the socket is open carries both. `OnBusMessageAsync` pushes `LobbyCode` too (bus messages arrive outside any HTTP request), and `LobbyGenerationWorker` pushes `LobbyCode` for the duration of each job. Combined with the HTTP middleware's `CorrelationId`, the three properties let Loki queries stitch a single participant's session across the WS handler, the Redis bus, and the worker.
+
+Rejected clear attempts emit one structured `[CoopHub] clear rejected reason=... tap=(x,y) clientSeq=...` log line at `Information` level. With `LobbyCode` / `UserId` already in scope, this is enough to audit bot-like behavior — a user whose rejects are all `dep` at high cadence bypasses the client-side clearability guard.
+
 ## Score Integrity
 
 ### Threat Model
