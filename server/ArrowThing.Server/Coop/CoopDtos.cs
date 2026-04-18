@@ -73,7 +73,16 @@ public record DisconnectPayload(string Reason);
 
 public record ClearAttemptPayload(float TapX, float TapY, string ClientTsUtc, long ClientSeq);
 
-public record ClearedPayload(Guid PlayerId, float TapX, float TapY, string TsUtc, long Seq);
+public record ClearedPayload(
+    Guid PlayerId,
+    float TapX,
+    float TapY,
+    string TsUtc,
+    long Seq,
+    int NewClearCount,
+    string Color,
+    string DisplayName
+);
 
 public record RejectedDepPayload(Guid PlayerId, float TapX, float TapY, string TsUtc, long Seq);
 
@@ -84,3 +93,42 @@ public record RejectedRatePayload(long ClientSeq, int RetryAfterMs);
 public record LobbyCompletedPayload(string CompletedAtUtc);
 
 public record HeartbeatPayload(bool Focused, string LastInputTsUtc);
+
+// -- Phase 7 payloads --------------------------------------------------------
+
+/// <summary>
+/// One roster entry. Sent in `roster_full` and `roster_patch` messages.
+/// `AccumulatedMillis` is the player's own per-player solve time (Phase 7:
+/// client-reported via <c>timer_update</c>). `Online` is false for players
+/// whose connection dropped but whose registration is still alive.
+/// </summary>
+public record RosterEntryPayload(
+    Guid UserId,
+    string DisplayName,
+    string Color,
+    int ClearCount,
+    long AccumulatedMillis,
+    bool Online
+);
+
+/// <summary>
+/// Full roster snapshot. Sent once after <c>snapshot</c> on each connection.
+/// </summary>
+public record RosterFullPayload(IReadOnlyList<RosterEntryPayload> Players);
+
+/// <summary>
+/// Incremental roster diff. <c>Upsert</c> carries added or changed entries;
+/// <c>Remove</c> carries the user ids of entries removed (unused today —
+/// kept for future expiry semantics).
+/// </summary>
+public record RosterPatchPayload(
+    IReadOnlyList<RosterEntryPayload> Upsert,
+    IReadOnlyList<Guid> Remove
+);
+
+/// <summary>
+/// Client-side report of the local player's per-player timer. Server
+/// validates <c>AccumulatedMillis</c> is monotonically non-decreasing and
+/// persists it to <c>LobbyRegistrations</c>.
+/// </summary>
+public record TimerUpdatePayload(long AccumulatedMillis);

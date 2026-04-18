@@ -34,7 +34,25 @@ public class CoopHub
     /// <summary>Hold state in memory for this long after the last disconnect.</summary>
     private static readonly TimeSpan EvictionGrace = TimeSpan.FromSeconds(60);
 
+    /// <summary>
+    /// Roster patches are throttled — changes that arrive within this window
+    /// coalesce into a single broadcast. Small enough to feel live, large
+    /// enough to avoid spamming when bursts of clears land simultaneously.
+    /// </summary>
+    private static readonly TimeSpan RosterFlushDelay = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// A connection is considered stale if it hasn't sent a heartbeat within
+    /// this window. Clients send a heartbeat every 15 s, so 30 s gives one
+    /// missed heartbeat of slack before the watchdog closes the socket.
+    /// </summary>
+    private static readonly TimeSpan HeartbeatTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>How often the heartbeat watchdog sweeps all rooms.</summary>
+    private static readonly TimeSpan HeartbeatSweepInterval = TimeSpan.FromSeconds(10);
+
     private bool _busSubscribed;
+    private Timer? _heartbeatWatchdog;
 
     // Upper bound on a single inbound message. Coop traffic is small game-state
     // deltas; anything larger is abusive and must not be buffered in memory.
@@ -54,6 +72,12 @@ public class CoopHub
         _scopeFactory = scopeFactory;
         _progressBus = progressBus;
         _logger = logger;
+        _heartbeatWatchdog = new Timer(
+            _ => _ = SweepStaleConnectionsAsync(),
+            null,
+            HeartbeatSweepInterval,
+            HeartbeatSweepInterval
+        );
     }
 
     /// <summary>
@@ -324,7 +348,13 @@ public class CoopHub
         finally
         {
             room.Connections.TryRemove(userId, out _);
-            if (room.Connections.IsEmpty)
+            // Broadcast the offline transition BEFORE removing the room —
+            // other connected clients need to see the status flip.
+            if (!room.Connections.IsEmpty)
+            {
+                QueueRosterBroadcast(code, userId);
+            }
+            else
             {
                 _rooms.TryRemove(code, out _);
                 ScheduleGameStateEviction(code);
@@ -393,6 +423,10 @@ public class CoopHub
 
             case "heartbeat":
                 HandleHeartbeat(msg, entry);
+                break;
+
+            case "timer_update":
+                await HandleTimerUpdateAsync(msg, entry, lobby, userId);
                 break;
 
             case "echo":
@@ -694,7 +728,7 @@ public class CoopHub
                 return;
             }
 
-            // Accepted: mutate board, persist event, broadcast.
+            // Accepted: mutate board, persist event, bump registration stats, broadcast.
             state.Board.RemoveArrow(arrow);
             var acceptSeq = state.NextSeq++;
             await PersistEventAsync(
@@ -705,6 +739,29 @@ public class CoopHub
                 payload.TapX,
                 payload.TapY
             );
+
+            // Bump ClearCount (+ FirstClearAt if unset) on the clearer's
+            // registration. Snapshot the post-bump row so the broadcast
+            // carries the new count.
+            int newClearCount = 0;
+            string clearerColor = "#FFFFFF";
+            string clearerDisplayName = "";
+            using (var statScope = _scopeFactory.CreateScope())
+            {
+                var db = statScope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var reg = await db.LobbyRegistrations.FindAsync(lobby.Id, userId);
+                if (reg != null)
+                {
+                    reg.ClearCount += 1;
+                    if (reg.FirstClearAt == null)
+                        reg.FirstClearAt = DateTime.UtcNow;
+                    reg.LastActivityAt = DateTime.UtcNow;
+                    await db.SaveChangesAsync();
+                    newClearCount = reg.ClearCount;
+                    clearerColor = reg.ColorAtJoin;
+                    clearerDisplayName = reg.DisplayNameAtJoin;
+                }
+            }
 
             await BroadcastAsync(
                 code,
@@ -718,11 +775,18 @@ public class CoopHub
                             payload.TapX,
                             payload.TapY,
                             DateTime.UtcNow.ToString("O"),
-                            acceptSeq
+                            acceptSeq,
+                            newClearCount,
+                            clearerColor,
+                            clearerDisplayName
                         )
                     ),
                 }
             );
+
+            // Queue a roster patch so other clients see the new count/time
+            // even if they missed the cleared broadcast (e.g. reconnected).
+            QueueRosterBroadcast(code, userId);
 
             // Completion: last arrow cleared → transition to Completed + broadcast.
             if (state.Board.Arrows.Count == 0)
@@ -1050,6 +1114,22 @@ public class CoopHub
         }
 
         entry.Ready = true;
+
+        // Send the initial full roster + broadcast a patch marking this
+        // player online. Do this after Ready flips so BroadcastAsync hits
+        // the new connection too.
+        if (_rooms.TryGetValue(NormalizeCode(current.Code), out var postRoom))
+        {
+            try
+            {
+                await SendFullRosterAsync(entry, current.Id, postRoom, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[CoopHub] Failed to send roster to user {UserId}", userId);
+            }
+            QueueRosterBroadcast(NormalizeCode(current.Code), userId);
+        }
     }
 
     private static async Task SendRawAsync(WebSocket socket, CoopMessage msg, CancellationToken ct)
@@ -1090,6 +1170,218 @@ public class CoopHub
     }
 
     private static string NormalizeCode(string code) => (code ?? "").Trim().ToUpperInvariant();
+
+    // ── Phase 7: roster + timer ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Build a <see cref="RosterEntryPayload"/> for a single registered user.
+    /// <paramref name="online"/> reflects whether the user currently holds an
+    /// active connection in the room; all other fields come from the DB row.
+    /// </summary>
+    private static RosterEntryPayload ToRosterEntry(LobbyRegistration reg, bool online) =>
+        new(
+            reg.UserId,
+            reg.DisplayNameAtJoin,
+            reg.ColorAtJoin,
+            reg.ClearCount,
+            reg.AccumulatedMillis,
+            online
+        );
+
+    /// <summary>
+    /// Load all registrations for the lobby and project them into roster
+    /// entries. Online flag is taken from the live room map.
+    /// </summary>
+    private async Task<List<RosterEntryPayload>> BuildFullRosterAsync(Guid lobbyId, LobbyRoom room)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var rows = await db
+            .LobbyRegistrations.AsNoTracking()
+            .Where(r => r.LobbyId == lobbyId)
+            .ToListAsync();
+        var result = new List<RosterEntryPayload>(rows.Count);
+        foreach (var r in rows)
+            result.Add(ToRosterEntry(r, room.Connections.ContainsKey(r.UserId)));
+        return result;
+    }
+
+    /// <summary>
+    /// Send the current full roster to a single connection. Called once per
+    /// connection after the snapshot handshake.
+    /// </summary>
+    private async Task SendFullRosterAsync(
+        ConnectionEntry entry,
+        Guid lobbyId,
+        LobbyRoom room,
+        CancellationToken ct
+    )
+    {
+        var players = await BuildFullRosterAsync(lobbyId, room);
+        await SendAsync(
+            entry,
+            new CoopMessage
+            {
+                Type = "roster_full",
+                Payload = ToJsonElement(new RosterFullPayload(players)),
+            },
+            ct
+        );
+    }
+
+    /// <summary>
+    /// Mark a user as needing a roster update and schedule a throttled flush
+    /// if one isn't already pending. Safe to call from any context.
+    /// </summary>
+    private void QueueRosterBroadcast(string normalizedCode, Guid userId)
+    {
+        if (!_rooms.TryGetValue(normalizedCode, out var room))
+            return;
+        room.PendingRoster[userId] = 1;
+        if (Interlocked.CompareExchange(ref room.RosterFlushScheduled, 1, 0) == 0)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(RosterFlushDelay);
+                    await FlushRosterAsync(normalizedCode);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "[CoopHub] Roster flush failed for lobby {Code}",
+                        normalizedCode
+                    );
+                }
+                finally
+                {
+                    if (_rooms.TryGetValue(normalizedCode, out var r))
+                        Interlocked.Exchange(ref r.RosterFlushScheduled, 0);
+                }
+            });
+        }
+    }
+
+    /// <summary>
+    /// Drain pending roster changes and broadcast a patch with only the
+    /// affected entries. Entries whose registration is gone are sent as
+    /// removals — currently unused (we don't delete registrations mid-play).
+    /// </summary>
+    private async Task FlushRosterAsync(string normalizedCode)
+    {
+        if (!_rooms.TryGetValue(normalizedCode, out var room))
+            return;
+
+        // Atomically swap out the pending set so new changes during the DB
+        // round-trip accumulate into the next flush.
+        var dirtyIds = room.PendingRoster.Keys.ToList();
+        foreach (var id in dirtyIds)
+            room.PendingRoster.TryRemove(id, out _);
+        if (dirtyIds.Count == 0)
+            return;
+
+        Lobby? lobby;
+        List<LobbyRegistration> regs;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            lobby = await db.Lobbies.FirstOrDefaultAsync(l => l.Code == normalizedCode);
+            if (lobby == null)
+                return;
+            regs = await db
+                .LobbyRegistrations.AsNoTracking()
+                .Where(r => r.LobbyId == lobby.Id && dirtyIds.Contains(r.UserId))
+                .ToListAsync();
+        }
+
+        var upsert = new List<RosterEntryPayload>(regs.Count);
+        foreach (var r in regs)
+            upsert.Add(ToRosterEntry(r, room.Connections.ContainsKey(r.UserId)));
+        // Users in dirtyIds with no registration row are treated as removals.
+        var remove = dirtyIds.Where(id => regs.All(r => r.UserId != id)).ToList();
+
+        await BroadcastAsync(
+            normalizedCode,
+            new CoopMessage
+            {
+                Type = "roster_patch",
+                Payload = ToJsonElement(new RosterPatchPayload(upsert, remove)),
+            }
+        );
+    }
+
+    /// <summary>
+    /// Handle a <c>timer_update</c> message: validate the reported time is
+    /// monotonically non-decreasing, persist, and queue a roster broadcast so
+    /// the sidebar row updates on everyone's screen.
+    /// </summary>
+    private async Task HandleTimerUpdateAsync(
+        CoopMessage msg,
+        ConnectionEntry entry,
+        Lobby lobby,
+        Guid userId
+    )
+    {
+        TimerUpdatePayload? payload;
+        try
+        {
+            payload = msg.Payload?.Deserialize<TimerUpdatePayload>(JsonOptions);
+        }
+        catch
+        {
+            return;
+        }
+        if (payload == null || payload.AccumulatedMillis < 0)
+            return;
+
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var reg = await db.LobbyRegistrations.FindAsync(lobby.Id, userId);
+            if (reg == null)
+                return;
+            // Clamp to monotone non-decreasing — ignore any value that would
+            // move the stored time backwards (client clock skew, late deliveries).
+            if (payload.AccumulatedMillis <= reg.AccumulatedMillis)
+                return;
+            reg.AccumulatedMillis = payload.AccumulatedMillis;
+            reg.LastActivityAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+        }
+
+        QueueRosterBroadcast(NormalizeCode(lobby.Code), userId);
+    }
+
+    /// <summary>
+    /// Periodic sweep: close connections that haven't heartbeat'd within the
+    /// heartbeat timeout. On close, the connection's receive loop unwinds
+    /// and queues the roster update.
+    /// </summary>
+    private async Task SweepStaleConnectionsAsync()
+    {
+        var cutoff = DateTime.UtcNow - HeartbeatTimeout;
+        foreach (var room in _rooms.Values)
+        {
+            foreach (var kvp in room.Connections)
+            {
+                var entry = kvp.Value;
+                if (entry.LastHeartbeatAt < cutoff && entry.Socket.State == WebSocketState.Open)
+                {
+                    try
+                    {
+                        await entry.Socket.CloseAsync(
+                            WebSocketCloseStatus.NormalClosure,
+                            "heartbeat_timeout",
+                            CancellationToken.None
+                        );
+                    }
+                    catch { }
+                }
+            }
+        }
+    }
 
     // -- JWT validation for WebSocket query string --------------------------
 
@@ -1141,6 +1433,19 @@ internal class LobbyRoom
 {
     public string Code { get; }
     public ConcurrentDictionary<Guid, ConnectionEntry> Connections { get; } = new();
+
+    /// <summary>
+    /// Set of user ids with pending roster changes since the last flush.
+    /// Written by <c>QueueRosterBroadcast</c>; drained by the flush task.
+    /// </summary>
+    public ConcurrentDictionary<Guid, byte> PendingRoster { get; } = new();
+
+    /// <summary>
+    /// 0 / 1 flag — 1 while a flush task is already scheduled for this room.
+    /// <see cref="Interlocked.CompareExchange(ref int, int, int)"/> guards
+    /// against double-scheduling.
+    /// </summary>
+    public int RosterFlushScheduled;
 
     public LobbyRoom(string code)
     {
