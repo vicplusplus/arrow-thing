@@ -7,6 +7,10 @@
 // integer handle. Binary frames are base64-encoded for SendMessage transport
 // (which only accepts strings) and decoded back to bytes on the C# side.
 
+// The `__deps` entries below are load-bearing: without them emscripten's
+// tree-shaker (stricter in the Unity 6 toolchain) strips the $CoopWS_State
+// object as unreferenced at link time, and the first CoopWS_Connect call
+// throws `ReferenceError: CoopWS_State is not defined` at runtime.
 mergeInto(LibraryManager.library, {
     $CoopWS_State: {
         sockets: {},
@@ -14,6 +18,7 @@ mergeInto(LibraryManager.library, {
         bridgeObject: 'CoopBridge',
     },
 
+    CoopWS_Connect__deps: ['$CoopWS_State'],
     CoopWS_Connect: function (urlPtr) {
         var url = UTF8ToString(urlPtr);
         var handle = CoopWS_State.nextHandle++;
@@ -75,6 +80,7 @@ mergeInto(LibraryManager.library, {
         }
     },
 
+    CoopWS_Send__deps: ['$CoopWS_State'],
     CoopWS_Send: function (handle, dataPtr) {
         var ws = CoopWS_State.sockets[handle];
         if (!ws || ws.readyState !== 1 /* OPEN */) {
@@ -84,6 +90,7 @@ mergeInto(LibraryManager.library, {
         ws.send(data);
     },
 
+    CoopWS_Close__deps: ['$CoopWS_State'],
     CoopWS_Close: function (handle) {
         var ws = CoopWS_State.sockets[handle];
         if (!ws) {
