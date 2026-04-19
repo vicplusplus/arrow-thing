@@ -66,10 +66,14 @@ public class ApiClient
 
     private readonly string _baseUrl;
 
-    public string Token { get; private set; }
-    public string RefreshToken { get; private set; }
-    public string DisplayName { get; private set; }
-    public string Email { get; private set; }
+    // Defaulted to "" so WebGL cookie mode (which never writes to Token /
+    // RefreshToken) doesn't hand null to Uri.EscapeDataString in the WS
+    // connect URL — that threw before new WebSocket() could fire, which is
+    // why the handshake never even hit the network.
+    public string Token { get; private set; } = "";
+    public string RefreshToken { get; private set; } = "";
+    public string DisplayName { get; private set; } = "";
+    public string Email { get; private set; } = "";
 
     // In cookie mode the tokens live in the browser (HttpOnly) so JS — and
     // therefore this client — can't see them. We proxy "logged in" off the
