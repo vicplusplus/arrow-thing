@@ -9,15 +9,15 @@ using UnityEngine.UIElements;
 /// count, with medals for top 3 and the own-player row highlighted.
 ///
 /// Buttons:
-///  - Play Again → Coop Hub (same lobby can be rejoined for results view, or a new one hosted).
-///  - Menu → main menu.
 ///  - View Replay → fetches the v6 replay and enters the replay scene.
+///  - Back → returns to the Coop Hub.
 /// </summary>
 public sealed class CoopResultsScreen
 {
     private readonly IReadOnlyDictionary<Guid, CoopPlayer> _roster;
     private readonly Guid _selfId;
     private readonly string _lobbyCode;
+    private readonly long _selfAccumulatedMillisOverride;
     private readonly VisualElement _root;
     private VisualElement _overlay;
     private Action _onViewReplay;
@@ -27,7 +27,8 @@ public sealed class CoopResultsScreen
         IReadOnlyDictionary<Guid, CoopPlayer> roster,
         Guid selfId,
         string lobbyCode,
-        Action onViewReplay = null
+        Action onViewReplay = null,
+        long selfAccumulatedMillisOverride = 0
     )
     {
         _root = hudRoot;
@@ -35,6 +36,10 @@ public sealed class CoopResultsScreen
         _selfId = selfId;
         _lobbyCode = lobbyCode;
         _onViewReplay = onViewReplay;
+        // The server-echoed roster can have a stale/zero AccumulatedMillis for
+        // the local player if the board finishes before the next timer_update
+        // round-trip. Prefer the local CoopPlayerTimer value when provided.
+        _selfAccumulatedMillisOverride = selfAccumulatedMillisOverride;
         Build();
     }
 
@@ -78,14 +83,10 @@ public sealed class CoopResultsScreen
             replayBtn.SetEnabled(false);
         btnRow.Add(replayBtn);
 
-        var playAgainBtn = new Button(() => SceneNav.Replace("CoopHub")) { text = "Play Again" };
-        playAgainBtn.AddToClassList("coop-results__btn");
-        playAgainBtn.AddToClassList("coop-results__btn--primary");
-        btnRow.Add(playAgainBtn);
-
-        var menuBtn = new Button(() => SceneNav.Replace("MainMenu")) { text = "Menu" };
-        menuBtn.AddToClassList("coop-results__btn");
-        btnRow.Add(menuBtn);
+        var backBtn = new Button(() => SceneNav.Replace("CoopHub")) { text = "Back" };
+        backBtn.AddToClassList("coop-results__btn");
+        backBtn.AddToClassList("coop-results__btn--primary");
+        btnRow.Add(backBtn);
 
         _root.Add(_overlay);
     }
@@ -122,7 +123,11 @@ public sealed class CoopResultsScreen
         count.AddToClassList("coop-results-row__count");
         row.Add(count);
 
-        var time = new Label(FormatTime(player.AccumulatedMillis));
+        var effectiveMillis =
+            player.Id == _selfId && _selfAccumulatedMillisOverride > player.AccumulatedMillis
+                ? _selfAccumulatedMillisOverride
+                : player.AccumulatedMillis;
+        var time = new Label(FormatTime(effectiveMillis));
         time.AddToClassList("coop-results-row__time");
         row.Add(time);
 
