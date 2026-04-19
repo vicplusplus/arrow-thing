@@ -662,15 +662,33 @@ public sealed class GameController : MonoBehaviour
 
         Debug.Log($"[GameController] Co-op board decoded: {_w}x{_h}, {_board.Arrows.Count} arrows");
 
-        // Create the view from the already-populated board.
+        // Create the view from the already-populated board. Wrapped so a
+        // rendering failure (missing shader, etc.) doesn't strand the user on
+        // the loading overlay with a dead coroutine.
         var vs = ThemeManager.Current ?? visualSettings;
-        var boardGo = new GameObject("BoardView");
-        _boardView = boardGo.AddComponent<BoardView>();
-        _boardView.Init(_board, vs, spawnArrows: true);
+        bool viewInitFailed = false;
+        try
+        {
+            var boardGo = new GameObject("BoardView");
+            _boardView = boardGo.AddComponent<BoardView>();
+            _boardView.Init(_board, vs, spawnArrows: true);
 
-        SetupCamera();
-        _boardView.SetCameraController(_camCtrl);
-        _boardView.ApplyColoring();
+            SetupCamera();
+            _boardView.SetCameraController(_camCtrl);
+            _boardView.ApplyColoring();
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[GameController] Co-op board view init failed: {e}");
+            UpdateLoadingLabel("Render failed");
+            viewInitFailed = true;
+        }
+        if (viewInitFailed)
+        {
+            yield return new WaitForSeconds(2f);
+            SceneNav.Pop();
+            yield break;
+        }
 
         HideLoading();
 
@@ -1614,6 +1632,10 @@ public sealed class GameController : MonoBehaviour
             {
                 _cancelGenModal.AddToClassList("modal--hidden");
                 _cancelRequested = true;
+                // Also pop directly: if the load coroutine has already died
+                // (e.g. a shader/decode exception) it's no longer polling the
+                // flag, and the user is stranded on the loading overlay.
+                ReturnToModeSelect();
             };
             _cancelGenModal.Q<Button>("cancel-generation-no-btn").clicked += () =>
                 _cancelGenModal.AddToClassList("modal--hidden");
