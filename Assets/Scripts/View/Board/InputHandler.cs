@@ -2,6 +2,7 @@ using System;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.EnhancedTouch;
+using UnityEngine.UIElements;
 using Touch = UnityEngine.InputSystem.EnhancedTouch.Touch;
 
 /// <summary>
@@ -16,6 +17,7 @@ public sealed class InputHandler : MonoBehaviour
     private Board _board = null!;
     private BoardView _boardView = null!;
     private CameraController _camCtrl = null!;
+    private UIDocument _hudUIDocument;
     private GameTimer _timer;
     private ReplayRecorder _recorder;
     private Action _onArrowCleared;
@@ -62,7 +64,8 @@ public sealed class InputHandler : MonoBehaviour
         Action onQuickReset = null,
         Action onQuickSave = null,
         Action onToggleTrail = null,
-        Func<Cell, Vector3, bool> onTapAttempt = null
+        Func<Cell, Vector3, bool> onTapAttempt = null,
+        UIDocument hudUIDocument = null
     )
     {
         _board = board;
@@ -76,6 +79,7 @@ public sealed class InputHandler : MonoBehaviour
         _onQuickSave = onQuickSave;
         _onToggleTrail = onToggleTrail;
         _onTapAttempt = onTapAttempt;
+        _hudUIDocument = hudUIDocument;
 
         var km = KeybindManager.Instance;
         _pointAction = km.Point;
@@ -117,6 +121,8 @@ public sealed class InputHandler : MonoBehaviour
         if (km.ClickHovered.WasPerformedThisFrame())
         {
             Vector2 screenPos = _pointAction.ReadValue<Vector2>();
+            if (IsPointerOverHud(screenPos))
+                return;
             HandleTap(screenPos);
         }
 
@@ -124,11 +130,38 @@ public sealed class InputHandler : MonoBehaviour
             _onQuickSave?.Invoke();
     }
 
+    /// <summary>
+    /// True when the pointer is over an interactive HUD element (button,
+    /// modal, etc.) so world-space taps/drags should be suppressed. Screen
+    /// coords come in with Y measured from the bottom (Input System), but
+    /// UI Toolkit panels use Y-from-top — flip before picking.
+    /// </summary>
+    private bool IsPointerOverHud(Vector2 screenPos)
+    {
+        if (_hudUIDocument == null)
+            return false;
+        var root = _hudUIDocument.rootVisualElement;
+        if (root == null || root.panel == null)
+            return false;
+        var panelPos = new Vector2(screenPos.x, Screen.height - screenPos.y);
+        var picked = root.panel.Pick(panelPos);
+        if (picked == null)
+            return false;
+        // The panel's own root and the UXML's TemplateContainer fill the
+        // whole screen but aren't real UI — treat them as empty space so
+        // world clicks through them still reach the board.
+        if (picked == root || picked is TemplateContainer)
+            return false;
+        return true;
+    }
+
     private void HandleSelectAndPan()
     {
         if (_selectAction.WasPressedThisFrame())
         {
             _pressStartScreen = _pointAction.ReadValue<Vector2>();
+            if (IsPointerOverHud(_pressStartScreen))
+                return;
             _pressStartWorld = _camCtrl.Cam.ScreenToWorldPoint(_pressStartScreen);
             _isDragging = false;
             _isPressed = true;
