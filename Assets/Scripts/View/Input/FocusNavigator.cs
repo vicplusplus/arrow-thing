@@ -609,6 +609,28 @@ public sealed class FocusNavigator
             _ringVisible = false;
             ClearFocusRing();
         }
+
+        // Re-seat the current index to whichever item was clicked so the next
+        // Tab / arrow press continues from there. Without this, clicking the
+        // email field then tabbing steps from the stale focus index (often the
+        // first item) and the user has to tab multiple times to reach the next
+        // form field. Walk up the target's ancestors to the first element that
+        // matches one of our items — clicks on inner children (Label inside a
+        // TextField's input) should still locate the owning focusable.
+        var target = evt.target as VisualElement;
+        while (target != null)
+        {
+            for (int i = 0; i < _items.Count; i++)
+            {
+                if (_items[i].Element == target)
+                {
+                    _currentIndex = i;
+                    _prevFocusedIndex = i;
+                    return;
+                }
+            }
+            target = target.parent;
+        }
     }
 
     /// <summary>
