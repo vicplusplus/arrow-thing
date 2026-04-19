@@ -369,12 +369,35 @@ public class CoopHub
         catch (OperationCanceledException) { }
         catch (WebSocketException ex)
         {
-            _logger.LogInformation(
-                "[CoopHub] WebSocket error for user {UserId} on lobby {Code}: {Message}",
-                userId,
-                code,
-                ex.Message
-            );
+            // Downgrade the common disconnect race to Debug: if the socket
+            // is already in a terminal state (Closed / CloseSent / Aborted)
+            // the "invalid state" exception is the expected symptom of a
+            // client vanishing mid-send, not a real error. Keep the higher
+            // level for genuine protocol errors on a still-live socket.
+            var isTerminal =
+                socket.State == WebSocketState.Closed
+                || socket.State == WebSocketState.CloseSent
+                || socket.State == WebSocketState.CloseReceived
+                || socket.State == WebSocketState.Aborted;
+            if (isTerminal)
+            {
+                _logger.LogDebug(
+                    "[CoopHub] WebSocket disconnect race for user {UserId} on lobby {Code} (state={State}): {Message}",
+                    userId,
+                    code,
+                    socket.State,
+                    ex.Message
+                );
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "[CoopHub] WebSocket error for user {UserId} on lobby {Code}: {Message}",
+                    userId,
+                    code,
+                    ex.Message
+                );
+            }
         }
         finally
         {
