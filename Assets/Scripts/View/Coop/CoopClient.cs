@@ -203,8 +203,10 @@ public class CoopClient : IDisposable
     private static readonly ConcurrentDictionary<int, CoopClient> _instances =
         new ConcurrentDictionary<int, CoopClient>();
     private int _handle = -1;
+    private TaskCompletionSource<bool> _connectTcs;
+    private bool _opened;
 
-    public bool IsConnected => _handle >= 0;
+    public bool IsConnected => _handle >= 0 && _opened;
 
     public Task ConnectAsync(string baseWsUrl, string code, string token)
     {
@@ -214,8 +216,17 @@ public class CoopClient : IDisposable
         _lastBaseWsUrl = baseWsUrl;
         _lastCode = code;
         _lastToken = token;
+        _opened = false;
 
         CoopWebGLBridge.EnsureExists();
+
+        // Await a TCS completed by OnJsOpen so callers don't race the browser
+        // WebSocket's CONNECTING→OPEN transition — sending `hello` before the
+        // jslib sees readyState=1 silently drops the frame, leaving the
+        // handshake one-sided and the client stuck waiting for a welcome.
+        _connectTcs = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
         var url = $"{baseWsUrl}/ws/coop/{code}?token={Uri.EscapeDataString(token)}";
         _handle = CoopWS_Connect(url);
@@ -223,7 +234,7 @@ public class CoopClient : IDisposable
             throw new InvalidOperationException("CoopWS_Connect failed.");
 
         _instances[_handle] = this;
-        return Task.CompletedTask;
+        return _connectTcs.Task;
     }
 
     public async Task ReconnectAsync(string refreshedToken = null)
@@ -264,7 +275,11 @@ public class CoopClient : IDisposable
     public static void OnJsOpen(int handle)
     {
         if (_instances.TryGetValue(handle, out var inst))
+        {
+            inst._opened = true;
+            inst._connectTcs?.TrySetResult(true);
             inst.EnqueueConnected();
+        }
     }
 
     public static void OnJsMessage(int handle, string json)
@@ -305,6 +320,11 @@ public class CoopClient : IDisposable
         if (_instances.TryRemove(handle, out var inst))
         {
             inst._handle = -1;
+            // If close fires before open, unblock the pending ConnectAsync with
+            // an exception so the caller's await throws instead of hanging.
+            inst._connectTcs?.TrySetException(
+                new InvalidOperationException($"WebSocket closed before open: {reason ?? "closed"}")
+            );
             inst.EnqueueDisconnected(reason ?? "closed");
         }
     }
