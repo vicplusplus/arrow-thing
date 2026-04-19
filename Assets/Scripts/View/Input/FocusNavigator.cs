@@ -346,14 +346,20 @@ public sealed class FocusNavigator
 
         bool anyNav = up || down || left || right || tabPressed;
 
-        // First navigation key just reveals the ring at the current index.
-        if (anyNav && !_ringVisible)
+        // First navigation key (arrow) just reveals the ring at the current
+        // index so users see where they are before moving. Tab is explicit
+        // "go to the next field", so we skip the reveal-only step for it —
+        // otherwise clicking a field then pressing Tab would take two presses
+        // to actually advance.
+        if (anyNav && !_ringVisible && !tabPressed)
         {
             ShowRing();
             ApplyFocusRing();
             FocusChanged?.Invoke(_currentIndex);
             return;
         }
+        if (tabPressed && !_ringVisible)
+            ShowRing();
 
         bool moved = false;
         var cur =
