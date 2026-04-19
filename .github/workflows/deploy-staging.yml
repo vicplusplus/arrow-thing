@@ -193,7 +193,7 @@ jobs:
           echo "Waiting for staging API to be reachable..."
           sleep 10
           for i in $(seq 1 10); do
-            STATUS=$(curl -o /dev/null -s -w "%{http_code}" https://staging.api.arrow-thing.com/health)
+            STATUS=$(curl -o /dev/null -s -w "%{http_code}" https://api-staging.arrow-thing.com/health)
             if [ "$STATUS" = "200" ]; then
               echo "Staging health check passed (HTTP $STATUS)"
               exit 0

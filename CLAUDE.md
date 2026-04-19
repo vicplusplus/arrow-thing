@@ -46,7 +46,7 @@ Before committing or opening a PR, verify changes abide by `CONTRIBUTING.md`:
 
 Two environments, gated:
 
-- **Staging** (`https://staging.arrow-thing.com` + `https://staging.api.arrow-thing.com`) auto-deploys on every push to `main` via `.github/workflows/deploy-staging.yml`.
+- **Staging** (`https://staging.arrow-thing.com` + `https://api-staging.arrow-thing.com`) auto-deploys on every push to `main` via `.github/workflows/deploy-staging.yml`.
 - **Production** (`https://arrow-thing.com` + `https://api.arrow-thing.com`) deploys only when a GitHub release is published, via `deploy.yml` + `deploy-server.yml`.
 
 Do not tag a prod release until the full `docs/ReleaseChecklist.md` passes on staging. The co-op v2.0 launch bypassed staging and broke in prod for a day — the checklist exists so that cannot happen again.

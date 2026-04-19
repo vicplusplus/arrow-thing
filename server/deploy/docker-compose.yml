@@ -178,7 +178,7 @@ services:
 
   # ── Staging stack ────────────────────────────────────────────────────────
   # Parallel services that mirror prod but use separate containers, volumes,
-  # and secrets. Routed via nginx at staging.api.arrow-thing.com. The shared
+  # and secrets. Routed via nginx at api-staging.arrow-thing.com. The shared
   # nginx/loki/prometheus/grafana services above observe both stacks so
   # staging bugs surface in the same dashboards as prod.
 

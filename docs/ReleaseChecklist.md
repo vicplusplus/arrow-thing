@@ -61,7 +61,7 @@ Treat every unchecked box as a blocker.
 
 ### Server health
 
-- [ ] `https://staging.api.arrow-thing.com/health` returns 200.
+- [ ] `https://api-staging.arrow-thing.com/health` returns 200.
 - [ ] Server logs contain no new ERROR-level entries during the soak.
 - [ ] Migrations (if any) applied cleanly — check API container startup log.
 
