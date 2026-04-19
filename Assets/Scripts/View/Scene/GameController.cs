@@ -448,6 +448,7 @@ public sealed class GameController : MonoBehaviour
 
         if (hudUIDocument != null && hudUIDocument.rootVisualElement != null)
         {
+            HideGameplayHudForResults();
             _coopResults = new CoopResultsScreen(
                 hudUIDocument.rootVisualElement,
                 roster,
@@ -456,8 +457,9 @@ public sealed class GameController : MonoBehaviour
                 onViewReplay: () =>
                 {
                     GameSettings.StartReplay(replay);
-                    SceneNav.Push("Replay");
-                }
+                    SceneNav.Push("ReplayViewer");
+                },
+                selfAccumulatedMillisOverride: _coopPlayerTimer?.AccumulatedMillis ?? 0
             );
             _coopResults.Show();
         }
@@ -799,14 +801,38 @@ public sealed class GameController : MonoBehaviour
             return;
         if (hudUIDocument == null || hudUIDocument.rootVisualElement == null)
             return;
+        HideGameplayHudForResults();
         _coopResults = new CoopResultsScreen(
             hudUIDocument.rootVisualElement,
             _coopSession.Roster,
             _coopUserId,
             _coopLobbyCode,
-            onViewReplay: LaunchCoopReplay
+            onViewReplay: LaunchCoopReplay,
+            selfAccumulatedMillisOverride: _coopPlayerTimer?.AccumulatedMillis ?? 0
         );
         _coopResults.Show();
+    }
+
+    /// <summary>
+    /// Hide HUD elements (back/retry/timer/trail buttons + co-op sidebar)
+    /// before showing the results overlay so they don't bleed through behind
+    /// the modal's translucent backdrop.
+    /// </summary>
+    private void HideGameplayHudForResults()
+    {
+        if (hudUIDocument == null || hudUIDocument.rootVisualElement == null)
+            return;
+        var root = hudUIDocument.rootVisualElement;
+        foreach (
+            var name in new[] { "back-to-menu-btn", "retry-btn", "timer-label", "trail-toggle-btn" }
+        )
+        {
+            var el = root.Q(name);
+            if (el != null)
+                el.style.display = DisplayStyle.None;
+        }
+        _coopSidebar?.Dispose();
+        _coopSidebar = null;
     }
 
     private async void LaunchCoopReplay()
