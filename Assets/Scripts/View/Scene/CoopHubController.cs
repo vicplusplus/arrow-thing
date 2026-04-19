@@ -65,8 +65,9 @@ public sealed class CoopHubController : NavigableScene
     private string _pendingDeleteId;
 
     // Filter state
-    private string _currentFilter; // null = all, "active", "completed"
-    private Button _filterAll;
+    // Default to "active" — completed lobbies would otherwise fill the list
+    // with noise. Users opt into the completed view explicitly.
+    private string _currentFilter = "active";
     private Button _filterActive;
     private Button _filterCompleted;
 
@@ -149,10 +150,8 @@ public sealed class CoopHubController : NavigableScene
         });
 
         // Filter buttons
-        _filterAll = root.Q<Button>("filter-all");
         _filterActive = root.Q<Button>("filter-active");
         _filterCompleted = root.Q<Button>("filter-completed");
-        _filterAll.clicked += () => SetFilter(null);
         _filterActive.clicked += () => SetFilter("active");
         _filterCompleted.clicked += () => SetFilter("completed");
 
@@ -258,18 +257,6 @@ public sealed class CoopHubController : NavigableScene
             }
         );
 
-        int fAllIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = _filterAll,
-                OnActivate = () =>
-                {
-                    SetFilter(null);
-                    return true;
-                },
-            }
-        );
         int fActiveIdx = items.Count;
         items.Add(
             new FocusNavigator.FocusItem
@@ -320,13 +307,11 @@ public sealed class CoopHubController : NavigableScene
         nav.Link(joinIdx, FocusNavigator.NavDir.Up, backIdx);
 
         // Link: toolbar ↔ filter row
-        nav.Link(hostIdx, FocusNavigator.NavDir.Down, fAllIdx);
+        nav.Link(hostIdx, FocusNavigator.NavDir.Down, fActiveIdx);
         nav.Link(joinIdx, FocusNavigator.NavDir.Down, fActiveIdx);
         nav.Link(refreshIdx, FocusNavigator.NavDir.Down, fCompletedIdx);
-        nav.LinkBidi(fAllIdx, FocusNavigator.NavDir.Right, fActiveIdx);
         nav.LinkBidi(fActiveIdx, FocusNavigator.NavDir.Right, fCompletedIdx);
-        nav.Link(fAllIdx, FocusNavigator.NavDir.Up, hostIdx);
-        nav.Link(fActiveIdx, FocusNavigator.NavDir.Up, joinIdx);
+        nav.Link(fActiveIdx, FocusNavigator.NavDir.Up, hostIdx);
         nav.Link(fCompletedIdx, FocusNavigator.NavDir.Up, refreshIdx);
 
         // Link row grid: filter row → first row's main (falling back to any
@@ -337,7 +322,6 @@ public sealed class CoopHubController : NavigableScene
             int firstMain = FirstNonNeg(rowIndices, 0, preferred: 2);
             if (firstMain >= 0)
             {
-                nav.Link(fAllIdx, FocusNavigator.NavDir.Down, firstMain);
                 nav.Link(fActiveIdx, FocusNavigator.NavDir.Down, firstMain);
                 nav.Link(fCompletedIdx, FocusNavigator.NavDir.Down, firstMain);
             }
@@ -367,7 +351,7 @@ public sealed class CoopHubController : NavigableScene
                     if (r == 0)
                     {
                         // Top row goes up to the filter row.
-                        nav.Link(cur, FocusNavigator.NavDir.Up, fAllIdx);
+                        nav.Link(cur, FocusNavigator.NavDir.Up, fActiveIdx);
                     }
                     else
                     {
@@ -650,7 +634,6 @@ public sealed class CoopHubController : NavigableScene
 
     private void UpdateFilterHighlights()
     {
-        SetFilterActive(_filterAll, _currentFilter == null);
         SetFilterActive(_filterActive, _currentFilter == "active");
         SetFilterActive(_filterCompleted, _currentFilter == "completed");
     }

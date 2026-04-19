@@ -31,7 +31,6 @@ public class CoopHubLayoutTests : UILayoutTestBase
             hub.Q<Button>("host-btn"),
             hub.Q<Button>("join-btn"),
             hub.Q<Button>("hub-refresh-btn"),
-            hub.Q<Button>("filter-all"),
             hub.Q<Button>("filter-active"),
             hub.Q<Button>("filter-completed")
         );

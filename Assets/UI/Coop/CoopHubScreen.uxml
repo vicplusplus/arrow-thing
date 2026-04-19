@@ -20,8 +20,7 @@
 
         <!-- Filter row (same pattern as Leaderboard sort row) -->
         <ui:VisualElement class="filter-row">
-            <ui:Button name="filter-all" class="filter-row__btn filter-row__btn--active" text="All" />
-            <ui:Button name="filter-active" class="filter-row__btn" text="Active" />
+            <ui:Button name="filter-active" class="filter-row__btn filter-row__btn--active" text="Active" />
             <ui:Button name="filter-completed" class="filter-row__btn" text="Completed" />
         </ui:VisualElement>
 
