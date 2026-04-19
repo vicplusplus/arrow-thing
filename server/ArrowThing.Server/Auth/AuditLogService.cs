@@ -35,13 +35,11 @@ public class AuditLogService
         );
         await _db.SaveChangesAsync();
 
-        _logger.LogInformation(
-            "Audit: {AuditEvent} UserId={UserId} Email={Email} IP={IpAddress} Detail={Detail}",
-            eventType,
-            userId,
-            email,
-            ipAddress,
-            detail
-        );
+        // Emit only the event + UserId to structured logs — the AuditLogs DB
+        // table is the authoritative record for email / IP / detail. Keeping
+        // raw PII out of Loki/Grafana limits the blast radius if the logging
+        // pipeline or its storage is ever compromised; the audit trail in
+        // Postgres is still queryable for support + compliance.
+        _logger.LogInformation("Audit: {AuditEvent} UserId={UserId}", eventType, userId);
     }
 }
