@@ -604,8 +604,39 @@ public sealed class FocusNavigator
 
     private void OnPointerDown(PointerDownEvent evt)
     {
-        if (_ringVisible)
+        // Locate which navigator item (if any) owns the click target — walk
+        // up the ancestors so clicks on inner children (a Label inside a
+        // TextField's input) still resolve to the owning focusable.
+        int clickedIndex = -1;
+        var target = evt.target as VisualElement;
+        while (target != null && clickedIndex < 0)
         {
+            for (int i = 0; i < _items.Count; i++)
+            {
+                if (_items[i].Element == target)
+                {
+                    clickedIndex = i;
+                    break;
+                }
+            }
+            target = target.parent;
+        }
+
+        if (clickedIndex >= 0)
+        {
+            // Treat the click as a focus selection so subsequent Tab/arrow
+            // presses behave identically to the keyboard flow — no divergence
+            // between pointer and keyboard modes. Ring becomes visible at the
+            // clicked item.
+            _currentIndex = clickedIndex;
+            ShowRing();
+            ApplyFocusRing();
+            FocusChanged?.Invoke(_currentIndex);
+        }
+        else if (_ringVisible)
+        {
+            // Click outside any focusable item: hide the ring (the user is
+            // interacting with something not in our list).
             _ringVisible = false;
             ClearFocusRing();
         }
