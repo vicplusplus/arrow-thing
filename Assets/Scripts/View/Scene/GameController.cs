@@ -1482,7 +1482,8 @@ public sealed class GameController : MonoBehaviour
             onQuickReset: OnQuickReset,
             onQuickSave: OnQuickSave,
             onToggleTrail: ToggleTrail,
-            onTapAttempt: _isCoopMode ? (Func<Cell, Vector3, bool>)OnCoopTap : null
+            onTapAttempt: _isCoopMode ? (Func<Cell, Vector3, bool>)OnCoopTap : null,
+            hudUIDocument: hudUIDocument
         );
 
         // Apply keep-trail setting from PlayerPrefs.
