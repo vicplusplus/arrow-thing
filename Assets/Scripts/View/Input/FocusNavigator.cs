@@ -346,20 +346,14 @@ public sealed class FocusNavigator
 
         bool anyNav = up || down || left || right || tabPressed;
 
-        // First navigation key (arrow) just reveals the ring at the current
-        // index so users see where they are before moving. Tab is explicit
-        // "go to the next field", so we skip the reveal-only step for it —
-        // otherwise clicking a field then pressing Tab would take two presses
-        // to actually advance.
-        if (anyNav && !_ringVisible && !tabPressed)
+        // First navigation key just reveals the ring at the current index.
+        if (anyNav && !_ringVisible)
         {
             ShowRing();
             ApplyFocusRing();
             FocusChanged?.Invoke(_currentIndex);
             return;
         }
-        if (tabPressed && !_ringVisible)
-            ShowRing();
 
         bool moved = false;
         var cur =
@@ -610,32 +604,41 @@ public sealed class FocusNavigator
 
     private void OnPointerDown(PointerDownEvent evt)
     {
-        if (_ringVisible)
-        {
-            _ringVisible = false;
-            ClearFocusRing();
-        }
-
-        // Re-seat the current index to whichever item was clicked so the next
-        // Tab / arrow press continues from there. Without this, clicking the
-        // email field then tabbing steps from the stale focus index (often the
-        // first item) and the user has to tab multiple times to reach the next
-        // form field. Walk up the target's ancestors to the first element that
-        // matches one of our items — clicks on inner children (Label inside a
-        // TextField's input) should still locate the owning focusable.
+        // Locate which navigator item (if any) owns the click target — walk
+        // up the ancestors so clicks on inner children (a Label inside a
+        // TextField's input) still resolve to the owning focusable.
+        int clickedIndex = -1;
         var target = evt.target as VisualElement;
-        while (target != null)
+        while (target != null && clickedIndex < 0)
         {
             for (int i = 0; i < _items.Count; i++)
             {
                 if (_items[i].Element == target)
                 {
-                    _currentIndex = i;
-                    _prevFocusedIndex = i;
-                    return;
+                    clickedIndex = i;
+                    break;
                 }
             }
             target = target.parent;
+        }
+
+        if (clickedIndex >= 0)
+        {
+            // Treat the click as a focus selection so subsequent Tab/arrow
+            // presses behave identically to the keyboard flow — no divergence
+            // between pointer and keyboard modes. Ring becomes visible at the
+            // clicked item.
+            _currentIndex = clickedIndex;
+            ShowRing();
+            ApplyFocusRing();
+            FocusChanged?.Invoke(_currentIndex);
+        }
+        else if (_ringVisible)
+        {
+            // Click outside any focusable item: hide the ring (the user is
+            // interacting with something not in our list).
+            _ringVisible = false;
+            ClearFocusRing();
         }
     }
 
