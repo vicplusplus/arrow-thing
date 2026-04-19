@@ -64,6 +64,15 @@ public sealed class FocusNavigator
     private int _currentIndex = -1;
     private bool _ringVisible;
 
+    /// <summary>
+    /// True when the ring was revealed by a keyboard action (Tab / arrows /
+    /// Submit), false when it was revealed by a pointer click. Used by
+    /// <see cref="Dispose"/> to decide whether the next screen should start
+    /// with the ring visible — click-revealed rings don't carry across
+    /// scenes, so a fresh scene opens without a stray highlight.
+    /// </summary>
+    private bool _ringFromKeyboard;
+
     // Modal push/pop stack.
     private struct SavedState
     {
@@ -71,6 +80,7 @@ public sealed class FocusNavigator
         public Dictionary<(int, NavDir), int> NavGraph;
         public int CurrentIndex;
         public bool RingVisible;
+        public bool RingFromKeyboard;
     }
 
     private readonly Stack<SavedState> _modalStack = new Stack<SavedState>();
@@ -266,6 +276,7 @@ public sealed class FocusNavigator
                 NavGraph = _navGraph,
                 CurrentIndex = _currentIndex,
                 RingVisible = _ringVisible,
+                RingFromKeyboard = _ringFromKeyboard,
             }
         );
 
@@ -279,6 +290,7 @@ public sealed class FocusNavigator
             item.Element.AddToClassList(FocusableClass);
         _currentIndex = Mathf.Clamp(initialIndex, 0, Mathf.Max(0, _items.Count - 1));
         _ringVisible = true;
+        _ringFromKeyboard = true;
         ResetDAS();
         ApplyFocusRing();
     }
@@ -296,6 +308,7 @@ public sealed class FocusNavigator
         _navGraph = saved.NavGraph;
         _currentIndex = saved.CurrentIndex;
         _ringVisible = saved.RingVisible;
+        _ringFromKeyboard = saved.RingFromKeyboard;
         _prevFocusedIndex = _currentIndex; // avoid stale blur on wrong item
         foreach (var item in _items)
             item.Element.AddToClassList(FocusableClass);
@@ -493,10 +506,11 @@ public sealed class FocusNavigator
         ClearFocusRing();
     }
 
-    /// <summary>Show the focus ring at the current index.</summary>
+    /// <summary>Show the focus ring at the current index (keyboard-sourced).</summary>
     public void ShowRing()
     {
         _ringVisible = true;
+        _ringFromKeyboard = true;
     }
 
     /// <summary>Remove the kb-focused class from all items.</summary>
@@ -567,7 +581,11 @@ public sealed class FocusNavigator
     {
         if (Active == this)
         {
-            WasKeyboardActive = _ringVisible;
+            // Only carry keyboard-sourced rings into the next scene. Click-
+            // sourced rings stay confined to their own scene so a fresh
+            // screen doesn't open with a stray highlight the user didn't
+            // ask for.
+            WasKeyboardActive = _ringVisible && _ringFromKeyboard;
             Active = null;
         }
         ClearAllClasses();
@@ -627,9 +645,12 @@ public sealed class FocusNavigator
             // Treat the click as a focus selection so subsequent Tab/arrow
             // presses behave identically to the keyboard flow — no divergence
             // between pointer and keyboard modes. Ring becomes visible at the
-            // clicked item.
+            // clicked item, but marked as pointer-sourced so it doesn't carry
+            // across scene transitions (we don't want a stray highlight on a
+            // fresh screen just because the user clicked on the previous one).
             _currentIndex = clickedIndex;
-            ShowRing();
+            _ringVisible = true;
+            _ringFromKeyboard = false;
             ApplyFocusRing();
             FocusChanged?.Invoke(_currentIndex);
         }
@@ -638,6 +659,7 @@ public sealed class FocusNavigator
             // Click outside any focusable item: hide the ring (the user is
             // interacting with something not in our list).
             _ringVisible = false;
+            _ringFromKeyboard = false;
             ClearFocusRing();
         }
     }
