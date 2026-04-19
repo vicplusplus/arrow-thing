@@ -861,6 +861,10 @@ public class ApiClient
         PlayerPrefs.DeleteKey(RefreshTokenPrefKey);
         PlayerPrefs.DeleteKey(DisplayNamePrefKey);
         PlayerPrefs.DeleteKey(EmailPrefKey);
+        // Co-op color is account-scoped identity, not a device preference —
+        // drop it so a different account signing in on the same device
+        // doesn't inherit the previous user's color until /me refreshes.
+        PlayerPrefs.DeleteKey("LocalCoopColor");
     }
 
     private async Task<ApiResult<AuthResponse>> PostAuthAsync(
