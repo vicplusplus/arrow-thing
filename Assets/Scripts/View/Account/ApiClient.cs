@@ -80,8 +80,18 @@ public class ApiClient
     // presence of DisplayName, which we persist after a successful login.
     // A stale DisplayName just means the first authenticated request returns
     // 401 and the client clears local state.
+    //
+    // Read from PlayerPrefs directly rather than the ctor-cached field:
+    // controllers (CoopHubController, LeaderboardScreenController, etc.)
+    // construct their own ApiClient at scene-build time, which can be
+    // BEFORE the user logs in. The ctor-cached DisplayName on those
+    // instances stays empty forever even after StoreSession updates
+    // PlayerPrefs from AccountManager's instance. Reading PlayerPrefs on
+    // every access makes auth state consistent across instances.
     public bool IsLoggedIn =>
-        UseCookieAuth ? !string.IsNullOrEmpty(DisplayName) : !string.IsNullOrEmpty(Token);
+        UseCookieAuth
+            ? !string.IsNullOrEmpty(PlayerPrefs.GetString(DisplayNamePrefKey, ""))
+            : !string.IsNullOrEmpty(PlayerPrefs.GetString(TokenPrefKey, ""));
 
     /// <summary>
     /// WebSocket-scheme version of the base URL (ws:// or wss://).
