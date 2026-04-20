@@ -176,9 +176,122 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ── Staging stack ────────────────────────────────────────────────────────
+  # Parallel services that mirror prod but use separate containers, volumes,
+  # and secrets. Routed via nginx at api-staging.arrow-thing.com. The shared
+  # nginx/loki/prometheus/grafana services above observe both stacks so
+  # staging bugs surface in the same dashboards as prod.
+
+  api-staging:
+    image: ghcr.io/vicplusplus/arrow-thing-api:staging
+    profiles: [staging]
+    restart: unless-stopped
+    expose:
+      - "5000"
+    environment:
+      - ConnectionStrings__Default=Host=db-staging;Database=${STAGING_POSTGRES_DB:-arrowthing_staging};Username=${STAGING_POSTGRES_USER:-arrowthing};Password=${STAGING_POSTGRES_PASSWORD}
+      - Jwt__Secret=${STAGING_JWT_SECRET}
+      - ASPNETCORE_ENVIRONMENT=${STAGING_ASPNETCORE_ENVIRONMENT:-Staging}
+      - ASPNETCORE_URLS=http://+:5000
+      - Resend__ApiKey=${Resend__ApiKey}
+      # Default to the verified prod sending domain — staging.arrow-thing.com
+      # is not verified with Resend, so emails from there would silently fail.
+      - Resend__FromAddress=${STAGING_Resend__FromAddress:-noreply@arrow-thing.com}
+      - Admin__ApiKey=${STAGING_ADMIN_API_KEY}
+      - Redis__ConnectionString=redis-staging:6379
+      - Loki__Url=http://loki:3100
+      - Auth__Cookies__Domain=${STAGING_Auth__Cookies__Domain:-.staging.arrow-thing.com}
+      - Auth__Cookies__Secure=true
+      - Cors__AllowedOrigins__0=${STAGING_Cors__AllowedOrigins__0:-https://staging.arrow-thing.com}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    depends_on:
+      db-staging:
+        condition: service_healthy
+      redis-staging:
+        condition: service_healthy
+      loki:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  db-staging:
+    image: postgres:16-alpine
+    profiles: [staging]
+    restart: unless-stopped
+    expose:
+      - "5432"
+    environment:
+      - POSTGRES_USER=${STAGING_POSTGRES_USER:-arrowthing}
+      - POSTGRES_PASSWORD=${STAGING_POSTGRES_PASSWORD}
+      - POSTGRES_DB=${STAGING_POSTGRES_DB:-arrowthing_staging}
+    volumes:
+      - pgdata-staging:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${STAGING_POSTGRES_USER:-arrowthing}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis-staging:
+    image: redis:7-alpine
+    profiles: [staging]
+    restart: unless-stopped
+    expose:
+      - "6379"
+    volumes:
+      - redis-staging-data:/data
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  worker-staging:
+    image: ghcr.io/vicplusplus/arrow-thing-worker:staging
+    profiles: [staging]
+    restart: unless-stopped
+    environment:
+      - ConnectionStrings__Default=Host=db-staging;Database=${STAGING_POSTGRES_DB:-arrowthing_staging};Username=${STAGING_POSTGRES_USER:-arrowthing};Password=${STAGING_POSTGRES_PASSWORD}
+      - Redis__ConnectionString=redis-staging:6379
+      - Loki__Url=http://loki:3100
+    depends_on:
+      db-staging:
+        condition: service_healthy
+      redis-staging:
+        condition: service_healthy
+      loki:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   pgdata:
   redis-data:
   loki-data:
   prometheus-data:
   grafana-data:
+  pgdata-staging:
+  redis-staging-data:

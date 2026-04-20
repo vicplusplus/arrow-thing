@@ -15,6 +15,7 @@ Free and open-source (MIT). Primary distribution is WebGL on Cloudflare Pages (h
 - **`docs/BoardGeneration.md`** — generator algorithm.
 - **`docs/OnlineRoadmap.md`**, **`docs/CoopRoadmap.md`** — planned features.
 - **`CONTRIBUTING.md`** — test expectations, coding conventions.
+- **`docs/ReleaseChecklist.md`** — pre-release checklist; must pass on staging before tagging a prod release.
 - **`docs/TODO.md`** — only exists during active feature work (see Feature Workflow below).
 
 Two-layer split you'll hit constantly:
@@ -40,6 +41,15 @@ Before committing or opening a PR, verify changes abide by `CONTRIBUTING.md`:
 - `docs/TODO.md` is deleted before the PR is merge-ready.
 - No doc inconsistencies introduced.
 - GitHub releases use `.github/release_template.md`. Title format: `v{x.y} — {Short descriptive title}`. Sections: "New features", "Bug fixes", "Performance", "Infrastructure" — include only what applies.
+
+## Release Flow
+
+Two environments, gated:
+
+- **Staging** (`https://staging.arrow-thing.com` + `https://api-staging.arrow-thing.com`) auto-deploys on every push to `main` via `.github/workflows/deploy-staging.yml`.
+- **Production** (`https://arrow-thing.com` + `https://api.arrow-thing.com`) deploys only when a GitHub release is published, via `deploy.yml` + `deploy-server.yml`.
+
+Do not tag a prod release until the full `docs/ReleaseChecklist.md` passes on staging. The co-op v2.0 launch bypassed staging and broke in prod for a day — the checklist exists so that cannot happen again.
 
 ## Unity Editor Configuration
 

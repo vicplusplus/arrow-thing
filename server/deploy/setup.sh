@@ -91,7 +91,8 @@ MISSING=0
 
 # Check .env has required keys
 if [ -f "$DEPLOY_DIR/.env" ]; then
-  for KEY in POSTGRES_PASSWORD JWT_SECRET ADMIN_API_KEY GRAFANA_ADMIN_PASSWORD; do
+  for KEY in POSTGRES_PASSWORD JWT_SECRET ADMIN_API_KEY GRAFANA_ADMIN_PASSWORD \
+             STAGING_POSTGRES_PASSWORD STAGING_JWT_SECRET STAGING_ADMIN_API_KEY; do
     if ! grep -q "^${KEY}=.\+" "$DEPLOY_DIR/.env" 2>/dev/null; then
       echo "MISSING: $KEY is not set in $DEPLOY_DIR/.env"
       MISSING=1
