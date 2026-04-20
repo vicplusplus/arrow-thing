@@ -132,9 +132,16 @@ public sealed class InputHandler : MonoBehaviour
 
     /// <summary>
     /// True when the pointer is over an interactive HUD element (button,
-    /// modal, etc.) so world-space taps/drags should be suppressed. Screen
-    /// coords come in with Y measured from the bottom (Input System), but
-    /// UI Toolkit panels use Y-from-top — flip before picking.
+    /// modal, etc.) so world-space taps/drags should be suppressed.
+    ///
+    /// Input System pointer coords are screen-space Y-from-bottom. UI Toolkit
+    /// panels live in a virtual panel-space whose units depend on the
+    /// PanelSettings (ScaleMode.MatchWidthOrHeight vs ConstantPixelSize, DPI,
+    /// etc.). A naive "Screen.height - y" flip only works when panel scale
+    /// equals screen scale — with any match-width scale factor the picked
+    /// position lands somewhere else entirely and buttons appear to let
+    /// clicks pass through. Use RuntimePanelUtils.ScreenToPanel to convert
+    /// correctly regardless of scale mode.
     /// </summary>
     private bool IsPointerOverHud(Vector2 screenPos)
     {
@@ -143,15 +150,28 @@ public sealed class InputHandler : MonoBehaviour
         var root = _hudUIDocument.rootVisualElement;
         if (root == null || root.panel == null)
             return false;
-        var panelPos = new Vector2(screenPos.x, Screen.height - screenPos.y);
+        var panelPos = RuntimePanelUtils.ScreenToPanel(
+            root.panel,
+            new Vector2(screenPos.x, Screen.height - screenPos.y)
+        );
         var picked = root.panel.Pick(panelPos);
         if (picked == null)
             return false;
         // The panel's own root and the UXML's TemplateContainer fill the
         // whole screen but aren't real UI — treat them as empty space so
-        // world clicks through them still reach the board.
+        // world clicks through them still reach the board. Also skip
+        // elements explicitly flagged as non-interactive (PickingMode.Ignore),
+        // including the root loading-overlay before it's shown.
         if (picked == root || picked is TemplateContainer)
             return false;
+        // Walk up looking for a hidden ancestor (display:none). The panel's
+        // Pick() already respects visibility, but belt-and-suspenders: if any
+        // ancestor explicitly opts out, treat the hit as empty space.
+        for (var cur = picked; cur != null; cur = cur.parent)
+        {
+            if (cur.resolvedStyle.display == DisplayStyle.None)
+                return false;
+        }
         return true;
     }
 
