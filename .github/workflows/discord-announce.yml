@@ -2,7 +2,7 @@ name: Discord Announcement
 
 on:
   workflow_run:
-    workflows: ["Deploy WebGL to Cloudflare Pages"]
+    workflows: ["Deploy to Production"]
     types: [completed]
 
 jobs:

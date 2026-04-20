@@ -1,9 +1,16 @@
 name: Deploy to Staging
 
-# Staging auto-deploys on every push to main. Prod deploys only on a
-# published GitHub release (see deploy.yml + deploy-server.yml). The
-# staging env is a soak gate for the Release Checklist before tagging.
-# See docs/ReleaseChecklist.md.
+# Staging auto-deploys on every push to main. Prod promotes the
+# staging artifacts on a published GitHub release (see deploy.yml).
+# The staging env is a soak gate for the Release Checklist before
+# tagging. See docs/ReleaseChecklist.md.
+#
+# Path filters (see `changes` job below) skip the slow Unity build on
+# server-only commits and the Docker build on client-only commits.
+# IMPORTANT: the release commit must have both artifacts available for
+# prod promotion. If the final pre-release commit touched only one
+# side, dispatch this workflow manually at that commit before tagging
+# to produce both artifacts.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -24,7 +31,38 @@ permissions:
   packages: write
 
 jobs:
+  # Skip the slow Unity build on server-only commits, and skip the
+  # Docker build on client-only commits. Saves ~15 min on typical
+  # server changes. workflow_dispatch always runs both (manual intent).
+  # Paths list mirrors what each build actually consumes — keep this
+  # accurate or you'll ship stale artifacts.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      client: ${{ steps.filter.outputs.client }}
+      server: ${{ steps.filter.outputs.server }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          filters: |
+            client:
+              - 'Assets/**'
+              - 'Packages/**'
+              - 'ProjectSettings/**'
+              - '.github/workflows/deploy-staging.yml'
+            server:
+              - 'server/**'
+              - '.github/workflows/deploy-staging.yml'
+
   build-webgl:
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.client == 'true' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -53,11 +91,15 @@ jobs:
           mkdir -p Assets/Resources
           git rev-parse --short HEAD > Assets/Resources/git-commit.txt
 
-      - name: Set version (staging = latest-tag + commit suffix)
+      - name: Set version (base tag + commit suffix)
         run: |
+          # Plain "{BASE}+{SHORT}" with no env marker so the same build
+          # can be promoted to prod unchanged (see deploy.yml). The
+          # staging hostname already makes the env obvious to users;
+          # Application.version doesn't need to encode it.
           BASE=$(git tag --sort=-v:refname | head -n1 | sed 's/^v//' || echo "0.0")
           SHORT=$(git rev-parse --short HEAD)
-          VERSION="${BASE}-staging+${SHORT}"
+          VERSION="${BASE}+${SHORT}"
           echo "Setting bundleVersion to $VERSION"
           sed -i "s/bundleVersion: .*/bundleVersion: $VERSION/" ProjectSettings/ProjectSettings.asset
 
@@ -76,7 +118,10 @@ jobs:
         with:
           name: webgl-build-staging
           path: build/WebGL/WebGL
-          retention-days: 1
+          # Prod promotes this artifact (see deploy.yml). 14d covers a
+          # normal release cadence; tags older than that force a rebuild
+          # via workflow_dispatch rebuild=true.
+          retention-days: 14
 
   deploy-client:
     runs-on: ubuntu-latest
@@ -99,6 +144,8 @@ jobs:
           command: pages deploy build --project-name=arrow-thing-staging --commit-dirty=true
 
   build-server:
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.server == 'true' }}
     runs-on: ubuntu-latest
 
     steps:

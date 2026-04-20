@@ -13,11 +13,12 @@ Staging mirrors production (same Cloudflare edge, same VPS image layout, same ng
 
 ## Release Flow
 
-1. Merge feature PRs into `main`. Push auto-deploys client + server to staging.
+1. Merge feature PRs into `main`. Push auto-deploys client + server to staging. Path filters skip the Unity build on server-only commits and vice versa — saves ~15 min per iteration.
 2. Run the **Pre-Release Checklist** below against `https://staging.arrow-thing.com`.
 3. If any item fails, fix on `main` and re-soak — do not cherry-pick around staging.
 4. When all items pass, draft a GitHub release using `.github/release_template.md`. Tag format `v{x.y}` or `v{x.y.z}`.
-5. Publish the release. Prod client + server deploy automatically.
+5. **Before publishing**, confirm the release commit has both a WebGL artifact and a server image on staging. If the last push only touched one side, manually dispatch `Deploy to Staging` on that commit to produce both. Prod promotes — it does not rebuild.
+6. Publish the release. Prod client + server promote automatically (~2 min, no Unity rebuild). The deployed bits are bit-identical to what soaked on staging.
 6. Run the **Post-Deploy Smoke** on `https://arrow-thing.com`.
 7. Announce (Discord workflow fires automatically on release publish).
 
@@ -77,6 +78,6 @@ Minimum verification the prod deploy didn't regress anything obvious. Full check
 
 ## When something breaks in prod anyway
 
-1. Rollback client: re-run the `Deploy WebGL to Cloudflare Pages` workflow on the previous release tag via `workflow_dispatch`.
-2. Rollback server: SSH to VPS, `docker compose` with the previous image tag (images are tagged by SHA in `deploy-server.yml`).
+1. Rollback client: re-run the `Deploy to Production` workflow on the previous release tag via `workflow_dispatch`. The previous tag's commit still has a staging WebGL artifact (14d retention) to promote.
+2. Rollback server: SSH to VPS, `docker compose` with the previous image tag (images tagged by SHA in `deploy.yml`).
 3. File an incident note in `docs/` and add whatever check would have caught it to this checklist.
