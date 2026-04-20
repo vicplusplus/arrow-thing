@@ -1,10 +1,13 @@
 // Resolves the API base URL for WebGL builds. Returns:
 //   - `?api=<url>` query param if present (full override, no trailing slash)
 //   - `http://localhost:5000` when the page is served from localhost/127.0.0.1
+//   - `https://api-staging.arrow-thing.com` when served from the staging host
 //   - empty string otherwise (C# falls back to the production URL)
 //
-// This lets a local WebGL build point at a local ASP.NET Core API without
-// any rebuild-flags or per-environment preprocessor toggles.
+// This lets the same WebGL build run against local, staging, or prod
+// backends without build-flags or per-environment preprocessor toggles.
+// The staging Pages project serves the same artifact that prod does; only
+// the hostname differs, so routing by hostname keeps the pipeline simple.
 
 mergeInto(LibraryManager.library, {
     ApiUrl_Resolve: function () {
@@ -18,6 +21,8 @@ mergeInto(LibraryManager.library, {
                 var host = window.location.hostname;
                 if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0') {
                     url = 'http://' + host + ':5000';
+                } else if (host === 'staging.arrow-thing.com') {
+                    url = 'https://api-staging.arrow-thing.com';
                 }
             }
             var bufferSize = lengthBytesUTF8(url) + 1;

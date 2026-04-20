@@ -5,8 +5,8 @@ mergeInto(LibraryManager.library, {
     // on build settings / emscripten version, so we cover both. Without this
     // the browser strips our HttpOnly session cookies on cross-origin calls.
     //
-    // Called once at ApiClient construction with the API origin (e.g.
-    // "https://api.arrow-thing.com" in prod, "http://localhost:5000" in dev).
+    // Called once at ApiClient construction with the API origin resolved
+    // by ApiUrl_Resolve (prod, staging, or localhost depending on host).
     // The patch is scoped by origin prefix so third-party XHRs (if any) stay
     // credential-less.
     EnableCredentialsForApi: function(apiOriginPtr) {

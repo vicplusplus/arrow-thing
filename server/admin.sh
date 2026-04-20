@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_URL="http://localhost:5043"
 PROD_URL="https://api.arrow-thing.com"
+STAGING_URL="https://api-staging.arrow-thing.com"
 
 # ── Load .env ───────────────────────────────────────────────────────
 if [[ -f "$SCRIPT_DIR/.env" ]]; then
@@ -12,28 +13,39 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
     set +a
 fi
 
-# ── Parse --prod flag ───────────────────────────────────────────────
-PROD=false
-if [[ "${1:-}" == "--prod" ]]; then
-    PROD=true
-    shift
-fi
+# ── Parse --prod / --staging flag ───────────────────────────────────
+TARGET="local"
+case "${1:-}" in
+    --prod)    TARGET="prod";    shift ;;
+    --staging) TARGET="staging"; shift ;;
+esac
 
-if $PROD; then
-    BASE_URL="$PROD_URL"
-    KEY="${PROD_ADMIN_API_KEY:-}"
-    if [[ -z "$KEY" ]]; then
-        echo "Error: PROD_ADMIN_API_KEY not set in .env" >&2
-        exit 1
-    fi
-else
-    BASE_URL="$LOCAL_URL"
-    KEY="${ADMIN_API_KEY:-}"
-    if [[ -z "$KEY" ]]; then
-        echo "Error: ADMIN_API_KEY not set in .env" >&2
-        exit 1
-    fi
-fi
+case "$TARGET" in
+    prod)
+        BASE_URL="$PROD_URL"
+        KEY="${PROD_ADMIN_API_KEY:-}"
+        if [[ -z "$KEY" ]]; then
+            echo "Error: PROD_ADMIN_API_KEY not set in .env" >&2
+            exit 1
+        fi
+        ;;
+    staging)
+        BASE_URL="$STAGING_URL"
+        KEY="${STAGING_ADMIN_API_KEY:-}"
+        if [[ -z "$KEY" ]]; then
+            echo "Error: STAGING_ADMIN_API_KEY not set in .env" >&2
+            exit 1
+        fi
+        ;;
+    local)
+        BASE_URL="$LOCAL_URL"
+        KEY="${ADMIN_API_KEY:-}"
+        if [[ -z "$KEY" ]]; then
+            echo "Error: ADMIN_API_KEY not set in .env" >&2
+            exit 1
+        fi
+        ;;
+esac
 
 # ── Helpers ─────────────────────────────────────────────────────────
 pretty() {
@@ -57,7 +69,7 @@ request() {
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--prod] <command> [args]
+Usage: $(basename "$0") [--prod|--staging] <command> [args]
 
 Commands:
   flagged-users                 List all flagged accounts
@@ -67,9 +79,11 @@ Commands:
   unlock-account <email>        Unlock an account (sends password reset)
 
 Options:
-  --prod    Target production (api.arrow-thing.com).
-            Reads PROD_ADMIN_API_KEY from .env.
-            Without this flag, targets localhost and uses ADMIN_API_KEY.
+  --prod     Target production (api.arrow-thing.com).
+             Reads PROD_ADMIN_API_KEY from .env.
+  --staging  Target staging (api-staging.arrow-thing.com).
+             Reads STAGING_ADMIN_API_KEY from .env.
+             Without either flag, targets localhost and uses ADMIN_API_KEY.
 EOF
     exit 1
 }
