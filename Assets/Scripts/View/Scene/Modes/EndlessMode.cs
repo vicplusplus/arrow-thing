@@ -195,10 +195,24 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
                 + $"duration={_endless.RunDurationSeconds:F1}s"
         );
 
-        // Freeze gameplay: input off, HUD buttons hidden. Player sees the
-        // saturated board with the danger tint locked at full red until the
-        // result screen appears.
+        // Freeze gameplay: input off, shared HUD chrome hidden. Player sees
+        // the saturated board with the danger tint locked at full red until
+        // the result screen appears.
         _controller.DisableGameplayHudAndInput();
+
+        // Hide endless-specific HUD overlays too — meter and cleared-count
+        // label aren't useful once the run is over and would otherwise
+        // bleed through behind the result screen.
+        var hudRoot = _controller.HudDocument?.rootVisualElement;
+        if (hudRoot != null)
+        {
+            var meter = hudRoot.Q<VisualElement>("endless-meter");
+            if (meter != null)
+                meter.style.display = DisplayStyle.None;
+            var clearsLabel = hudRoot.Q<Label>("endless-clears-label");
+            if (clearsLabel != null)
+                clearsLabel.style.display = DisplayStyle.None;
+        }
     }
 
     private void OnResultReady()

@@ -248,8 +248,10 @@ public sealed class GameController : MonoBehaviour
     /// <summary>
     /// Internal: freezes gameplay at end-of-run (used by EndlessMode topout
     /// and could be used by any future mode with a delayed result screen).
-    /// Disables input, hides back/retry buttons, sets victory-started so
-    /// Escape stops opening the leave modal.
+    /// Disables input, hides all shared HUD chrome (back / retry / trail
+    /// toggle / timer label), sets victory-started so Escape stops opening
+    /// the leave modal. Mode-specific HUD overlays (endless meter, coop
+    /// sidebar) are the mode's own responsibility to hide.
     /// </summary>
     internal void DisableGameplayHudAndInput()
     {
@@ -260,6 +262,10 @@ public sealed class GameController : MonoBehaviour
             _backBtn.style.display = DisplayStyle.None;
         if (_retryBtn != null)
             _retryBtn.style.display = DisplayStyle.None;
+        if (_trailToggleBtn != null)
+            _trailToggleBtn.style.display = DisplayStyle.None;
+        if (_timerLabel != null)
+            _timerLabel.style.display = DisplayStyle.None;
     }
 
     /// <summary>Internal: triggers a same-mode scene reload (Ctrl+R / retry-confirmed).</summary>
