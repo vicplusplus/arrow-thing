@@ -30,11 +30,11 @@ public sealed class EndlessModeController : MonoBehaviour
     private float previewDurationSeconds = 3f;
 
     /// <summary>
-    /// Max arrow length the spawn generator may produce. Overrides the
-    /// global <c>maxArrowLength</c> (which is set high for classic mode).
-    /// Smaller values mean uniform-length sampling produces a useful range
-    /// (e.g. 6 → arrows of length 2–6, average ~4). Higher = more variety
-    /// but fewer arrows fit in tight spaces.
+    /// Max arrow length the spawn generator may produce. Smaller values mean
+    /// uniform-length sampling produces a useful range (e.g. 6 → arrows of
+    /// length 2–6, average ~4). Higher = more variety but fewer arrows fit
+    /// in tight spaces. Independent of <c>GameSettings.MaxArrowLength</c>
+    /// (which is classic-mode-specific).
     /// </summary>
     [SerializeField]
     private int endlessMaxArrowLength = 6;
@@ -165,7 +165,6 @@ public sealed class EndlessModeController : MonoBehaviour
 
     private EndlessBoardSession _session;
     private BoardView _boardView;
-    private int _maxArrowLength;
     private bool _active;
 
     // Garbage meter: queue of combo sizes, FIFO. _meter[0] = oldest = next
@@ -224,7 +223,6 @@ public sealed class EndlessModeController : MonoBehaviour
     public void Initialize(
         Board board,
         BoardView boardView,
-        int maxArrowLength,
         int spawnSeed,
         VisualElement hudRoot = null,
         Camera camera = null
@@ -236,11 +234,6 @@ public sealed class EndlessModeController : MonoBehaviour
             throw new ArgumentNullException(nameof(boardView));
 
         _boardView = boardView;
-        // Override the caller-supplied max length with the endless-mode cap
-        // so spawn-time arrows have a sensible upper bound (uniform sampling
-        // would otherwise pull from [2, 40] and produce huge arrows that
-        // can't fit on a partially-occupied board anyway).
-        _maxArrowLength = endlessMaxArrowLength;
         _session = new EndlessBoardSession(board, endlessMaxArrowLength, spawnSeed);
 
         _camera = camera;

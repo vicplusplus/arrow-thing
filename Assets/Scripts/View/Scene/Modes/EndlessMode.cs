@@ -25,10 +25,11 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
     private GameController _controller;
     private EndlessModeController _endless;
 
-    // Resolved board parameters (same shape as ClassicMode but no timer/recorder/save).
+    // Resolved board parameters. Endless ignores GameSettings.MaxArrowLength
+    // entirely — EndlessModeController has its own arrow-length cap for
+    // spawn-time generation.
     private int _w;
     private int _h;
-    private int _maxLen;
     private int _activeSeed;
 
     public string Name => "Endless";
@@ -103,7 +104,7 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
     {
         ResolveParameters();
 
-        Debug.Log($"[EndlessMode] Setup: board={_w}x{_h}, maxLen={_maxLen}, seed={_activeSeed}");
+        Debug.Log($"[EndlessMode] Setup: board={_w}x{_h}, seed={_activeSeed}");
 
         _controller.ShowLoadingInternal("Loading...");
         yield return null;
@@ -149,7 +150,6 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
         _endless.Initialize(
             board,
             boardView,
-            _maxLen,
             spawnSeed: _activeSeed,
             hudRoot: hudRoot,
             camera: context.MainCamera
@@ -173,13 +173,11 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
         {
             _w = GameSettings.Width;
             _h = GameSettings.Height;
-            _maxLen = GameSettings.MaxArrowLength;
         }
         else
         {
             _w = _controller.EditorBoardWidth;
             _h = _controller.EditorBoardHeight;
-            _maxLen = _controller.EditorMaxArrowLength;
         }
         _activeSeed =
             (GameSettings.IsSet || _controller.EditorUseRandomSeed)
