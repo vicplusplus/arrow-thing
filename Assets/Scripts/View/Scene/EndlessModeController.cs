@@ -7,7 +7,7 @@ using UnityEngine.UIElements;
 /// Runs the singleplayer endless-mode loop on a combo-queue garbage-meter
 /// model:
 ///
-///   1. <b>Push tick</b> (every <see cref="pushIntervalSeconds"/>): a new combo
+///   1. <b>Push tick</b> (every <see cref="CurrentPushIntervalSeconds"/>): a new combo
 ///      of size C (computed from board fill + total clears) is appended to the
 ///      back of <see cref="_meter"/>. The oldest combo is then popped and
 ///      "sent to pending" — the generator tries to spawn C pending arrows.
@@ -52,20 +52,13 @@ public sealed class EndlessModeController : MonoBehaviour
     private int weightPerPerpDep = 2;
 
     /// <summary>
-    /// Baseline number of candidate placements sampled per arrow spawn (the
-    /// highest-scoring is kept). Scales up with difficulty via
-    /// <see cref="spawnCandidatesPerBump"/> — late game searches harder for
-    /// good arrows. Boards are tiny so even 30+ candidates per spawn is cheap.
+    /// Number of candidate placements sampled per arrow spawn (the
+    /// highest-scoring is kept). Constant — arrow QUALITY (perp-dep
+    /// density) stays stable across the run. Difficulty escalation
+    /// happens entirely via push cadence (see <see cref="pushIntervalAtStartSeconds"/>).
     /// </summary>
     [SerializeField]
-    private int spawnCandidatesBase = 6;
-
-    /// <summary>
-    /// Extra candidate samples added per base-rate clear-tier bump. Late
-    /// game gets correspondingly more attempts to find a hard arrow.
-    /// </summary>
-    [SerializeField]
-    private int spawnCandidatesPerBump = 2;
+    private int spawnCandidates = 6;
 
     /// <summary>Sweet-spot arrow length the scorer prefers (no penalty at this length).</summary>
     [SerializeField]
@@ -80,20 +73,38 @@ public sealed class EndlessModeController : MonoBehaviour
     private int scorePerpDepBonus = 5;
 
     /// <summary>
-    /// Constant push interval. Earlier prototypes interpolated from a fast
-    /// "empty board" rate to a slow "full board" rate, but that made full
-    /// boards feel too forgiving — the spawn rate dropped right when the
-    /// player needed steady pressure to avoid topout. Single fixed cadence
-    /// now; difficulty escalates via combo size only.
+    /// Push interval at run start. Combos arrive this far apart at clear=0
+    /// and the gap shrinks toward <see cref="pushIntervalMinSeconds"/> as
+    /// the player progresses (see <see cref="pushIntervalStepDownPerTier"/>).
+    /// Difficulty escalation happens via cadence, not combo size.
     /// </summary>
     [SerializeField]
-    private float pushIntervalSeconds = 1.8f;
+    private float pushIntervalAtStartSeconds = 2.0f;
 
     /// <summary>
-    /// Starting baseline combo size in <i>garbage points</i> (each arrow
-    /// contributes its cell-count). Bumps up by 1 per power-law clear-count
-    /// tier (see <see cref="clearsForFirstBump"/> and
-    /// <see cref="comboBaseRatePower"/>). No cap — late game keeps escalating.
+    /// Hard floor on push interval. Past this, no further speedup — prevents
+    /// the late game from becoming literally unwinnable.
+    /// </summary>
+    [SerializeField]
+    private float pushIntervalMinSeconds = 0.7f;
+
+    /// <summary>
+    /// Per-tier push-interval reduction in seconds. With default 0.1s and
+    /// the default tier curve, interval shrinks ~0.1s per tier:
+    ///   tier 0 (clear 0)    → 2.0s
+    ///   tier 2 (clear 25)   → 1.8s
+    ///   tier 5 (clear 87)   → 1.5s
+    ///   tier 10 (clear 230) → 1.0s
+    ///   tier 13 (clear 365) → 0.7s (floor)
+    /// </summary>
+    [SerializeField]
+    private float pushIntervalStepDownPerTier = 0.1f;
+
+    /// <summary>
+    /// Combo size in <i>garbage points</i> (each arrow contributes its
+    /// cell-count). Constant baseline — only the occupancy catch-up bonus
+    /// modulates it. Difficulty escalation comes from push cadence, not
+    /// combo size.
     ///
     /// Roughly 1 point ≈ 1 cell of arrow. With avg arrow length ~4, a combo
     /// of 12 points = ~3 arrows.
@@ -102,24 +113,22 @@ public sealed class EndlessModeController : MonoBehaviour
     private int comboBaseRate = 9;
 
     /// <summary>
-    /// Clear count for the first base-rate bump. Subsequent bumps fire at
-    /// <i>quadratic</i> spacing: bump <c>n</c> at <c>n² × clearsForFirstBump</c>
-    /// clears. E.g. with default 20: bumps at 20, 80, 180, 320, 500, 720,
-    /// 980, 1280, 1620 clears. Square-root ramp — faster than logarithmic
-    /// (player feels difficulty rise consistently) but slower than linear
-    /// (no late-game explosion).
+    /// Clear count for the first difficulty tier. Subsequent tiers follow
+    /// the power-law curve <c>tier = floor((clears / firstTier)^power)</c>.
+    /// Tier feeds into push-interval speedup (see
+    /// <see cref="pushIntervalStepDownPerTier"/>).
     /// </summary>
     [SerializeField]
-    private int clearsForFirstBump = 10;
+    private int clearsForFirstTier = 10;
 
     /// <summary>
-    /// Power-law exponent for the base-rate ramp.
-    /// <c>bumps = floor((clears / firstBump)^power)</c>. 0.5 = sqrt (gentle);
+    /// Power-law exponent for the difficulty tier ramp.
+    /// <c>tier = floor((clears / firstTier)^power)</c>. 0.5 = sqrt (gentle);
     /// 1.0 = linear (steep); 0.7+ = perceptibly rising late-game. Higher
     /// values shorten run length.
     /// </summary>
     [SerializeField, Range(0.4f, 1f)]
-    private float comboBaseRatePower = 0.78f;
+    private float difficultyTierPower = 0.78f;
 
     /// <summary>
     /// Target board occupancy the adaptive bonus ramps down to. Below this,
@@ -441,8 +450,7 @@ public sealed class EndlessModeController : MonoBehaviour
     private bool TrySpawnOnePending(float commitAt, out int weight)
     {
         weight = 0;
-        int candidates = spawnCandidatesBase + ComputeBaseRateBumps() * spawnCandidatesPerBump;
-        var pending = _session.TrySpawnPending(commitAt, candidates, ScoreCandidate);
+        var pending = _session.TrySpawnPending(commitAt, spawnCandidates, ScoreCandidate);
         if (pending == null)
             return false;
 
@@ -464,10 +472,10 @@ public sealed class EndlessModeController : MonoBehaviour
 
     private int ComputeComboSize()
     {
-        // Two-term combo size: base-rate (clear-progression ramp) +
-        // occupancy catch-up bonus (positive only, ramps from +scale at
-        // empty to 0 at target via a quarter-cosine, clamped at 0 above).
-        int baseRate = comboBaseRate + ComputeBaseRateBumps();
+        // Combo size = fixed baseline + occupancy catch-up bonus (positive
+        // only, ramps from +scale at empty to 0 at target via a quarter-
+        // cosine, clamped at 0 above). Difficulty progression doesn't
+        // touch combo size — it accelerates push cadence instead.
         float occupancy = OccupancyRatio();
         float adaptive = 0f;
         if (occupancy < targetOccupancy && targetOccupancy > 0f)
@@ -477,24 +485,36 @@ public sealed class EndlessModeController : MonoBehaviour
             float t = occupancy / targetOccupancy;
             adaptive = Mathf.Cos(t * Mathf.PI * 0.5f) * occupancyAdaptiveScale;
         }
-        int size = baseRate + Mathf.RoundToInt(adaptive);
+        int size = comboBaseRate + Mathf.RoundToInt(adaptive);
         if (size < 1)
             size = 1;
         return size;
     }
 
     /// <summary>
-    /// Power-law tier bump count.
-    /// <c>bumps = floor((clears / firstBump)^power)</c>. With default
-    /// <c>firstBump=15, power=0.65</c>: bumps fire near 15, 50, 105, 180,
-    /// 275, 390, 525, 685, 870, 1080, 1310 clears — moderate ramp, no cap.
+    /// Power-law difficulty tier.
+    /// <c>tier = floor((clears / firstTier)^power)</c>. With default
+    /// <c>firstTier=10, power=0.78</c>: tiers fire near 10, 25, 43, 64, 87,
+    /// 113, 140, 168, 198, 230, 263, 297, 332, 367 clears. Used to ramp
+    /// the push interval downward over time.
     /// </summary>
-    private int ComputeBaseRateBumps()
+    private int ComputeDifficultyTier()
     {
-        if (ClearCount < clearsForFirstBump)
+        if (ClearCount < clearsForFirstTier)
             return 0;
-        float ratio = ClearCount / (float)clearsForFirstBump;
-        return Mathf.FloorToInt(Mathf.Pow(ratio, comboBaseRatePower));
+        float ratio = ClearCount / (float)clearsForFirstTier;
+        return Mathf.FloorToInt(Mathf.Pow(ratio, difficultyTierPower));
+    }
+
+    /// <summary>
+    /// Current push interval given progression. Linear step-down per
+    /// difficulty tier, clamped at <see cref="pushIntervalMinSeconds"/>.
+    /// </summary>
+    private float CurrentPushIntervalSeconds()
+    {
+        float interval =
+            pushIntervalAtStartSeconds - ComputeDifficultyTier() * pushIntervalStepDownPerTier;
+        return interval < pushIntervalMinSeconds ? pushIntervalMinSeconds : interval;
     }
 
     /// <summary>
@@ -531,12 +551,14 @@ public sealed class EndlessModeController : MonoBehaviour
         if (_currentCombo > 0 && _lastClearTime > 0f && now - _lastClearTime > comboTimerSeconds)
             BreakCombo();
 
-        // Push tick (drives the garbage meter forward). Constant interval —
-        // difficulty escalates via combo size, not push cadence.
+        // Push tick (drives the garbage meter forward). Interval shrinks
+        // with progression (see CurrentPushIntervalSeconds) — difficulty
+        // escalates via cadence, not combo size or arrow quality.
         _pushTimer += Time.deltaTime;
-        if (_pushTimer >= pushIntervalSeconds)
+        float interval = CurrentPushIntervalSeconds();
+        if (_pushTimer >= interval)
         {
-            _pushTimer -= pushIntervalSeconds;
+            _pushTimer -= interval;
             OnPushTick();
         }
 
