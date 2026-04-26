@@ -131,8 +131,7 @@ public sealed class EndlessBoardSession
                     ref _state,
                     _maxLength,
                     ref _rng,
-                    centermostFirst: false,
-                    shortBiased: false
+                    centermostFirst: false
                 );
                 if (!placed)
                     break; // pool exhausted

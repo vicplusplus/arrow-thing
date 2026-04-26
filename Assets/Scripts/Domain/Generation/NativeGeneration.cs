@@ -101,27 +101,16 @@ public static class NativeGeneration
     ///
     /// <paramref name="centermostFirst"/> selects the head candidate by minimum
     /// Chebyshev distance from the board center instead of uniformly at random.
-    /// Ties are broken uniformly at random. Used by the endless mode generator to
-    /// produce a square-ring fill pattern.
-    ///
-    /// <paramref name="shortBiased"/> samples target length from a geometric
-    /// distribution (<c>P(length=k) ∝ 0.5^k</c>) starting at <see cref="MinArrowLength"/>,
-    /// capped at <paramref name="maxLength"/>. Heavily favors length 2-3, with a
-    /// long tail for occasional larger arrows. Endless mode wants short arrows
-    /// for incremental pressure; classic single-shot generation keeps the
-    /// uniform [2, maxLength] for variety.
+    /// Ties are broken uniformly at random. Produces a square-ring fill pattern.
     /// </summary>
     public static bool TryGenerateArrow(
         ref NativeGenerationState state,
         int maxLength,
         ref PortableRandom rng,
-        bool centermostFirst = false,
-        bool shortBiased = false
+        bool centermostFirst = false
     )
     {
-        int targetLength = shortBiased
-            ? SampleGeometricLength(MinArrowLength, maxLength, ref rng)
-            : rng.NextInt(MinArrowLength, maxLength + 1);
+        int targetLength = rng.NextInt(MinArrowLength, maxLength + 1);
         int w = state.boardWidth;
 
         while (state.candidateCount > 0)
@@ -1060,26 +1049,6 @@ public static class NativeGeneration
                 dy = 0;
                 break;
         }
-    }
-
-    /// <summary>
-    /// Geometric-distribution length sample: each step has 50% chance to stop,
-    /// 50% to continue. Result is clamped to <c>[minLen, maxLen]</c>.
-    /// Approximate distribution: P(2)=50%, P(3)=25%, P(4)=12.5%, ...
-    /// Cheap to sample (uses one rng call per failed-stop); biases generation
-    /// toward short arrows for the endless-mode passive spawn pipeline.
-    /// </summary>
-    private static int SampleGeometricLength(int minLen, int maxLen, ref PortableRandom rng)
-    {
-        int len = minLen;
-        while (len < maxLen)
-        {
-            // 50% chance to stop. NextInt(2) returns 0 or 1.
-            if (rng.NextInt(2) == 0)
-                break;
-            len++;
-        }
-        return len;
     }
 
     /// <summary>

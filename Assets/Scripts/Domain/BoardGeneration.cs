@@ -13,8 +13,8 @@ public static class BoardGeneration
     ///
     /// <paramref name="centermostFirst"/> selects head candidates by minimum
     /// Chebyshev distance from the board center (with uniform random tie-break)
-    /// instead of uniformly at random. Produces a square-ring fill pattern for
-    /// the endless mode. Default is uniform random — preserves existing callers.
+    /// instead of uniformly at random. Produces a square-ring fill pattern.
+    /// Default is uniform random — preserves existing callers.
     ///
     /// <paramref name="targetCellCount"/> caps the fill at approximately the
     /// given occupied-cell count. 0 (default) means fill until the generator
@@ -28,8 +28,7 @@ public static class BoardGeneration
         int maxLength,
         int seed,
         bool centermostFirst = false,
-        int targetCellCount = 0,
-        bool shortBiased = false
+        int targetCellCount = 0
     )
     {
         int maxPossibleArrows = board.Width * board.Height / 2;
@@ -49,15 +48,7 @@ public static class BoardGeneration
 
         while (created < maxPossibleArrows && state.candidateCount > 0)
         {
-            if (
-                !NativeGeneration.TryGenerateArrow(
-                    ref state,
-                    maxLength,
-                    ref rng,
-                    centermostFirst,
-                    shortBiased
-                )
-            )
+            if (!NativeGeneration.TryGenerateArrow(ref state, maxLength, ref rng, centermostFirst))
                 break;
 
             // Extract arrow from scratch buffers
