@@ -54,15 +54,16 @@ public sealed class MainMenuController : NavigableScene
     // Singleplayer mode tabs (Classic | Endless). Each tab shows its own
     // preset grid + start row. Endless has no custom size (run length depends
     // on board fill rate, so non-standard sizes wouldn't be leaderboard-comparable).
+    // Endless caps at 20×20 — anything larger doesn't fit one screen with its
+    // dependency graph and becomes practically unplayable.
     private Button _spTabClassic;
     private Button _spTabEndless;
     private VisualElement _spClassicPanel;
     private VisualElement _spEndlessPanel;
     private Button _endlessPresetSmall;
-    private Button _endlessPresetMedium;
     private Button _endlessPresetLarge;
     private bool _endlessTabActive;
-    private int _endlessSelectedSize = 16;
+    private int _endlessSelectedSize = 20;
     private const string EndlessSizePrefKey = "endless.size";
     private const string SpTabPrefKey = "menu.sp.tab"; // "classic" | "endless"
 
@@ -467,24 +468,22 @@ public sealed class MainMenuController : NavigableScene
         _spEndlessPanel = root.Q("sp-endless-panel");
 
         _endlessPresetSmall = root.Q<Button>("endless-preset-small");
-        _endlessPresetMedium = root.Q<Button>("endless-preset-medium");
         _endlessPresetLarge = root.Q<Button>("endless-preset-large");
 
         _spTabClassic.clicked += () => SetSpTab(endless: false);
         _spTabEndless.clicked += () => SetSpTab(endless: true);
 
         _endlessPresetSmall.clicked += () => SelectEndlessSize(10);
-        _endlessPresetMedium.clicked += () => SelectEndlessSize(20);
-        _endlessPresetLarge.clicked += () => SelectEndlessSize(40);
+        _endlessPresetLarge.clicked += () => SelectEndlessSize(20);
 
         var endlessBtn = root.Q<Button>("endless-btn");
         if (endlessBtn != null)
             endlessBtn.clicked += OnStartEndless;
 
-        // Restore last-used endless size + tab from prefs.
-        int storedSize = PlayerPrefs.GetInt(EndlessSizePrefKey, 16);
-        _endlessSelectedSize =
-            (storedSize == 10 || storedSize == 20 || storedSize == 40) ? storedSize : 20;
+        // Restore last-used endless size + tab from prefs. Stored values
+        // outside the {10, 20} set (e.g. legacy 16/40) snap back to 20.
+        int storedSize = PlayerPrefs.GetInt(EndlessSizePrefKey, 20);
+        _endlessSelectedSize = (storedSize == 10 || storedSize == 20) ? storedSize : 20;
         UpdateEndlessHighlight();
 
         bool startOnEndlessTab = PlayerPrefs.GetString(SpTabPrefKey, "classic") == "endless";
@@ -513,8 +512,7 @@ public sealed class MainMenuController : NavigableScene
     private void UpdateEndlessHighlight()
     {
         ToggleClass(_endlessPresetSmall, "preset-btn--selected", _endlessSelectedSize == 10);
-        ToggleClass(_endlessPresetMedium, "preset-btn--selected", _endlessSelectedSize == 20);
-        ToggleClass(_endlessPresetLarge, "preset-btn--selected", _endlessSelectedSize == 40);
+        ToggleClass(_endlessPresetLarge, "preset-btn--selected", _endlessSelectedSize == 20);
     }
 
     private static void ToggleClass(VisualElement el, string className, bool on)

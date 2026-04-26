@@ -90,14 +90,15 @@
                     </ui:VisualElement>
                 </ui:VisualElement>
 
-                <!-- Endless preset grid + endless start. Three fixed sizes; no
+                <!-- Endless preset grid + endless start. Two fixed sizes; no
                      custom (run length depends on board fill rate, which would
-                     make custom sizes uncomparable on the leaderboard). -->
+                     make custom sizes uncomparable on the leaderboard).
+                     Anything past 20×20 doesn't fit on one screen with its
+                     dependency graph and becomes practically unplayable. -->
                 <ui:VisualElement name="sp-endless-panel" class="screen--hidden">
                     <ui:VisualElement class="preset-grid">
                         <ui:Button name="endless-preset-small"  class="preset-btn" text="Small&#10;10 × 10" />
-                        <ui:Button name="endless-preset-medium" class="preset-btn" text="Medium&#10;20 × 20" />
-                        <ui:Button name="endless-preset-large"  class="preset-btn" text="Large&#10;40 × 40" />
+                        <ui:Button name="endless-preset-large"  class="preset-btn" text="Large&#10;20 × 20" />
                     </ui:VisualElement>
                     <ui:VisualElement class="play-choice-row">
                         <ui:Button name="endless-btn" class="menu-btn start-btn play-choice-btn" text="Start" />
