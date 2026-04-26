@@ -141,34 +141,64 @@ What's in: ClassicMode now owns the autosave / retry-modal / save-and-leave clus
 GameController shrunk by ~120 lines net. Behavior preserved verbatim
 (transitional shims forward where needed).
 
-## Phase 2D (next)
+## Phase 2D (landed)
 
-Goal: move the rest of classic-only state into ClassicMode, then
-restructure `GenerateAndSetup` so the classic branch lives in
-`ClassicMode.Setup`.
+What's in: ClassicMode now owns the entire classic setup pipeline +
+victory wiring. `GameController` shrank from ~1873 → ~1425 lines (-448);
+ClassicMode grew from 202 → ~700.
 
-### ClassicMode absorbs (remaining)
+- **Fields moved to ClassicMode**: `_timer`, `_recorder`, `_gameId`,
+  `_activeSeed`, `_w`, `_h`, `_maxLen`, `_inspectionDur`, plus a
+  `FrameBudgetMs` const.
+- **Methods moved to ClassicMode**: `ResolveParameters`, `LoadSaveAsync`,
+  `ApplyResumeData`, `ResolveSeed`, `RestoreBoard`, `GenerateBoard`,
+  `ReplayClears`, `SetupResumedRecorder`, `SetupNewRecorder`, `SetupTimer`,
+  `WireVictoryDefault` (now `WireVictory`, called from `WireRunFlow`).
+- **Classic branch of `GenerateAndSetup` → `ClassicMode.RunSetup`**:
+  produces `Board`/`BoardView`/`CameraController` into the `GameContext`
+  the controller hands it. GameController's branch is now ~10 lines —
+  build context, await `_mode.Setup(ctx)`, copy results, run shared
+  HUD/input wiring, `_mode.WireRunFlow()`.
+- **Timer-view construction moved to `ClassicMode.OnHudWired`** (it owns
+  the timer). `WireHud` no longer references timer state.
+- **Coop timer-label hide moved to `CoopMode.OnHudWired`** (was in the
+  `WireHud` else-branch). Symmetric counterpart of classic's timer view.
+- **WireInput** reads `Timer`/`Recorder` via `(_mode as ClassicMode)?.…`
+  cast — coop passes nulls.
+- **Coop `SetupCamera()` call inlined**: the helper moved to ClassicMode;
+  coop's snapshot path keeps the camera-setup block inline until phase 2E.
 
-- `_timer`, `_recorder`, `_gameId`, `_activeSeed`, `_w`, `_h`, `_maxLen`,
-  `_inspectionDur` fields (these are still on GameController for now, with
-  internal accessors so ClassicMode can read them).
-- `victoryUIDocument`, `inspectionDuration`, `inspectionWarningThreshold`
-  SerializeFields → move from `GameController` to `ClassicMode`. Requires
-  user to reattach in Unity editor.
-- `SetupTimer`, `SetupNewRecorder`, `SetupResumedRecorder` methods (set
-  the timer + recorder + game-id state).
-- `RestoreBoard`, `ReplayClears`, `ResolveParameters`, `ApplyResumeData`,
-  `ResolveSeed`, `LoadSaveAsync` (resume / replay logic).
-- `WireVictoryDefault` body — moves into `ClassicMode.WireRunFlow`.
-- The classic branch of `GenerateAndSetup` (lines ~301–375) becomes
-  `ClassicMode.Setup`'s body. Once moved, `GenerateAndSetup` shrinks to
-  ~10 lines: resolve mode flag, create mode, `yield return mode.Setup`,
-  `WireHud`, `WireInput`, `mode.WireRunFlow`.
+### SerializeFields stay on GameController
 
-**Editor task during this phase**: detach `Victory UIDocument` and the
-two timer SerializeFields from the GameController component in `Game.unity`
-and reattach them to the new ClassicMode component on the same GameObject.
-Per CLAUDE.md, this is editor work — done manually.
+`victoryUIDocument`, `inspectionDuration`, `inspectionWarningThreshold`
+and the editor board overrides (`boardWidth`, `boardHeight`,
+`maxArrowLength`, `useRandomSeed`, `seed`) remain on GameController.
+ClassicMode is added at runtime via `AddComponent<ClassicMode>()`, so it
+can't carry inspector-bound references. They're exposed through new
+`internal` accessors:
+
+- `VictoryDocument`, `InspectionWarningThreshold`,
+  `EditorInspectionDuration`, `EditorBoardWidth/Height/MaxArrowLength`,
+  `EditorUseRandomSeed`, `EditorSeed`.
+- `BoardViewRef`, `CameraControllerRef`, `BackButton` — used by victory
+  wiring to hide HUD elements at the end of the run.
+- `MarkVictoryStarted()` — sets the `_victoryStarted` flag on
+  GameController so subsequent Escape presses don't reopen the leave modal.
+- `ShowLoadingInternal`, `HideLoadingInternal`, `SetLoadProgress`,
+  `CancelRequested` — let mode Setup drive the shared loading overlay.
+
+Net: zero editor work needed — every move is C#-only.
+
+### Removed from GameController
+
+- All accessors that existed only for ClassicMode to read controller
+  state during phase 2A–C: `Timer`, `Recorder`, `GameId`, `ActiveSeed`,
+  `Width`, `Height`, `MaxArrowLength`, `InspectionDuration` (ClassicMode
+  now owns the underlying fields).
+- `WireClassicVictory` shim, `RunClassicSetupCoroutine` stub,
+  `FinalizeSession` shim — no longer routed through controller.
+
+## Phase 2E (next)
 
 ### CoopMode absorbs
 
@@ -180,7 +210,8 @@ Per CLAUDE.md, this is editor work — done manually.
 - `UpdateCoopRuntime` body (currently extracted, called by stub on
   controller) → moves wholesale into `CoopMode.Tick`.
 - The coop branch of `GenerateAndSetup` (one-liner) and the entirety of
-  `CoopSetup` become `CoopMode.Setup`'s body.
+  `CoopSetup` become `CoopMode.Setup`'s body. The inlined camera-setup
+  block in `CoopSetup` (added in phase 2D) goes with it.
 - `OnDestroy` coop disposes (`_coopResults`, `_coopSidebar`, etc) → into
   `CoopMode.Dispose`.
 

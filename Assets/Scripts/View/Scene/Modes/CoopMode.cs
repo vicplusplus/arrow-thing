@@ -48,6 +48,13 @@ public sealed class CoopMode : MonoBehaviour, IGameMode
         UnityEngine.UIElements.Button retryBtn = _controller.HudRetryButton;
         if (retryBtn != null)
             retryBtn.style.display = DisplayStyle.None;
+
+        // No solo timer in coop — hide the shared timer label. (Classic
+        // builds a GameTimerView over the same label in its OnHudWired.)
+        var hudRoot = _controller.HudDocument?.rootVisualElement;
+        var timerLabel = hudRoot?.Q<Label>("timer-label");
+        if (timerLabel != null)
+            timerLabel.style.display = DisplayStyle.None;
     }
 
     public Func<Cell, Vector3, bool> TapAttemptHandler => _controller.OnCoopTapInternal;

@@ -73,24 +73,17 @@ public sealed class GameController : MonoBehaviour
     [SerializeField]
     private float loadingFadeDuration = 0.3f;
 
-    // Game state
+    // Game state — _board/_boardView/_camCtrl are populated by the active
+    // mode's Setup() into a GameContext, then copied here for shared
+    // consumers (OnThemeChanged, WireInput, leave/escape teardown).
     private Board _board;
     private BoardView _boardView;
     private CameraController _camCtrl;
-    private GameTimer _timer;
-    private ReplayRecorder _recorder;
     private InputHandler _inputHandler;
-    private string _gameId;
-    private int _activeSeed;
-    private int _w;
-    private int _h;
-    private int _maxLen;
-    private float _inspectionDur;
-    private const float FrameBudgetMs = 12f;
 
-    // Autosave / save-state moved to ClassicMode (FinalizeSession is the
-    // integration point GameController calls after recorder + initial board
-    // exist).
+    // Classic-only run state (timer, recorder, game-id, seed, dimensions,
+    // inspection duration) lives on ClassicMode after phase 2D. WireInput
+    // reads timer/recorder via cast.
 
     // Co-op mode state (active when GameSettings.ActiveLobbyCode is set)
     private bool _isCoopMode;
@@ -271,41 +264,56 @@ public sealed class GameController : MonoBehaviour
         }
     }
 
+    // ---- Shared scene state accessors (read by mode classes) -------------
+
     /// <summary>Internal: HUD retry button so <see cref="CoopMode.OnHudWired"/> can hide it.</summary>
     internal Button HudRetryButton => _retryBtn;
 
-    /// <summary>Internal: Board, for ClassicMode autosave / save-and-leave logic.</summary>
+    /// <summary>Internal: HUD back button so <see cref="ClassicMode.WireRunFlow"/> can hide it on victory.</summary>
+    internal Button BackButton => _backBtn;
+
+    /// <summary>Internal: live board (set after mode.Setup populates GameContext).</summary>
     internal Board CurrentBoard => _board;
 
-    /// <summary>Internal: GameTimer, for ClassicMode save serialization.</summary>
-    internal GameTimer Timer => _timer;
+    /// <summary>Internal: live BoardView, for ClassicMode victory wiring.</summary>
+    internal BoardView BoardViewRef => _boardView;
 
-    /// <summary>Internal: ReplayRecorder, for ClassicMode save serialization.</summary>
-    internal ReplayRecorder Recorder => _recorder;
-
-    /// <summary>Internal: game ID assigned at session start.</summary>
-    internal string GameId => _gameId;
-
-    /// <summary>Internal: active board seed (resolved from save / GameSettings / random).</summary>
-    internal int ActiveSeed => _activeSeed;
-
-    /// <summary>Internal: board width.</summary>
-    internal int Width => _w;
-
-    /// <summary>Internal: board height.</summary>
-    internal int Height => _h;
-
-    /// <summary>Internal: max arrow length.</summary>
-    internal int MaxArrowLength => _maxLen;
-
-    /// <summary>Internal: inspection-phase duration.</summary>
-    internal float InspectionDuration => _inspectionDur;
+    /// <summary>Internal: live CameraController, for ClassicMode victory wiring.</summary>
+    internal CameraController CameraControllerRef => _camCtrl;
 
     /// <summary>Internal: live <see cref="InputHandler"/> after WireInput runs.</summary>
     internal InputHandler ActiveInputHandler => _inputHandler;
 
     /// <summary>Internal: HUD UIDocument, so modes can resolve their own elements.</summary>
     internal UIDocument HudDocument => hudUIDocument;
+
+    /// <summary>Internal: Victory UIDocument SerializeField, consumed by ClassicMode.</summary>
+    internal UIDocument VictoryDocument => victoryUIDocument;
+
+    /// <summary>Internal: inspection-warning threshold SerializeField, consumed by ClassicMode timer view.</summary>
+    internal float InspectionWarningThreshold => inspectionWarningThreshold;
+
+    // ---- Editor-override SerializeField accessors (classic only) ---------
+
+    internal int EditorBoardWidth => boardWidth;
+    internal int EditorBoardHeight => boardHeight;
+    internal int EditorMaxArrowLength => maxArrowLength;
+    internal bool EditorUseRandomSeed => useRandomSeed;
+    internal int EditorSeed => seed;
+    internal float EditorInspectionDuration => inspectionDuration;
+
+    // ---- Loading overlay control (called from mode Setup) ----------------
+
+    internal void ShowLoadingInternal(string label) => ShowLoading(label);
+
+    internal void HideLoadingInternal() => HideLoading();
+
+    internal void SetLoadProgress(float p) => _loadProgress = p;
+
+    internal bool CancelRequested => _cancelRequested;
+
+    /// <summary>Internal: marks the victory sequence as started so Escape stops opening the leave modal.</summary>
+    internal void MarkVictoryStarted() => _victoryStarted = true;
 
     /// <summary>Internal: triggers a same-mode scene reload (Ctrl+R / retry-confirmed).</summary>
     internal void RequestQuickReset() => OnQuickReset();
@@ -316,22 +324,7 @@ public sealed class GameController : MonoBehaviour
     /// <summary>Internal: <see cref="OnCoopTap"/> wrapper so <see cref="CoopMode.TapAttemptHandler"/> can hand it to InputHandler.</summary>
     internal bool OnCoopTapInternal(Cell cell, Vector3 tapWorld) => OnCoopTap(cell, tapWorld);
 
-    /// <summary>Internal: classic-mode victory wiring. Called by <see cref="ClassicMode.WireRunFlow"/>. Will move into ClassicMode in phase 2C.</summary>
-    internal void WireClassicVictory() => WireVictoryDefault();
-
-    /// <summary>
-    /// Stub for <see cref="ClassicMode.Setup"/>; phase 1 keeps the existing
-    /// <see cref="GenerateAndSetup"/> classic branch intact, so this is
-    /// unused. Phase 2 will move that branch's body here, and
-    /// <c>GenerateAndSetup</c> will become a thin coordinator that just
-    /// awaits <c>_mode.Setup(...)</c>.
-    /// </summary>
-    internal IEnumerator RunClassicSetupCoroutine(GameContext context)
-    {
-        yield break;
-    }
-
-    /// <summary>Stub mirror of <see cref="RunClassicSetupCoroutine"/> for co-op.</summary>
+    /// <summary>Stub mirror of <c>Setup</c> for co-op (CoopMode still delegates back to <see cref="CoopSetup"/> until phase 2E).</summary>
     internal IEnumerator RunCoopSetupCoroutine(GameContext context)
     {
         yield break;
@@ -406,84 +399,39 @@ public sealed class GameController : MonoBehaviour
 
         if (_isCoopMode)
         {
+            // Coop still owns its full setup pipeline on GameController until
+            // phase 2E. CoopSetup calls WireHud/WireInput/WireRunFlow at its
+            // own end on the success path.
             yield return CoopSetup();
             yield break;
         }
 
-        ResolveParameters(out ReplayData priorData, out bool deferredResume);
+        // Classic path: shared loading overlay element lookup runs first so
+        // mode.Setup can ShowLoading. Then delegate the entire classic setup
+        // pipeline (parameter resolution, generation/restore, recorder/timer
+        // construction) into ClassicMode.Setup via GameContext.
         ResolveHudElements();
 
-        string modeStr =
-            deferredResume ? "deferred-resume"
-            : priorData != null ? "resume"
-            : "new";
-        Debug.Log(
-            $"[GameController] GenerateAndSetup: mode={modeStr}, board={_w}x{_h}, maxLen={_maxLen}"
+        var ctx = new GameContext(
+            controller: this,
+            mainCamera: mainCamera,
+            visualSettings: visualSettings,
+            hudDocument: hudUIDocument,
+            reportLoadProgress: (p, _) => _loadProgress = p,
+            isCancelRequested: () => _cancelRequested
         );
 
-        ShowLoading(deferredResume ? "Resuming..." : "Generating...");
-        yield return null;
+        yield return _mode.Setup(ctx);
 
-        if (deferredResume)
-        {
-            yield return LoadSaveAsync(result => priorData = result);
-            if (priorData == null)
-            {
-                Debug.LogWarning(
-                    "[GameController] Deferred save load returned null — returning to MainMenu."
-                );
-                SceneNav.Pop();
-                yield break;
-            }
-            Debug.Log(
-                $"[GameController] Save loaded: gameId={priorData.gameId}, board={priorData.boardWidth}x{priorData.boardHeight}, events={priorData.events.Count}"
-            );
-            ApplyResumeData(priorData);
-        }
+        // Mode's Setup may have bailed (deferred-resume save not found,
+        // generation produced 0 arrows, user cancelled). In all those cases
+        // the mode pops the scene before returning; ctx.Board stays null.
+        if (ctx.Board == null)
+            yield break;
 
-        ResolveSeed(priorData);
-        bool hasSnapshot = priorData != null && !string.IsNullOrEmpty(priorData.boardSnapshot);
-
-        CreateBoardAndView();
-        SetupCamera();
-        _boardView.SetCameraController(_camCtrl);
-
-        if (hasSnapshot)
-        {
-            // Hand the snapshot to the active mode (classic owns it for save
-            // serialization). RestoreBoard reads it back via the mode.
-            if (_mode is ClassicMode classic)
-                classic.SetInitialBoardSnapshot(priorData.GetSnapshotArrows());
-            yield return RestoreBoard(priorData);
-        }
-        else
-        {
-            yield return GenerateBoard();
-        }
-
-        if (priorData != null)
-        {
-            bool resumeSolving = ReplayClears(priorData, out double resumeSolveElapsed);
-            if (_board.Arrows.Count == 0)
-            {
-                SaveManager.Delete();
-                SceneNav.Pop();
-                yield break;
-            }
-            SetupResumedRecorder(priorData);
-            FinalizeSession(priorData);
-            _boardView.ApplyColoring();
-            HideLoading();
-            SetupTimer(resumeSolving, resumeSolveElapsed);
-        }
-        else
-        {
-            SetupNewRecorder();
-            FinalizeSession(null);
-            _boardView.ApplyColoring();
-            HideLoading();
-            SetupTimer(false, 0.0);
-        }
+        _board = ctx.Board;
+        _boardView = ctx.BoardView;
+        _camCtrl = ctx.CameraController;
 
         WireHud();
         WireInput();
@@ -783,10 +731,10 @@ public sealed class GameController : MonoBehaviour
             yield break;
         }
         _board = decodedBoard;
-        _w = _board.Width;
-        _h = _board.Height;
 
-        Debug.Log($"[GameController] Co-op board decoded: {_w}x{_h}, {_board.Arrows.Count} arrows");
+        Debug.Log(
+            $"[GameController] Co-op board decoded: {_board.Width}x{_board.Height}, {_board.Arrows.Count} arrows"
+        );
 
         // Create the view from the already-populated board. Wrapped so a
         // rendering failure (missing shader, etc.) doesn't strand the user on
@@ -799,7 +747,19 @@ public sealed class GameController : MonoBehaviour
             _boardView = boardGo.AddComponent<BoardView>();
             _boardView.Init(_board, vs, spawnArrows: true);
 
-            SetupCamera();
+            // Inline camera setup (the shared SetupCamera helper moved into
+            // ClassicMode.Setup; coop's snapshot-driven path keeps it inline
+            // here until phase 2E).
+            if (mainCamera != null)
+            {
+                float? zoom = GameSettings.IsSet
+                    ? PlayerPrefs.GetFloat(
+                        GameSettings.ZoomSpeedPrefKey,
+                        GameSettings.DefaultZoomSpeed
+                    )
+                    : (float?)null;
+                _camCtrl = BoardSetupHelper.SetupCamera(mainCamera, _board, zoom);
+            }
             _boardView.SetCameraController(_camCtrl);
             _boardView.ApplyColoring();
         }
@@ -1079,36 +1039,11 @@ public sealed class GameController : MonoBehaviour
             _loadingPercent.text = text;
     }
 
-    // --- Parameter resolution ---
-
-    private void ResolveParameters(out ReplayData priorData, out bool deferredResume)
-    {
-        _w = boardWidth;
-        _h = boardHeight;
-        _maxLen = maxArrowLength;
-        _inspectionDur = inspectionDuration;
-        priorData = null;
-        deferredResume = false;
-
-        if (!GameSettings.IsSet)
-            return;
-
-        if (GameSettings.IsResuming && GameSettings.ResumeData == null)
-        {
-            deferredResume = true;
-            return;
-        }
-
-        _w = GameSettings.Width;
-        _h = GameSettings.Height;
-        _maxLen = GameSettings.MaxArrowLength;
-
-        if (GameSettings.IsResuming)
-        {
-            priorData = GameSettings.ResumeData;
-            _inspectionDur = priorData.inspectionDuration;
-        }
-    }
+    // --- Shared HUD element lookup ---
+    // ResolveParameters / Resume helpers / RestoreBoard / GenerateBoard /
+    // ReplayClears / SetupResumedRecorder / SetupNewRecorder / SetupTimer /
+    // WireVictoryDefault all moved into ClassicMode in phase 2D. The classic
+    // setup pipeline now lives end-to-end on ClassicMode.Setup.
 
     private void ResolveHudElements()
     {
@@ -1132,344 +1067,7 @@ public sealed class GameController : MonoBehaviour
         }
     }
 
-    private IEnumerator LoadSaveAsync(Action<ReplayData> onResult)
-    {
-        ReplayData loaded = null;
-        yield return SaveManager.LoadAsync(d => loaded = d);
-        onResult(loaded);
-    }
-
-    private void ApplyResumeData(ReplayData data)
-    {
-        GameSettings.SetResumeData(data);
-        _w = GameSettings.Width;
-        _h = GameSettings.Height;
-        _maxLen = GameSettings.MaxArrowLength;
-        _inspectionDur = data.inspectionDuration;
-    }
-
-    private void ResolveSeed(ReplayData priorData)
-    {
-        _activeSeed =
-            (priorData != null) ? priorData.seed
-            : (GameSettings.IsSet || useRandomSeed) ? Environment.TickCount
-            : seed;
-    }
-
-    // --- Board and view creation ---
-
-    private void CreateBoardAndView()
-    {
-        (_board, _boardView) = BoardSetupHelper.CreateBoardAndView(
-            _w,
-            _h,
-            ThemeManager.Current ?? visualSettings
-        );
-    }
-
-    private void SetupCamera()
-    {
-        if (mainCamera == null)
-            return;
-        float? zoom = GameSettings.IsSet
-            ? PlayerPrefs.GetFloat(GameSettings.ZoomSpeedPrefKey, GameSettings.DefaultZoomSpeed)
-            : null;
-        _camCtrl = BoardSetupHelper.SetupCamera(mainCamera, _board, zoom);
-    }
-
-    // --- Work coroutines (no UI code — just work + _loadProgress) ---
-
-    private IEnumerator RestoreBoard(ReplayData priorData)
-    {
-        // Snapshot lives on ClassicMode (it owns save serialization).
-        var snapshot = (_mode is ClassicMode classic) ? classic.InitialBoardSnapshot : null;
-        int totalArrows = snapshot?.Count ?? 0;
-        Debug.Log($"[GameController] RestoreBoard: restoring {totalArrows} arrows from snapshot");
-        int totalSteps = totalArrows * 2;
-        var restorer = BoardSetupHelper.RestoreBoardFromSnapshot(
-            _board,
-            _boardView,
-            snapshot,
-            FrameBudgetMs
-        );
-
-        while (restorer.MoveNext())
-        {
-            if (_cancelRequested)
-            {
-                SceneNav.Pop();
-                yield break;
-            }
-
-            _loadProgress = (float)restorer.Current / totalSteps;
-            yield return null;
-        }
-    }
-
-    private IEnumerator GenerateBoard()
-    {
-        var generator = BoardGeneration.FillBoardIncremental(_board, _maxLen, _activeSeed);
-
-        // Phase-weighted progress (shared with the server generation worker
-        // via GenerationProgress in the domain layer). Client has an extra
-        // view-rebuild phase between Compacting and Finalizing that the server
-        // doesn't — ClientWeights accounts for it.
-        var weights = GenerationProgress.ClientWeights;
-        // Track Arrow refs so we can remove their views after compaction
-        var spawnedArrows = new List<Arrow>();
-        int arrowsBeforeCompaction = 0;
-        var phase = GenerationPhase.Generating;
-        float compactStartRealtime = 0f;
-        // Incremental view rebuild state (set at compact→finalize transition).
-        // While rebuildingViews is true, the inner frame-budget loop adds
-        // ArrowViews instead of advancing the generator.
-        bool rebuildingViews = false;
-        List<Arrow> rebuildList = null;
-        int rebuildIndex = 0;
-        int rebuildTotal = 0;
-
-        while (true)
-        {
-            if (_cancelRequested)
-            {
-                // Defensive dispose in case the generator holds any IDisposable state.
-                (generator as System.IDisposable)?.Dispose();
-                SceneNav.Pop();
-                yield break;
-            }
-
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            bool done = false;
-            while (sw.ElapsedMilliseconds < FrameBudgetMs)
-            {
-                if (rebuildingViews)
-                {
-                    // Spend remaining frame budget adding ArrowViews in batches.
-                    if (rebuildIndex < rebuildTotal)
-                    {
-                        _boardView.AddArrowView(rebuildList[rebuildIndex]);
-                        spawnedArrows.Add(rebuildList[rebuildIndex]);
-                        rebuildIndex++;
-                        continue;
-                    }
-                    // Rebuild complete; fall through to generator advance for finalize.
-                    rebuildingViews = false;
-                    rebuildList = null;
-                }
-
-                if (!generator.MoveNext())
-                {
-                    done = true;
-                    break;
-                }
-
-                if (generator.Current is GenerationPhase nextPhase)
-                {
-                    if (nextPhase == GenerationPhase.Compacting)
-                    {
-                        arrowsBeforeCompaction = _board.Arrows.Count;
-                        compactStartRealtime = Time.realtimeSinceStartup;
-                    }
-                    else if (
-                        nextPhase == GenerationPhase.Finalizing
-                        && phase == GenerationPhase.Compacting
-                    )
-                    {
-                        // Compaction done — remove stale views synchronously (fast)
-                        // and start incremental view rebuild that spans frames.
-                        foreach (Arrow a in spawnedArrows)
-                            _boardView.RemoveArrowView(a);
-                        spawnedArrows.Clear();
-                        rebuildList = new List<Arrow>(_board.Arrows);
-                        rebuildIndex = 0;
-                        rebuildTotal = rebuildList.Count;
-                        rebuildingViews = true;
-                    }
-                    phase = nextPhase;
-                }
-                else if (phase == GenerationPhase.Generating)
-                {
-                    Arrow arrow = _board.Arrows[spawnedArrows.Count];
-                    _boardView.AddArrowView(arrow);
-                    spawnedArrows.Add(arrow);
-                }
-            }
-
-            // Progress calculation per phase (via shared GenerationProgress helper).
-            if (rebuildingViews)
-            {
-                float rebuildRatio = rebuildTotal > 0 ? (float)rebuildIndex / rebuildTotal : 1f;
-                _loadProgress = GenerationProgress.ForRebuildingViews(rebuildRatio, weights);
-            }
-            else
-            {
-                switch (phase)
-                {
-                    case GenerationPhase.Generating:
-                    {
-                        int initial = _board.InitialCandidateCount;
-                        int remaining = _board.RemainingCandidateCount;
-                        float depletion = initial > 0 ? 1f - (float)remaining / initial : 0f;
-                        _loadProgress = GenerationProgress.ForGenerating(depletion, weights);
-                        break;
-                    }
-                    case GenerationPhase.Compacting:
-                    {
-                        float expectedCompactSec = GenerationProgress.ExpectedCompactSeconds(
-                            arrowsBeforeCompaction
-                        );
-                        float elapsed = Time.realtimeSinceStartup - compactStartRealtime;
-                        float timeRatio =
-                            expectedCompactSec > 0.001f ? elapsed / expectedCompactSec : 1f;
-                        _loadProgress = GenerationProgress.ForCompacting(
-                            mergesCompleted: arrowsBeforeCompaction - _board.Arrows.Count,
-                            arrowsBeforeCompaction: arrowsBeforeCompaction,
-                            timeRatio: timeRatio,
-                            w: weights
-                        );
-                        break;
-                    }
-                    case GenerationPhase.Finalizing:
-                    {
-                        int arrowCount = _board.Arrows.Count;
-                        float finalizeRatio =
-                            arrowCount > 0 && generator.Current is int finalized
-                                ? (float)finalized / arrowCount
-                                : 0f;
-                        _loadProgress = GenerationProgress.ForFinalizing(finalizeRatio, weights);
-                        break;
-                    }
-                }
-            }
-
-            if (done)
-                break;
-            yield return null;
-        }
-
-        if (_board.Arrows.Count == 0)
-        {
-            Debug.LogWarning(
-                $"[GameController] GenerateBoard produced 0 arrows (board {_w}x{_h}, maxLen={_maxLen}, seed={_activeSeed}). Returning to menu."
-            );
-            SceneNav.Pop();
-            yield break;
-        }
-        Debug.Log(
-            $"[GameController] GenerateBoard complete: {_board.Arrows.Count} arrows, board={_w}x{_h}, seed={_activeSeed}"
-        );
-
-        // Hand a fresh snapshot to ClassicMode for save serialization.
-        if (_mode is ClassicMode classic)
-        {
-            var snap = new List<List<Cell>>(_board.Arrows.Count);
-            foreach (Arrow arrow in _board.Arrows)
-                snap.Add(new List<Cell>(arrow.Cells));
-            classic.SetInitialBoardSnapshot(snap);
-        }
-    }
-
-    // --- Resume logic ---
-
-    private bool ReplayClears(ReplayData priorData, out double solveElapsed)
-    {
-        bool solving = false;
-        int totalClearEvents = 0;
-        int successfulClears = 0;
-        foreach (ReplayEvent evt in priorData.events)
-        {
-            if (evt.type == ReplayEventType.Clear)
-            {
-                totalClearEvents++;
-                var worldPos = new Vector3(evt.posX ?? 0f, evt.posY ?? 0f, 0f);
-                Cell cell = BoardCoords.WorldToCell(worldPos, _board.Width, _board.Height);
-                if (_board.Contains(cell))
-                {
-                    Arrow arrow = _board.GetArrowAt(cell);
-                    if (arrow != null && _board.IsClearable(arrow))
-                    {
-                        _boardView.RemoveArrowView(arrow);
-                        _board.RemoveArrow(arrow);
-                        successfulClears++;
-                    }
-                    else if (arrow == null)
-                        Debug.LogWarning(
-                            $"[GameController] ReplayClears: no arrow at cell ({cell.X},{cell.Y}) for clear event seq={evt.seq}"
-                        );
-                    else
-                        Debug.LogWarning(
-                            $"[GameController] ReplayClears: arrow at ({cell.X},{cell.Y}) not clearable for clear event seq={evt.seq}"
-                        );
-                }
-                else
-                {
-                    Debug.LogWarning(
-                        $"[GameController] ReplayClears: clear event seq={evt.seq} maps to out-of-bounds cell ({cell.X},{cell.Y})"
-                    );
-                }
-            }
-            if (evt.type == ReplayEventType.StartSolve)
-                solving = true;
-        }
-        solveElapsed = priorData.ComputedSolveElapsed;
-        Debug.Log(
-            $"[GameController] ReplayClears: {successfulClears}/{totalClearEvents} clears applied, solving={solving}, solveElapsed={solveElapsed:F3}s"
-        );
-        return solving;
-    }
-
-    private void SetupResumedRecorder(ReplayData priorData)
-    {
-        _gameId = priorData.gameId;
-        int nextSeq =
-            priorData.events.Count > 0 ? priorData.events[priorData.events.Count - 1].seq + 1 : 0;
-        _recorder = new ReplayRecorder(priorData.events, nextSeq);
-        _recorder.RecordSessionRejoin();
-        Debug.Log(
-            $"[GameController] Resumed game: id={_gameId}, nextSeq={nextSeq}, remainingArrows={_board.Arrows.Count}"
-        );
-    }
-
-    private void SetupNewRecorder()
-    {
-        _gameId = Guid.NewGuid().ToString();
-        _recorder = new ReplayRecorder();
-        _recorder.RecordSessionStart();
-        Debug.Log(
-            $"[GameController] New game: id={_gameId}, arrows={_board.Arrows.Count}, board={_w}x{_h}, seed={_activeSeed}"
-        );
-    }
-
-    /// <summary>
-    /// Phase-2 transitional shim: forwards <c>FinalizeSession</c> to the
-    /// active classic mode so the autosave/continue state lives in one
-    /// place. Coop never reaches here (its setup path doesn't call this).
-    /// </summary>
-    private void FinalizeSession(ReplayData priorData)
-    {
-        if (_mode is ClassicMode classic)
-            classic.FinalizeSession(priorData);
-    }
-
-    // --- Timer and gameplay wiring ---
-
-    private void SetupTimer(bool resumeSolving, double resumeSolveElapsed)
-    {
-        _timer = new GameTimer(_inspectionDur);
-        double wallNow = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
-        if (resumeSolving)
-        {
-            _timer.Resume(wallNow, resumeSolveElapsed);
-            Debug.Log($"[GameController] Timer resumed: priorElapsed={resumeSolveElapsed:F3}s");
-        }
-        else
-        {
-            _timer.Start(wallNow);
-            Debug.Log(
-                $"[GameController] Timer started fresh: inspectionDuration={_inspectionDur}s"
-            );
-        }
-    }
+    // --- HUD wiring ---
 
     private void WireHud()
     {
@@ -1501,16 +1099,9 @@ public sealed class GameController : MonoBehaviour
             _retryBtn.clicked += OnRetryClickedDispatch;
         }
 
-        if (_timer != null)
-        {
-            var timerView = gameObject.AddComponent<GameTimerView>();
-            timerView.Init(_timer, hudUIDocument, inspectionWarningThreshold);
-        }
-        else if (_timerLabel != null)
-        {
-            // Co-op mode: hide the solo timer label.
-            _timerLabel.style.display = DisplayStyle.None;
-        }
+        // Timer view construction lives in ClassicMode.OnHudWired (it owns
+        // the GameTimer). Coop hides the timer-label via CoopMode.OnHudWired
+        // because it has no solo timer.
 
         if (_trailToggleBtn != null)
         {
@@ -1604,13 +1195,15 @@ public sealed class GameController : MonoBehaviour
             )
             : dragThresholdPixels;
         _inputHandler = gameObject.AddComponent<InputHandler>();
+        // Timer + recorder live on ClassicMode now; coop has neither (passes null).
+        var classic = _mode as ClassicMode;
         _inputHandler.Init(
             _board,
             _boardView,
             _camCtrl,
             dragThreshold,
-            _timer,
-            _recorder,
+            classic?.Timer,
+            classic?.Recorder,
             // Mode-driven: classic autosave / nothing for coop.
             onArrowCleared: () => _mode?.OnArrowCleared(),
             onQuickReset: OnQuickReset,
@@ -1717,48 +1310,7 @@ public sealed class GameController : MonoBehaviour
         }
     }
 
-    private void WireVictoryDefault()
-    {
-        if (
-            victoryUIDocument == null
-            || !victoryUIDocument.enabled
-            || victoryUIDocument.rootVisualElement == null
-        )
-            return;
-
-        // BuildReplayData + autosave-enabled flag come from ClassicMode.
-        // (WireVictoryDefault is classic-only — coop skips victory wiring.)
-        ClassicMode classic = _mode as ClassicMode;
-        System.Func<ReplayData> buildReplay =
-            classic != null ? (System.Func<ReplayData>)classic.BuildReplayData : null;
-
-        var victory = gameObject.AddComponent<VictoryController>();
-        victory.Init(
-            victoryUIDocument,
-            _boardView.GridRenderer,
-            _camCtrl,
-            _w,
-            _h,
-            _timer,
-            hudUIDocument,
-            buildReplay
-        );
-        _boardView.LastArrowClearing += () =>
-        {
-            _victoryStarted = true;
-            _inputHandler.SetInputEnabled(false);
-            if (_backBtn != null)
-                _backBtn.style.display = DisplayStyle.None;
-            if (_retryBtn != null)
-                _retryBtn.style.display = DisplayStyle.None;
-            if (_recorder != null)
-                _recorder.RecordEndSolve();
-            if (classic != null && classic.AutosaveEnabled)
-                SaveManager.Delete();
-            victory.OnLastArrowClearing();
-        };
-        _boardView.BoardCleared += victory.OnBoardCleared;
-    }
+    // WireVictoryDefault moved into ClassicMode.WireRunFlow (phase 2D).
 
     // --- Loading overlay ---
 
