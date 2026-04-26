@@ -80,19 +80,14 @@ public sealed class EndlessModeController : MonoBehaviour
     private int scorePerpDepBonus = 5;
 
     /// <summary>
-    /// Push interval at empty board (occupancy 0). Tightest cadence — keeps
-    /// pressure on a player who's clearing fast.
+    /// Constant push interval. Earlier prototypes interpolated from a fast
+    /// "empty board" rate to a slow "full board" rate, but that made full
+    /// boards feel too forgiving — the spawn rate dropped right when the
+    /// player needed steady pressure to avoid topout. Single fixed cadence
+    /// now; difficulty escalates via combo size only.
     /// </summary>
     [SerializeField]
-    private float pushIntervalAtEmpty = 1.8f;
-
-    /// <summary>
-    /// Push interval at full board (occupancy near topout). Loosest cadence —
-    /// gives a buried player breathing room. Should be longer than the
-    /// preview duration so commits resolve before the next push.
-    /// </summary>
-    [SerializeField]
-    private float pushIntervalAtFull = 6f;
+    private float pushIntervalSeconds = 1.8f;
 
     /// <summary>
     /// Starting baseline combo size in <i>garbage points</i> (each arrow
@@ -127,20 +122,18 @@ public sealed class EndlessModeController : MonoBehaviour
     private float comboBaseRatePower = 0.78f;
 
     /// <summary>
-    /// Target board occupancy the adaptive term tries to maintain. Below
-    /// this, combos get larger to refill; above, they shrink to give
-    /// breathing room.
+    /// Target board occupancy the adaptive bonus ramps down to. Below this,
+    /// combos get a catch-up bonus; at and above this, the bonus is zero
+    /// (no negative penalty — we don't want full boards to feel forgiving).
     /// </summary>
     [SerializeField, Range(0f, 1f)]
     private float targetOccupancy = 0.5f;
 
     /// <summary>
-    /// Peak magnitude of the occupancy adaptive term. The curve is a
-    /// symmetric cosine S-shape centered at <see cref="targetOccupancy"/>:
-    /// at occupancy 0 the catch-up bonus is +scale, at target it's 0, at
-    /// full occupancy it's −scale. Smooth (no abrupt knees) so the
-    /// adaptive contribution feels gradual through the whole occupancy
-    /// range, not "crazy near empty / disappears past target."
+    /// Peak magnitude of the occupancy catch-up bonus. At empty (occupancy
+    /// 0) the bonus is +scale; the bonus rolls off smoothly via a quarter-
+    /// cosine curve and reaches 0 at <see cref="targetOccupancy"/>.
+    /// Above target, the bonus stays clamped at 0.
     /// </summary>
     [SerializeField]
     private float occupancyAdaptiveScale = 22f;
@@ -402,21 +395,18 @@ public sealed class EndlessModeController : MonoBehaviour
     private int ComputeComboSize()
     {
         // Two-term combo size: base-rate (clear-progression ramp) +
-        // occupancy adaptive (smooth cosine S-curve, +scale at empty →
-        // 0 at target → −scale at full).
+        // occupancy catch-up bonus (positive only, ramps from +scale at
+        // empty to 0 at target via a quarter-cosine, clamped at 0 above).
         int baseRate = comboBaseRate + ComputeBaseRateBumps();
         float occupancy = OccupancyRatio();
-        // Map occupancy to an angle in [0, π], with target mapped to π/2
-        // (the zero-crossing of cosine). Cosine then yields +1 at empty,
-        // 0 at target, −1 at full. Same shape both sides — symmetric
-        // smoothing. (Asymmetric scale was the source of the prior "goes
-        // crazy near empty / disappears past target" feel.)
-        float t = Mathf.Clamp01(
-            occupancy < targetOccupancy
-                ? Mathf.InverseLerp(0f, targetOccupancy, occupancy) * 0.5f
-                : 0.5f + Mathf.InverseLerp(targetOccupancy, 1f, occupancy) * 0.5f
-        );
-        float adaptive = Mathf.Cos(t * Mathf.PI) * occupancyAdaptiveScale;
+        float adaptive = 0f;
+        if (occupancy < targetOccupancy && targetOccupancy > 0f)
+        {
+            // t in [0, 1] across [0, target]; cos(t * π/2) gives 1 at empty,
+            // 0 at target — smooth roll-off with no abrupt knee.
+            float t = occupancy / targetOccupancy;
+            adaptive = Mathf.Cos(t * Mathf.PI * 0.5f) * occupancyAdaptiveScale;
+        }
         int size = baseRate + Mathf.RoundToInt(adaptive);
         if (size < 1)
             size = 1;
@@ -437,16 +427,23 @@ public sealed class EndlessModeController : MonoBehaviour
         return Mathf.FloorToInt(Mathf.Pow(ratio, comboBaseRatePower));
     }
 
-    private float CurrentPushInterval()
-    {
-        return Mathf.Lerp(pushIntervalAtEmpty, pushIntervalAtFull, OccupancyRatio());
-    }
-
+    /// <summary>
+    /// Live occupancy ratio: real arrows + pending ghost arrows. Ghosts
+    /// count because they're already taking up cells the player must keep
+    /// clearable. Without this, the first push tick after an empty start
+    /// would still see "occupancy = 0" and re-fire the full catch-up bonus
+    /// even though the board already has ~9 points of pending arrows.
+    /// </summary>
     private float OccupancyRatio()
     {
         Board board = _session.Board;
         int total = board.Width * board.Height;
-        return total > 0 ? (float)board.OccupiedCellCount / total : 0f;
+        if (total <= 0)
+            return 0f;
+        int occupied = board.OccupiedCellCount;
+        foreach (var p in _session.PendingArrows)
+            occupied += p.Arrow.Cells.Count;
+        return (float)occupied / total;
     }
 
     // ---- Update loop -------------------------------------------------------
@@ -464,14 +461,12 @@ public sealed class EndlessModeController : MonoBehaviour
         if (_currentCombo > 0 && _lastClearTime > 0f && now - _lastClearTime > comboTimerSeconds)
             BreakCombo();
 
-        // Push tick (drives the garbage meter forward). Interval scales with
-        // occupancy: faster when board is empty (more pressure), slower when
-        // full (breathing room).
+        // Push tick (drives the garbage meter forward). Constant interval —
+        // difficulty escalates via combo size, not push cadence.
         _pushTimer += Time.deltaTime;
-        float interval = CurrentPushInterval();
-        if (_pushTimer >= interval)
+        if (_pushTimer >= pushIntervalSeconds)
         {
-            _pushTimer -= interval;
+            _pushTimer -= pushIntervalSeconds;
             OnPushTick();
         }
 
