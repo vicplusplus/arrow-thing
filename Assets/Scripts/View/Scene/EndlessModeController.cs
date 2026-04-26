@@ -160,9 +160,25 @@ public sealed class EndlessModeController : MonoBehaviour
     private BoardView _boardView;
     private bool _active;
 
-    // Garbage meter: queue of combo sizes, FIFO. _meter[0] = oldest = next
-    // to be sent to pending at the next push tick.
-    private readonly List<int> _meter = new();
+    // Garbage meter: FIFO queue of combos. _meter[0] = oldest = next to
+    // be sent to pending at the next push tick. Each combo carries a
+    // palette color index so its bar in the meter UI and the arrows it
+    // spawns share the same color (visual identity from queue → board).
+    private readonly struct MeterEntry
+    {
+        public readonly int Size;
+        public readonly int ColorIndex;
+
+        public MeterEntry(int size, int colorIndex)
+        {
+            Size = size;
+            ColorIndex = colorIndex;
+        }
+    }
+
+    private readonly List<MeterEntry> _meter = new();
+    private MeterEntry _activeCombo;
+    private int _lastColorIndex = -1;
     private int _activeShortfall;
     private float _pushTimer;
 
@@ -248,6 +264,7 @@ public sealed class EndlessModeController : MonoBehaviour
         _currentCombo = 0;
         LongestCombo = 0;
         _meter.Clear();
+        _lastColorIndex = -1;
         _activeShortfall = 0;
         _pushTimer = 0f;
         _runStartTime = Time.time;
@@ -255,7 +272,7 @@ public sealed class EndlessModeController : MonoBehaviour
 
         // Seed the meter with one combo so the first push tick has something
         // to send to pending instead of an empty queue.
-        _meter.Add(ComputeComboSize());
+        _meter.Add(NewComboEntry());
 
         // Fire the first push immediately rather than waiting for the empty-
         // board push interval. Empty-board start (no initial fill) means the
@@ -319,18 +336,19 @@ public sealed class EndlessModeController : MonoBehaviour
 
         // Pop oldest from meter (= active combo's garbage points to send to
         // pending). Spawn arrows until we've placed >= combo points worth;
-        // whatever doesn't fit becomes shortfall.
+        // whatever doesn't fit becomes shortfall (carries the same combo
+        // color so immediate-mode placements stay visually grouped).
         if (_meter.Count > 0)
         {
-            int active = _meter[0];
+            _activeCombo = _meter[0];
             _meter.RemoveAt(0);
-            int placed = SpawnComboPoints(active);
-            int shortfall = active - placed;
+            int placed = SpawnComboPoints(_activeCombo.Size);
+            int shortfall = _activeCombo.Size - placed;
             _activeShortfall = shortfall < 0 ? 0 : shortfall;
         }
 
         // Push a new combo to the back so there's always something queued.
-        _meter.Add(ComputeComboSize());
+        _meter.Add(NewComboEntry());
 
         RebuildMeterUI();
     }
@@ -352,6 +370,52 @@ public sealed class EndlessModeController : MonoBehaviour
             placed += weight;
         }
         return placed;
+    }
+
+    /// <summary>
+    /// Builds a fresh combo entry: random size from <see cref="ComputeComboSize"/>
+    /// + a palette color index different from the previous combo's. Updates
+    /// <see cref="_lastColorIndex"/> so consecutive combos never share color.
+    /// </summary>
+    private MeterEntry NewComboEntry()
+    {
+        int colorIdx = PickComboColorIndex();
+        _lastColorIndex = colorIdx;
+        return new MeterEntry(ComputeComboSize(), colorIdx);
+    }
+
+    /// <summary>
+    /// Picks a random palette index that differs from <see cref="_lastColorIndex"/>.
+    /// Standard "pick from N-1 then bump past the excluded index" trick.
+    /// Falls back to 0 if the palette is empty/single-entry.
+    /// </summary>
+    private int PickComboColorIndex()
+    {
+        var palette = ActivePalette;
+        if (palette == null || palette.Count == 0)
+            return 0;
+        if (palette.Count == 1 || _lastColorIndex < 0)
+            return UnityEngine.Random.Range(0, palette.Count);
+        int idx = UnityEngine.Random.Range(0, palette.Count - 1);
+        if (idx >= _lastColorIndex)
+            idx++;
+        return idx;
+    }
+
+    /// <summary>Active palette (theme override or scene default). Null if neither resolved.</summary>
+    private List<Color> ActivePalette =>
+        ThemeManager.Current != null ? ThemeManager.Current.arrowPalette : null;
+
+    /// <summary>Resolves a combo's color from its palette index, with a sane fallback.</summary>
+    private Color ColorForCombo(MeterEntry combo)
+    {
+        var palette = ActivePalette;
+        if (palette == null || palette.Count == 0)
+            return MeterQueuedColor;
+        int idx = combo.ColorIndex;
+        if (idx < 0 || idx >= palette.Count)
+            idx = 0;
+        return palette[idx];
     }
 
     /// <summary>
@@ -390,7 +454,10 @@ public sealed class EndlessModeController : MonoBehaviour
         if (view != null)
         {
             view.EnterPendingMode();
-            _boardView.AssignFallbackColor(pending.Arrow);
+            // Stamp this arrow with the active combo's palette color. The
+            // color sticks through the pending → committed transition because
+            // CommitPending no longer recolors via ApplyColoring.
+            _boardView.SetArrowColor(pending.Arrow, ColorForCombo(_activeCombo));
         }
         return true;
     }
@@ -496,8 +563,11 @@ public sealed class EndlessModeController : MonoBehaviour
         if (view != null)
             view.ExitPendingMode();
 
+        // Don't recolor via ApplyColoring here — the dependency-graph
+        // palette assignment would overwrite the per-combo color we
+        // stamped during TrySpawnOnePending. Endless deliberately groups
+        // arrows by combo color for visual continuity from queue → board.
         _session.CommitPending(pending);
-        _boardView.ApplyColoring();
     }
 
     // ---- Danger tint -------------------------------------------------------
@@ -547,21 +617,23 @@ public sealed class EndlessModeController : MonoBehaviour
 
         _meterContainer.Clear();
 
-        // Container is flex-direction: column (natural top-to-bottom). Newest
-        // combo enters at the top; existing combos shift down each push tick;
-        // the oldest pops from the bottom. Each combo renders as one
-        // continuous bar whose height is proportional to its garbage points.
+        // Container is bottom-justified flex (column + flex-end). Newest
+        // combo sits at the top of the stack and combos shift down each
+        // push tick; the oldest pops from the bottom. Each combo renders
+        // as one continuous bar in its assigned palette color, matching
+        // the color of the arrows it spawns on commit.
         for (int i = _meter.Count - 1; i >= 0; i--)
         {
             var bar = new VisualElement();
             bar.AddToClassList("endless-meter-bar");
-            bar.style.backgroundColor = MeterQueuedColor;
-            bar.style.height = _meter[i] * MeterPointPixelHeight;
+            bar.style.backgroundColor = ColorForCombo(_meter[i]);
+            bar.style.height = _meter[i].Size * MeterPointPixelHeight;
             _meterContainer.Add(bar);
         }
 
-        // Shortfall sits below the queue (last child in column flex). Same
-        // continuous-bar treatment in red.
+        // Shortfall sits below the queue (last child = bottom). Always red
+        // regardless of the active combo's color — this is the danger
+        // signal, not a queue entry.
         if (_activeShortfall > 0)
         {
             var bar = new VisualElement();

@@ -243,7 +243,16 @@ public sealed class BoardView : MonoBehaviour
         int idx =
             (Mathf.Abs(arrow.HeadCell.X * 73856093 ^ arrow.HeadCell.Y * 19349663))
             % _settings.arrowPalette.Count;
-        Color c = _settings.arrowPalette[idx];
+        SetArrowColor(arrow, _settings.arrowPalette[idx]);
+    }
+
+    /// <summary>
+    /// Sets a single arrow's render color directly. Used by endless mode to
+    /// stamp combo colors on freshly-spawned arrows without going through
+    /// the dependency-graph palette assignment in <see cref="ApplyColoring"/>.
+    /// </summary>
+    public void SetArrowColor(Arrow arrow, Color c)
+    {
         if (_useCulling)
         {
             _arrowColors[arrow] = c;
