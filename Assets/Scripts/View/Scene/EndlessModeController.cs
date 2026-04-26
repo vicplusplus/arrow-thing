@@ -103,13 +103,12 @@ public sealed class EndlessModeController : MonoBehaviour
     /// <summary>
     /// Baseline combo size as a fraction of total board cells. Each arrow's
     /// garbage cost is roughly its cell count, so this is roughly the
-    /// fraction of the board that one combo will fill at minimum. Defaults
-    /// match prior absolute tuning on a 20×20 board (9 / 400 = 2.25%) and
-    /// scale linearly with board area, so 5×5 and 10×10 don't immediately
-    /// top out from oversized combos.
+    /// fraction of the board that one combo will fill at minimum. Tuned
+    /// against 10×10 as the reference (9 / 100 = 9%); scales linearly with
+    /// board area so density-vs-difficulty stays constant across sizes.
     /// </summary>
-    [SerializeField, Range(0.005f, 0.1f)]
-    private float comboBasePctOfBoard = 0.0225f;
+    [SerializeField, Range(0.01f, 0.25f)]
+    private float comboBasePctOfBoard = 0.09f;
 
     /// <summary>
     /// Clear count for the first difficulty tier. Subsequent tiers follow
@@ -142,11 +141,11 @@ public sealed class EndlessModeController : MonoBehaviour
     /// fraction of board cells. At empty (occupancy 0) the bonus is
     /// +scale × boardCells; the bonus rolls off smoothly via a quarter-
     /// cosine curve and reaches 0 at <see cref="targetOccupancy"/>.
-    /// Above target, the bonus stays clamped at 0. Default matches prior
-    /// absolute tuning on a 20×20 board (22 / 400 = 5.5%).
+    /// Above target, the bonus stays clamped at 0. Tuned against 10×10
+    /// (22 / 100 = 22%).
     /// </summary>
-    [SerializeField, Range(0f, 0.2f)]
-    private float occupancyAdaptivePctOfBoard = 0.055f;
+    [SerializeField, Range(0f, 0.5f)]
+    private float occupancyAdaptivePctOfBoard = 0.22f;
 
     /// <summary>
     /// Combo timer: if no clear lands within this window after the last one,
