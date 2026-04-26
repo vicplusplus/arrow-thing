@@ -198,52 +198,65 @@ Net: zero editor work needed — every move is C#-only.
 - `WireClassicVictory` shim, `RunClassicSetupCoroutine` stub,
   `FinalizeSession` shim — no longer routed through controller.
 
-## Phase 2E (next)
+## Phase 2E (landed)
 
-### CoopMode absorbs
+What's in: CoopMode now owns the entire co-op pipeline. `GameController`
+shrank from ~1425 → ~722 lines (-703); CoopMode grew from 93 → ~785.
 
-- All `_coopXxx` fields.
-- `CoopSetup`, `CoopCompletedSetup`, `OnCoopRemoteCleared`,
-  `OnCoopRemoteRejectedDep`, `OnCoopLobbyCompleted`, `OnCoopRosterUpdated`,
-  `OnCoopTap`, `ShowCoopResultsOverlay`, `HideGameplayHudForResults`,
-  `LaunchCoopReplay`, `AttemptCoopReconnectAsync`, `GetReconnectDelay`.
-- `UpdateCoopRuntime` body (currently extracted, called by stub on
-  controller) → moves wholesale into `CoopMode.Tick`.
-- The coop branch of `GenerateAndSetup` (one-liner) and the entirety of
-  `CoopSetup` become `CoopMode.Setup`'s body. The inlined camera-setup
-  block in `CoopSetup` (added in phase 2D) goes with it.
-- `OnDestroy` coop disposes (`_coopResults`, `_coopSidebar`, etc) → into
-  `CoopMode.Dispose`.
+- **Fields moved to CoopMode**: `_coopLobbyCode`, `_coopClient`,
+  `_coopSnapshotData`, `_coopSession`, `_coopUserId`, `_heartbeatAccum`,
+  `_coopShouldReconnect`, `_coopReconnectAttempt`, `_coopReconnectAt`,
+  `_coopReconnectInFlight`, `_coopTapPool`, `_coopPlayerTimer`,
+  `_coopSidebar`, `_coopResults`, `_previousRosterIds`,
+  `_rosterDiffPrimed`, `_lastRateLimitToastAt`, `CoopReconnectDelays`,
+  `HeartbeatIntervalSec`, `ReconnectToastGiveUpAttempt`. Also dropped the
+  `_isCoopMode` flag entirely — `CreateMode` peeks
+  `GameSettings.ActiveLobbyCode` to decide which mode to add.
+- **Methods moved to CoopMode**: `CoopSetup` (now `RunSetup`),
+  `CoopCompletedSetup`, `ParseHex`, `OnCoopRemoteCleared`,
+  `OnCoopRemoteRejectedDep`, `OnCoopLobbyCompleted`,
+  `ShowCoopResultsOverlay`, `HideGameplayHudForResults`,
+  `LaunchCoopReplay`, `OnCoopRosterUpdated`, `GetReconnectDelay`,
+  `AttemptCoopReconnectAsync`, `OnCoopTap`. The old `UpdateCoopRuntime`
+  body is now inline in `CoopMode.Tick` (which also calls
+  `_coopClient?.Update()` — the WS pump used to run unconditionally on
+  GameController, now part of the mode tick because the mode is created
+  before its Setup awaits any messages).
+- **GenerateAndSetup unified**: classic and coop now share one path —
+  build `GameContext`, `yield return _mode.Setup(ctx)`, copy
+  Board/BoardView/CameraController out of ctx, run shared
+  `WireHud`/`WireInput`/`mode.WireRunFlow`. The old `if (_isCoopMode)`
+  branch fork is gone.
+- **OnDestroy simplified**: the individual `_coop* ?.Dispose()` calls
+  collapsed into the existing `_mode?.Dispose()`. `CoopMode.Dispose` was
+  made idempotent (nulls fields after disposing) so it can also be
+  called early from `ReturnToModeSelect` to halt the reconnect driver
+  before scene pop.
+- **Removed obsolete from GameController**: `UpdateCoopRuntime`,
+  `OnCoopTapInternal`, `RunCoopSetupCoroutine` stub, and the
+  `using System.Threading.Tasks` import.
 
-### Trim `GameController`
+### Final GameController shape
 
-After phase 2, the controller should hold only:
+After phase 2E, GameController holds:
 
 - Awake / OnDestroy / OnThemeChanged / OnSettingsOpenChanged.
-- `Update()` for FocusNavigator, Escape, loading overlay fade — plus
+- `Update()` — FocusNavigator, Escape, loading overlay fade,
   `_mode?.Tick()`.
-- Shared HUD wiring (back button, leave modal, loading overlay,
-  cancel-generation modal, FocusNavigator).
-- Shared input wiring (calls `mode.TapAttemptHandler`).
-- Loading overlay coroutine helpers (`ShowLoading`, `HideLoading`,
-  `UpdateLoadingLabel`, `FadeElement`).
-- Shared board/view/camera setup helpers — or move to a static helper.
-- `CreateMode()` factory.
-- Leave modal decision tree — but checks the active mode's
-  `SupportsSaveOnLeave` / `WouldOverwriteDifferentSave` properties.
+- `CreateMode()` factory (peeks `GameSettings.ActiveLobbyCode`).
+- `GenerateAndSetup` — ~25 lines of orchestration around
+  `_mode.Setup(ctx)`.
+- Shared HUD wiring (`WireHud`, `WireInput`, retry-dispatch, leave modal
+  decision tree consulting `_mode.SupportsSaveOnLeave` /
+  `WouldOverwriteDifferentSave` / `HasInProgressChanges`).
+- Loading overlay (`ShowLoading`, `HideLoading`, `UpdateLoadingLabel`,
+  `FadeElement`).
+- Internal accessors that expose SerializeFields and shared scene state
+  to mode classes.
 
-Estimated final size: ~400–500 lines (down from ~1800).
+`GameController.cs`: 722 lines (down from ~1873 at start of refactor).
 
-### Order of operations
-
-1. Move ClassicMode-only fields + methods. Keep stubs on GameController
-   that forward to `_mode` when needed for backward compatibility, then
-   remove the stubs once nothing references them.
-2. Move CoopMode-only fields + methods. Same pattern.
-3. Trim GameController.
-4. Verify both modes still work (manually + any tests we add along the way).
-
-## Phase 3 (after both modes work)
+## Phase 3 (next)
 
 Re-introduce endless mode by adding `EndlessMode : MonoBehaviour, IGameMode`
 that implements `Setup` (combo-queue garbage meter, generation, etc)
@@ -252,8 +265,10 @@ endless-prototype branch's domain-layer changes (PendingArrow,
 EndlessBoardSession, NativeGeneration improvements, multi-candidate
 selection) and reuse the EndlessHud.uxml asset path it established.
 
-This phase validates the framework: if adding endless requires only the
-new mode class + asset, the encapsulation is correct.
+The encapsulation is now in place: adding endless should only require the
+new mode class + assets, plus a branch in `CreateMode` that returns it
+when `GameSettings` indicates endless. No more scattered
+`if (mode == endless)` checks.
 
 ## Reference
 
