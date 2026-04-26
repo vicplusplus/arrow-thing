@@ -8,32 +8,26 @@
     top: 80px;
     bottom: 80px;
     width: 28px;
-    flex-direction: column-reverse;
+    flex-direction: column;
     background-color: rgba(0, 0, 0, 0.35);
     border-width: 2px;
     border-color: rgb(50, 50, 50);
     padding: 2px;
 }
 
-.endless-meter-segment {
-    height: 12px;
-    margin-top: 2px;
+/* One continuous bar per combo (height set inline in C# from combo size).
+ * Newest sits at the top; combos shift down each push tick. Shortfall is
+ * the same shape in red, rendered last so it lands at the bottom. */
+.endless-meter-bar {
+    margin-bottom: 2px;
     border-width: 1px;
     border-color: rgba(0, 0, 0, 0.5);
 }
 
-.endless-meter-segment--shortfall {
+.endless-meter-bar--shortfall {
     /* Reserved for future per-state styling — currently the C# layer
-     * just recolors via inline style. Class kept so that USS-only tweaks
+     * just recolors via inline style. Class kept so USS-only tweaks
      * remain possible without touching code. */
-}
-
-.endless-meter-divider {
-    height: 4px;
-    margin-top: 2px;
-    background-color: rgba(0, 0, 0, 0);
-    border-top-width: 2px;
-    border-top-color: rgb(0, 0, 0);
 }
 
 /* Cleared-count label. Mirrors the classic timer-label position but lives

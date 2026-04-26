@@ -186,6 +186,9 @@ public sealed class EndlessModeController : MonoBehaviour
     private static readonly Color MeterQueuedColor = new(0.78f, 0.78f, 0.82f);
     private static readonly Color MeterShortfallColor = new(0.95f, 0.20f, 0.20f);
 
+    /// <summary>Pixel height per garbage point. Combo bar height = points × this.</summary>
+    private const float MeterPointPixelHeight = 12f;
+
     // Scoring (publicly read by EndlessMode for the result screen).
     public int ClearCount { get; private set; }
     public int LongestCombo { get; private set; }
@@ -544,39 +547,29 @@ public sealed class EndlessModeController : MonoBehaviour
 
         _meterContainer.Clear();
 
-        // Container is flex-direction: column-reverse via USS — bottom = first
-        // child. So we build top-to-bottom in queue order: queued combos first
-        // (top), then active marker, then shortfall (bottom).
-
-        // Queued combos (excluding the one about to be active — meter[0]).
-        // Visualized as gray stacked segments.
+        // Container is flex-direction: column (natural top-to-bottom). Newest
+        // combo enters at the top; existing combos shift down each push tick;
+        // the oldest pops from the bottom. Each combo renders as one
+        // continuous bar whose height is proportional to its garbage points.
         for (int i = _meter.Count - 1; i >= 0; i--)
         {
-            int combo = _meter[i];
-            for (int j = 0; j < combo; j++)
-            {
-                var seg = new VisualElement();
-                seg.AddToClassList("endless-meter-segment");
-                seg.style.backgroundColor = MeterQueuedColor;
-                _meterContainer.Add(seg);
-            }
-            if (i > 0)
-            {
-                var divider = new VisualElement();
-                divider.AddToClassList("endless-meter-divider");
-                _meterContainer.Add(divider);
-            }
+            var bar = new VisualElement();
+            bar.AddToClassList("endless-meter-bar");
+            bar.style.backgroundColor = MeterQueuedColor;
+            bar.style.height = _meter[i] * MeterPointPixelHeight;
+            _meterContainer.Add(bar);
         }
 
-        // Shortfall: stacked at bottom (built last so column-reverse puts it
-        // at the visual bottom).
-        for (int j = 0; j < _activeShortfall; j++)
+        // Shortfall sits below the queue (last child in column flex). Same
+        // continuous-bar treatment in red.
+        if (_activeShortfall > 0)
         {
-            var seg = new VisualElement();
-            seg.AddToClassList("endless-meter-segment");
-            seg.AddToClassList("endless-meter-segment--shortfall");
-            seg.style.backgroundColor = MeterShortfallColor;
-            _meterContainer.Add(seg);
+            var bar = new VisualElement();
+            bar.AddToClassList("endless-meter-bar");
+            bar.AddToClassList("endless-meter-bar--shortfall");
+            bar.style.backgroundColor = MeterShortfallColor;
+            bar.style.height = _activeShortfall * MeterPointPixelHeight;
+            _meterContainer.Add(bar);
         }
     }
 
