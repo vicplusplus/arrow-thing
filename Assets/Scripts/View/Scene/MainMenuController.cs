@@ -807,7 +807,7 @@ public sealed class MainMenuController : NavigableScene
 
     /// <summary>
     /// Endless mode entry: same size selection but mode flag flipped so
-    /// GameController routes through <see cref="EndlessModeStrategy"/>.
+    /// <see cref="GameController.CreateMode"/> instantiates <see cref="EndlessMode"/>.
     /// </summary>
     private void OnStartEndless()
     {

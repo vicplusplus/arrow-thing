@@ -3,7 +3,7 @@
     <Style src="EndlessHud.uss" />
 
     <!-- Endless-mode HUD additions. Cloned into the shared HUD root by
-         EndlessModeStrategy at run start. No other game mode references
+         EndlessMode at run start. No other game mode references
          these elements; safe to add/remove freely without affecting
          classic or co-op. -->
 

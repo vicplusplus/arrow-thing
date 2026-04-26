@@ -248,7 +248,7 @@ public sealed class EndlessModeController : MonoBehaviour
             _cameraBaseColor = _camera.backgroundColor;
 
         // Endless-specific HUD elements live in EndlessHud.uxml (cloned
-        // into the HUD root by EndlessModeStrategy). They do not exist
+        // into the HUD root by EndlessMode.RunSetup). They do not exist
         // on classic / co-op HUDs.
         _meterContainer = hudRoot?.Q<VisualElement>("endless-meter");
         if (_meterContainer == null)
