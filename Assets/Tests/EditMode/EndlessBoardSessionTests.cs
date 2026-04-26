@@ -200,50 +200,19 @@ public class EndlessBoardSessionTests
     }
 
     [Test]
-    public void TrySpawnPending_OnFullBoard_ReturnsNullAndSetsToppedOutFlag()
+    public void TrySpawnPending_OnFullBoard_EventuallyReturnsNull()
     {
-        // On a small board already saturated by centermost-first fill, no more
-        // arrows can be placed — TrySpawnPending must return null and flag topout.
+        // On a saturated board, no more arrows can be placed —
+        // TrySpawnPending must return null within a bounded number of attempts.
         var board = BuildFilledBoard(6, 6, 5, 1);
         var session = new EndlessBoardSession(board, 5, 2);
 
         var p = session.TrySpawnPending(0f);
-        // On extremely small saturated boards, topout is reached immediately.
-        // If the board happens to not be quite saturated (rare on 6x6), allow
-        // a few spawns and then verify topout is reached within a bounded loop.
         int guard = 0;
         while (p != null && guard++ < 50)
             p = session.TrySpawnPending(guard);
 
-        Assert.That(session.LastSpawnToppedOut, Is.True);
-    }
-
-    [Test]
-    public void CentermostCandidateRing_GrowsAsBoardFills()
-    {
-        var board = BuildMidGameBoard(10, 10, 5, 31);
-        var session = new EndlessBoardSession(board, 5, 77);
-
-        int initial = session.CentermostCandidateRing();
-        Assume.That(initial, Is.GreaterThanOrEqualTo(0), "expected non-topped-out initial state");
-
-        int maxRing = initial;
-        for (int i = 0; i < 200; i++)
-        {
-            var p = session.TrySpawnPending(i);
-            if (p == null)
-                break;
-            session.CommitPending(p);
-            int r = session.CentermostCandidateRing();
-            if (r > maxRing)
-                maxRing = r;
-        }
-
-        Assert.That(
-            maxRing,
-            Is.GreaterThan(initial),
-            "ring should grow as passive spawns fill outward"
-        );
+        Assert.That(p, Is.Null, "expected topout within 50 spawn attempts on a saturated 6x6");
     }
 
     [Test]

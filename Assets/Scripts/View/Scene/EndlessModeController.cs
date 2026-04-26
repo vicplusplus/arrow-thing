@@ -193,13 +193,12 @@ public sealed class EndlessModeController : MonoBehaviour
     private static readonly Color MeterQueuedColor = new(0.78f, 0.78f, 0.82f);
     private static readonly Color MeterShortfallColor = new(0.95f, 0.20f, 0.20f);
 
-    // Scoring
+    // Scoring (publicly read by EndlessMode for the result screen).
     public int ClearCount { get; private set; }
     public int LongestCombo { get; private set; }
-    public int CurrentCombo { get; private set; }
-    public float RunStartTime { get; private set; }
-    public float RunEndTime { get; private set; }
-    public bool RunEnded { get; private set; }
+    private int _currentCombo;
+    private float _runStartTime;
+    private float _runEndTime;
 
     // Combo timer: timestamp of the last real-arrow clear.
     private float _lastClearTime = -1f;
@@ -211,12 +210,6 @@ public sealed class EndlessModeController : MonoBehaviour
 
     /// <summary>Raised after <see cref="topoutResultDelaySeconds"/> following <see cref="ToppedOut"/>.</summary>
     public event Action ResultReady;
-
-    /// <summary>Raised when a pending arrow is spawned.</summary>
-    public event Action<PendingArrow> PendingSpawned;
-
-    /// <summary>Raised when a pending arrow commits to a real arrow.</summary>
-    public event Action<PendingArrow> PendingCommitted;
 
     // ---- Lifecycle ---------------------------------------------------------
 
@@ -256,13 +249,12 @@ public sealed class EndlessModeController : MonoBehaviour
             _clearsLabel.text = "0";
 
         ClearCount = 0;
-        CurrentCombo = 0;
+        _currentCombo = 0;
         LongestCombo = 0;
         _meter.Clear();
         _activeShortfall = 0;
         _pushTimer = 0f;
-        RunStartTime = Time.time;
-        RunEnded = false;
+        _runStartTime = Time.time;
         _active = true;
 
         // Seed the meter with one combo so the first push tick has something
@@ -276,9 +268,6 @@ public sealed class EndlessModeController : MonoBehaviour
         OnPushTick();
     }
 
-    public Board Board => _session?.Board;
-    public EndlessBoardSession Session => _session;
-
     /// <summary>
     /// Call this when a real (committed) arrow is cleared by the player. Routes
     /// removal through the session AND, if there's outstanding shortfall, fires
@@ -291,9 +280,9 @@ public sealed class EndlessModeController : MonoBehaviour
 
         _session.ClearRealArrow(arrow);
         ClearCount++;
-        CurrentCombo++;
-        if (CurrentCombo > LongestCombo)
-            LongestCombo = CurrentCombo;
+        _currentCombo++;
+        if (_currentCombo > LongestCombo)
+            LongestCombo = _currentCombo;
         _lastClearTime = Time.time;
 
         // Immediate mode: shortfall garbage now has a chance to fit. Try to
@@ -315,9 +304,9 @@ public sealed class EndlessModeController : MonoBehaviour
         }
     }
 
-    public void BreakCombo()
+    private void BreakCombo()
     {
-        CurrentCombo = 0;
+        _currentCombo = 0;
     }
 
     // ---- Push tick ---------------------------------------------------------
@@ -407,7 +396,6 @@ public sealed class EndlessModeController : MonoBehaviour
             view.EnterPendingMode();
             _boardView.AssignFallbackColor(pending.Arrow);
         }
-        PendingSpawned?.Invoke(pending);
         return true;
     }
 
@@ -473,7 +461,7 @@ public sealed class EndlessModeController : MonoBehaviour
         float now = Time.time;
 
         // Clear-streak combo timer (display-only).
-        if (CurrentCombo > 0 && _lastClearTime > 0f && now - _lastClearTime > comboTimerSeconds)
+        if (_currentCombo > 0 && _lastClearTime > 0f && now - _lastClearTime > comboTimerSeconds)
             BreakCombo();
 
         // Push tick (drives the garbage meter forward). Interval scales with
@@ -512,7 +500,6 @@ public sealed class EndlessModeController : MonoBehaviour
 
         _session.CommitPending(pending);
         _boardView.ApplyColoring();
-        PendingCommitted?.Invoke(pending);
     }
 
     // ---- Danger tint -------------------------------------------------------
@@ -524,7 +511,7 @@ public sealed class EndlessModeController : MonoBehaviour
 
         // Run is over — restore the original background color, regardless of
         // ordering quirks that may have called us after EndRun.
-        if (RunEnded || !_active)
+        if (!_active)
         {
             _camera.backgroundColor = _cameraBaseColor;
             return;
@@ -602,11 +589,10 @@ public sealed class EndlessModeController : MonoBehaviour
 
     private void EndRun()
     {
-        if (RunEnded)
+        if (!_active)
             return;
-        RunEnded = true;
         _active = false;
-        RunEndTime = Time.time;
+        _runEndTime = Time.time;
         ToppedOut?.Invoke();
         StartCoroutine(ResultDelayCoroutine());
     }
@@ -621,5 +607,5 @@ public sealed class EndlessModeController : MonoBehaviour
         ResultReady?.Invoke();
     }
 
-    public float RunDurationSeconds => (RunEnded ? RunEndTime : Time.time) - RunStartTime;
+    public float RunDurationSeconds => (_active ? Time.time : _runEndTime) - _runStartTime;
 }

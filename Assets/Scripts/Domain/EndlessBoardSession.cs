@@ -36,12 +36,6 @@ public sealed class EndlessBoardSession
     public IReadOnlyList<PendingArrow> PendingArrows => _pending;
 
     /// <summary>
-    /// Most recent spawn attempt hit topout (no candidate could be placed).
-    /// Reset to false on the next successful spawn.
-    /// </summary>
-    public bool LastSpawnToppedOut { get; private set; }
-
-    /// <summary>
     /// Constructs a session from a finalized Board. <paramref name="maxLength"/>
     /// is the arrow length cap for new ghost spawns (matches the initial-fill
     /// parameter). <paramref name="spawnSeed"/> seeds the ghost-generation RNG.
@@ -79,8 +73,7 @@ public sealed class EndlessBoardSession
     /// <summary>
     /// Attempts to generate a new ghost arrow. On success, the arrow is placed
     /// into native state (for future cycle checks) and added to the pending
-    /// list, then returned. On topout (no candidate placeable), returns null
-    /// and sets <see cref="LastSpawnToppedOut"/> to true.
+    /// list, then returned. On topout (no candidate placeable), returns null.
     /// </summary>
     public PendingArrow TrySpawnPending(float commitAt) =>
         TrySpawnPending(commitAt, numCandidates: 1, scoreFn: null);
@@ -167,10 +160,7 @@ public sealed class EndlessBoardSession
         }
 
         if (winnerCells == null)
-        {
-            LastSpawnToppedOut = true;
             return null;
-        }
 
         // Re-place the winner. PlaceArrowExplicit doesn't run cycle detection
         // (it's an explicit placement), but the candidate already passed
@@ -180,7 +170,6 @@ public sealed class EndlessBoardSession
         int finalIdx = _state.lastPlacedIndex;
         int finalPerpDeps = _state.lastPlacedPerpDeps;
 
-        LastSpawnToppedOut = false;
         var arrow = new Arrow(winnerCells);
         arrow._generationIndex = finalIdx;
         var pending = new PendingArrow(arrow, finalIdx, commitAt, finalPerpDeps);
@@ -237,49 +226,5 @@ public sealed class EndlessBoardSession
             throw new ArgumentNullException(nameof(arrow));
         Board.RemoveArrow(arrow);
         NativeGeneration.RemoveArrow(ref _state, arrow._generationIndex, arrow.Cells);
-    }
-
-    /// <summary>
-    /// Twice-Chebyshev distance of the centermost available head candidate in
-    /// the spawn pool. Used by the danger-tint UI: when this exceeds the
-    /// outer-wiggle threshold, the board is close to topout. Returns -1 if no
-    /// candidates remain (i.e. already topped out).
-    /// </summary>
-    public int CentermostCandidateRing()
-    {
-        int c2x = _state.boardWidth - 1;
-        int c2y = _state.boardHeight - 1;
-        int w = _state.boardWidth;
-
-        int minDist = int.MaxValue;
-        bool anyLive = false;
-
-        for (int i = 0; i < _state.candidateCount; i++)
-        {
-            NativeArrowHeadData c = _state.candidates[i];
-            // Skip stale candidates (cells occupied) — mirror of the lazy
-            // pruning that TryGenerateArrow does on rejection. This is a
-            // read-only preview of ring pressure, so don't mutate the pool.
-            if (
-                _state.occupancy[c.headY * w + c.headX] >= 0
-                || _state.occupancy[c.nextY * w + c.nextX] >= 0
-            )
-                continue;
-
-            int dx = (c.headX << 1) - c2x;
-            int dy = (c.headY << 1) - c2y;
-            if (dx < 0)
-                dx = -dx;
-            if (dy < 0)
-                dy = -dy;
-            int d = dx > dy ? dx : dy;
-            if (d < minDist)
-            {
-                minDist = d;
-                anyLive = true;
-            }
-        }
-
-        return anyLive ? minDist : -1;
     }
 }
