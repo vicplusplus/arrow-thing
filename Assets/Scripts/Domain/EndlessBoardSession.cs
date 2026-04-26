@@ -8,8 +8,8 @@ using System.Collections.Generic;
 /// awaiting commit.
 ///
 /// Lifecycle:
-///   1. Construct with an initial-fill Board (already finalized via
-///      <see cref="BoardGeneration.FillBoardIncremental"/> with centermost-first).
+///   1. Construct with a Board (empty in current endless flow, but may also
+///      be initial-filled via <see cref="BoardGeneration.FillBoardIncremental"/>).
 ///      The session rebuilds native state from the Board's arrows, reassigning
 ///      generation indices 0..N-1 densely (compaction may have left holes).
 ///   2. <see cref="TrySpawnPending"/> — generate a new ghost, place it in native
@@ -96,10 +96,7 @@ public sealed class EndlessBoardSession
     ///
     /// All candidates are validated against the full board solvability check
     /// (Kahn topo) so even if the incremental cycle detector accepts an
-    /// invalid placement, the post-validate catches it. Centermost-first is
-    /// OFF — uniform random head selection across the whole board, so
-    /// generation isn't biased by ring distance (a fully-clear strip through
-    /// center looks identical to deep-board for the centermost heuristic).
+    /// invalid placement, the post-validate catches it.
     /// </summary>
     public PendingArrow TrySpawnPending(
         float commitAt,
