@@ -26,15 +26,14 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
     private EndlessModeController _endless;
 
     /// <summary>
-    /// Fixed endless board size. The size picker on the main menu is ignored
-    /// for endless — anything much past 20×20 becomes impossible to keep
-    /// clear at the late-game push cadence; 10×10 is too repetitive. 16×16
-    /// is the sweet spot. Centralized here as a const so any future "endless
-    /// size variant" mode (small / large) can clone EndlessMode and pick its
-    /// own value.
+    /// Default endless board size when launched outside the menu (editor
+    /// playthrough). The menu picker writes to <see cref="GameSettings.Width"/>
+    /// directly, so this only kicks in for direct-scene-load.
     /// </summary>
-    private const int BoardSize = 16;
+    private const int DefaultBoardSize = 20;
 
+    private int _w;
+    private int _h;
     private int _activeSeed;
 
     public string Name => "Endless";
@@ -107,9 +106,9 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
 
     private IEnumerator RunSetup(GameContext context)
     {
-        ResolveSeed();
+        ResolveParameters();
 
-        Debug.Log($"[EndlessMode] Setup: board={BoardSize}x{BoardSize}, seed={_activeSeed}");
+        Debug.Log($"[EndlessMode] Setup: board={_w}x{_h}, seed={_activeSeed}");
 
         _controller.ShowLoadingInternal("Loading...");
         yield return null;
@@ -117,8 +116,8 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
         // Empty board — endless grows it from nothing via the push-tick loop.
         var visualSettings = ThemeManager.Current ?? context.VisualSettings;
         (Board board, BoardView boardView) = BoardSetupHelper.CreateBoardAndView(
-            BoardSize,
-            BoardSize,
+            _w,
+            _h,
             visualSettings
         );
         context.Board = board;
@@ -172,8 +171,21 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
         _endless.ResultReady += OnResultReady;
     }
 
-    private void ResolveSeed()
+    private void ResolveParameters()
     {
+        if (GameSettings.IsSet)
+        {
+            // Menu picker writes Width/Height. Endless presets are square
+            // (10/20/40), but we don't enforce that here — the controller
+            // is happy with non-square if a future variant uses one.
+            _w = GameSettings.Width;
+            _h = GameSettings.Height;
+        }
+        else
+        {
+            _w = DefaultBoardSize;
+            _h = DefaultBoardSize;
+        }
         // Endless boards always use a fresh random seed when launched from
         // the menu. Editor playthrough honors the editor seed toggle so
         // dev iterations on a specific board are possible.

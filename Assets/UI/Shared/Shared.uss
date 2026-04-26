@@ -1174,6 +1174,12 @@
     margin-bottom: 12px;
 }
 
+/* Singleplayer mode-tab row (Classic | Endless). Sits above the size
+ * picker; small bottom margin so it doesn't crowd the section label. */
+.sp-mode-tabs {
+    margin-bottom: 8px;
+}
+
 .preset-btn {
     width: 160px;
     height: 80px;
