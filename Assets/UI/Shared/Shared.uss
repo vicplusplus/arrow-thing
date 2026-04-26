@@ -1188,6 +1188,15 @@
  * siblings — min-height is the reliable knob. */
 .sp-panel-area {
     min-height: 380px;
+    align-items: stretch;
+}
+
+/* Per-tab panels inside .sp-panel-area. align-items: center matches
+ * what .menu-panel did for these elements before the wrapper was
+ * introduced — keeps the custom-panel slider centered, preset grid
+ * centered, etc. */
+#sp-classic-panel,
+#sp-endless-panel {
     align-items: center;
 }
 
