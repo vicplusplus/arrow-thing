@@ -1,7 +1,6 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -73,93 +72,28 @@ public sealed class GameController : MonoBehaviour
     [SerializeField]
     private float loadingFadeDuration = 0.3f;
 
-    [Header("Per-Mode HUD Assets")]
-    [Tooltip(
-        "Endless-mode HUD overlay (garbage meter + cleared count). Cloned into the shared HUD root by EndlessModeStrategy at run start. Leave unassigned to disable endless-specific HUD."
-    )]
-    [SerializeField]
-    private VisualTreeAsset endlessHudAsset;
-
-    // Game state
+    // Game state — _board/_boardView/_camCtrl are populated by the active
+    // mode's Setup() into a GameContext, then copied here for shared
+    // consumers (OnThemeChanged, WireInput, leave/escape teardown).
     private Board _board;
     private BoardView _boardView;
     private CameraController _camCtrl;
-    private GameTimer _timer;
-    private ReplayRecorder _recorder;
     private InputHandler _inputHandler;
-    private string _gameId;
-    private int _activeSeed;
-    private int _w;
-    private int _h;
-    private int _maxLen;
-    private float _inspectionDur;
-    private int _initialArrowCount;
-    private bool _autosaveEnabled;
-    private bool _isContinuedGame;
-    private int _clearsSinceLastSave;
-    private const int AutosaveInterval = 10;
 
-    /// <summary>
-    /// Target initial occupancy for endless mode: fills until ~70% of cells
-    /// are occupied so the player has visible wiggle room to start. See
-    /// docs/TODO.md (Endless Mode → Board) for rationale.
-    /// </summary>
-    private const float EndlessInitialOccupancy = 0.70f;
-    private List<List<Cell>> _initialBoardSnapshot;
-    private const float FrameBudgetMs = 12f;
+    // Classic-only run state (timer, recorder, game-id, seed, dimensions,
+    // inspection duration) lives on ClassicMode after phase 2D. WireInput
+    // reads timer/recorder via cast.
 
-    // Co-op mode state (active when GameSettings.ActiveLobbyCode is set)
-    private bool _isCoopMode;
-    private string _coopLobbyCode;
-    private CoopClient _coopClient;
-    private byte[] _coopSnapshotData;
-    private CoopSession _coopSession;
-    private Guid _coopUserId;
-    private float _heartbeatAccum;
-    private const float HeartbeatIntervalSec = 15f;
-
-    // Auto-reconnect state (Phase 6). When the CoopClient disconnects
-    // unexpectedly (not via user back-out), schedule a reconnect with
-    // exponential backoff.
-    private bool _coopShouldReconnect;
-    private int _coopReconnectAttempt;
-    private float _coopReconnectAt;
-    private bool _coopReconnectInFlight;
-
-    // Per-clear tap indicator pool for co-op: remote taps spawn a ring in
-    // the clearer's color. Lazy-initialized in co-op mode only.
-    private TapIndicatorPool _coopTapPool;
-
-    // Per-player solve timer for co-op (Phase 7). Starts on first local
-    // accepted clear, reports every 5 s via timer_update.
-    private CoopPlayerTimer _coopPlayerTimer;
-
-    // Roster sidebar component for co-op (Phase 7).
-    private CoopSidebar _coopSidebar;
-
-    // Completion results overlay (Phase 8), shown on lobby_completed.
-    private CoopResultsScreen _coopResults;
-
-    // Previous roster snapshot, used to diff for "joined" toasts (Phase 7).
-    private HashSet<Guid> _previousRosterIds = new();
-    private bool _rosterDiffPrimed;
-    private float _lastRateLimitToastAt = -999f;
-
-    // 1, 2, 4, 8, 16, 30 seconds (capped).
-    private static readonly float[] CoopReconnectDelays = { 1f, 2f, 4f, 8f, 16f, 30f };
+    // Co-op state (WebSocket session, sidebar, reconnect, results overlay,
+    // tap submission, roster diff, heartbeat) lives on CoopMode after
+    // phase 2E. GameController only knows the active mode is "coop" via
+    // peeking GameSettings.ActiveLobbyCode in CreateMode.
 
     /// <summary>Set to true by the X button during loading to abort.</summary>
     private bool _cancelRequested;
 
     /// <summary>Set to true once the victory sequence begins. Blocks Escape/leave modal.</summary>
     private bool _victoryStarted;
-
-    // Per-mode hook surface (see Assets/Scripts/View/Scene/GameModeStrategies/).
-    // Centralizes per-frame and per-event branching that previously lived as
-    // scattered `if (_isCoopMode)` blocks in Update / WireHud / WireInput /
-    // WireVictory. Selected once per run after the board is created and
-    // before any wiring runs.
-    private IGameModeStrategy _modeStrategy;
 
     // Loading overlay state — driven by Update()
     private VisualElement _loadingOverlay;
@@ -171,12 +105,20 @@ public sealed class GameController : MonoBehaviour
     private Button _backBtn;
     private Button _retryBtn;
     private ConfirmModal _leaveModal;
-    private ConfirmModal _retryModal;
+
+    // _retryModal moved to ClassicMode (built in OnHudWired).
     private FocusNavigator _focusNavigator;
     private VisualElement _cancelGenModal;
     private float _loadProgress;
     private bool _loadingActive;
     private float _loadingFadeStart;
+
+    // Active mode (Classic, Coop, future Endless/PvP). Picked once in Awake
+    // based on GameSettings; all per-frame and per-event mode-specific
+    // dispatch routes through this. Replaces the previously scattered
+    // `if (_isCoopMode)` branches across Update / WireHud / WireInput /
+    // WireVictory.
+    private IGameMode _mode;
 
     // --- Lifecycle ---
 
@@ -205,33 +147,90 @@ public sealed class GameController : MonoBehaviour
 
     private void OnDestroy()
     {
-        _modeStrategy?.Dispose();
+        _mode?.Dispose();
         _focusNavigator?.Dispose();
-        _coopResults?.Dispose();
-        _coopSidebar?.Dispose();
-        _coopPlayerTimer?.Dispose();
-        _coopSession?.Dispose();
-        _coopClient?.Dispose();
         SettingsController.IsOpenChanged -= OnSettingsOpenChanged;
         ThemeManager.ThemeChanged -= OnThemeChanged;
     }
 
     /// <summary>
-    /// Picks the per-mode strategy based on co-op activation and
-    /// <see cref="GameSettings.Mode"/>. Co-op takes precedence (legacy signal
-    /// via <c>GameSettings.ActiveLobbyCode</c> consumed earlier in
-    /// <see cref="GenerateAndSetup"/>); otherwise the explicit mode flag wins.
+    /// Picks the active mode by peeking <see cref="GameSettings.ActiveLobbyCode"/>
+    /// (CoopMode itself consumes the value during <see cref="CoopMode.Setup"/>).
+    /// Mode is added as a sibling component so it can carry coroutines, then
+    /// bound to this controller.
     /// </summary>
-    private IGameModeStrategy CreateModeStrategy()
+    private IGameMode CreateMode()
     {
-        if (_isCoopMode)
-            return new CoopModeStrategy(this);
-        return GameSettings.Mode switch
+        if (!string.IsNullOrEmpty(GameSettings.ActiveLobbyCode))
         {
-            GameMode.Endless => new EndlessModeStrategy(this),
-            _ => new ClassicModeStrategy(this),
-        };
+            var coop = gameObject.AddComponent<CoopMode>();
+            coop.Bind(this);
+            return coop;
+        }
+        var classic = gameObject.AddComponent<ClassicMode>();
+        classic.Bind(this);
+        return classic;
     }
+
+    // ---- Shared scene state accessors (read by mode classes) -------------
+
+    /// <summary>Internal: HUD retry button so <see cref="CoopMode.OnHudWired"/> can hide it.</summary>
+    internal Button HudRetryButton => _retryBtn;
+
+    /// <summary>Internal: HUD back button so <see cref="ClassicMode.WireRunFlow"/> can hide it on victory.</summary>
+    internal Button BackButton => _backBtn;
+
+    /// <summary>Internal: live board (set after mode.Setup populates GameContext).</summary>
+    internal Board CurrentBoard => _board;
+
+    /// <summary>Internal: live BoardView, for ClassicMode victory wiring.</summary>
+    internal BoardView BoardViewRef => _boardView;
+
+    /// <summary>Internal: live CameraController, for ClassicMode victory wiring.</summary>
+    internal CameraController CameraControllerRef => _camCtrl;
+
+    /// <summary>Internal: live <see cref="InputHandler"/> after WireInput runs.</summary>
+    internal InputHandler ActiveInputHandler => _inputHandler;
+
+    /// <summary>Internal: HUD UIDocument, so modes can resolve their own elements.</summary>
+    internal UIDocument HudDocument => hudUIDocument;
+
+    /// <summary>Internal: Victory UIDocument SerializeField, consumed by ClassicMode.</summary>
+    internal UIDocument VictoryDocument => victoryUIDocument;
+
+    /// <summary>Internal: inspection-warning threshold SerializeField, consumed by ClassicMode timer view.</summary>
+    internal float InspectionWarningThreshold => inspectionWarningThreshold;
+
+    // ---- Editor-override SerializeField accessors (classic only) ---------
+
+    internal int EditorBoardWidth => boardWidth;
+    internal int EditorBoardHeight => boardHeight;
+    internal int EditorMaxArrowLength => maxArrowLength;
+    internal bool EditorUseRandomSeed => useRandomSeed;
+    internal int EditorSeed => seed;
+    internal float EditorInspectionDuration => inspectionDuration;
+
+    // ---- Loading overlay control (called from mode Setup) ----------------
+
+    internal void ShowLoadingInternal(string label) => ShowLoading(label);
+
+    internal void HideLoadingInternal() => HideLoading();
+
+    internal void SetLoadProgress(float p) => _loadProgress = p;
+
+    internal bool CancelRequested => _cancelRequested;
+
+    /// <summary>Internal: marks the victory sequence as started so Escape stops opening the leave modal.</summary>
+    internal void MarkVictoryStarted() => _victoryStarted = true;
+
+    /// <summary>Internal: triggers a same-mode scene reload (Ctrl+R / retry-confirmed).</summary>
+    internal void RequestQuickReset() => OnQuickReset();
+
+    /// <summary>Internal: returns to the main menu (Leave / topout).</summary>
+    internal void RequestReturnToModeSelect() => ReturnToModeSelect();
+
+    /// <summary>Internal: <c>UpdateLoadingLabel</c> exposed for CoopMode setup status messages.</summary>
+    internal void UpdateLoadingLabelInternal(string text) => UpdateLoadingLabel(text);
 
     private void OnThemeChanged(VisualSettings theme)
     {
@@ -249,16 +248,11 @@ public sealed class GameController : MonoBehaviour
 
     private void Update()
     {
-        // WebSocket message pump must run during the loading window too —
-        // CoopSetup waits on snapshot/hello messages that arrive via this pump
-        // before the strategy is constructed. Kept outside the strategy
-        // dispatch for that reason.
-        _coopClient?.Update();
-
-        // Per-mode tick (co-op heartbeat / reconnect / player-timer; endless
-        // spawn scheduling in phase 4). Replaces the previous inline
-        // `if (_isCoopMode)` blocks.
-        _modeStrategy?.Update();
+        // Per-mode tick: coop runs WS pump / heartbeat / reconnect / player
+        // timer here (CoopMode is created in GenerateAndSetup before its
+        // Setup awaits any WS messages, so Tick fires from the loading
+        // window onward); future endless / pvp run their spawn timers here.
+        _mode?.Tick();
 
         // Tick FocusNavigator for modal keyboard nav (leave/cancel modals).
         if (_focusNavigator != null)
@@ -293,789 +287,45 @@ public sealed class GameController : MonoBehaviour
 
     private IEnumerator GenerateAndSetup()
     {
-        // Check for co-op mode FIRST — it bypasses all solo parameter resolution.
-        _coopLobbyCode = GameSettings.ConsumeActiveLobbyCode();
-        _isCoopMode = !string.IsNullOrEmpty(_coopLobbyCode);
+        // Pick + bind the active mode (peeks GameSettings.ActiveLobbyCode for
+        // coop detection). All per-frame and per-event mode-specific dispatch
+        // (Update tick, HUD tweaks, tap handler, run-flow wiring) goes through
+        // this from here on.
+        _mode = CreateMode();
 
-        if (_isCoopMode)
-        {
-            yield return CoopSetup();
-            yield break;
-        }
-
-        ResolveParameters(out ReplayData priorData, out bool deferredResume);
+        // Shared HUD element lookup runs first so mode.Setup can drive the
+        // loading overlay. Then delegate the entire setup pipeline into the
+        // mode (classic: parameter resolution + generation/restore + recorder
+        // + timer; coop: WS connect + snapshot decode + session wiring).
         ResolveHudElements();
 
-        string modeStr =
-            deferredResume ? "deferred-resume"
-            : priorData != null ? "resume"
-            : "new";
-        Debug.Log(
-            $"[GameController] GenerateAndSetup: mode={modeStr}, board={_w}x{_h}, maxLen={_maxLen}"
+        var ctx = new GameContext(
+            controller: this,
+            mainCamera: mainCamera,
+            visualSettings: visualSettings,
+            hudDocument: hudUIDocument,
+            reportLoadProgress: (p, _) => _loadProgress = p,
+            isCancelRequested: () => _cancelRequested
         );
 
-        ShowLoading(deferredResume ? "Resuming..." : "Generating...");
-        yield return null;
+        yield return _mode.Setup(ctx);
 
-        if (deferredResume)
-        {
-            yield return LoadSaveAsync(result => priorData = result);
-            if (priorData == null)
-            {
-                Debug.LogWarning(
-                    "[GameController] Deferred save load returned null — returning to MainMenu."
-                );
-                SceneNav.Pop();
-                yield break;
-            }
-            Debug.Log(
-                $"[GameController] Save loaded: gameId={priorData.gameId}, board={priorData.boardWidth}x{priorData.boardHeight}, events={priorData.events.Count}"
-            );
-            ApplyResumeData(priorData);
-        }
+        // Mode's Setup may have bailed (deferred-resume save not found, gen
+        // produced 0 arrows, user cancelled, coop WS connect failed). In all
+        // those cases the mode pops the scene before returning; ctx.Board
+        // stays null.
+        if (ctx.Board == null)
+            yield break;
 
-        ResolveSeed(priorData);
-        bool hasSnapshot = priorData != null && !string.IsNullOrEmpty(priorData.boardSnapshot);
-
-        CreateBoardAndView();
-        SetupCamera();
-        _boardView.SetCameraController(_camCtrl);
-
-        if (hasSnapshot)
-        {
-            _initialBoardSnapshot = priorData.GetSnapshotArrows();
-            yield return RestoreBoard(priorData);
-        }
-        else
-        {
-            yield return GenerateBoard();
-        }
-
-        if (priorData != null)
-        {
-            bool resumeSolving = ReplayClears(priorData, out double resumeSolveElapsed);
-            if (_board.Arrows.Count == 0)
-            {
-                SaveManager.Delete();
-                SceneNav.Pop();
-                yield break;
-            }
-            SetupResumedRecorder(priorData);
-            FinalizeSession(priorData);
-            _boardView.ApplyColoring();
-            HideLoading();
-            SetupTimer(resumeSolving, resumeSolveElapsed);
-        }
-        else
-        {
-            SetupNewRecorder();
-            FinalizeSession(null);
-            _boardView.ApplyColoring();
-            HideLoading();
-            SetupTimer(false, 0.0);
-        }
-
-        // Mode strategy must be created BEFORE wiring so per-mode hooks
-        // (HUD tweaks, tap handler, victory wiring) can dispatch through it.
-        _modeStrategy = CreateModeStrategy();
+        _board = ctx.Board;
+        _boardView = ctx.BoardView;
+        _camCtrl = ctx.CameraController;
 
         WireHud();
         WireInput();
-        _modeStrategy.WireVictory();
-    }
-
-    // --- Co-op mode setup ---
-
-    /// <summary>
-    /// Completed-lobby path: fetch the v6 replay once, synthesize a roster
-    /// from its header, and render the results overlay. Skips all the
-    /// board/camera/input/WS plumbing — this view is read-only and static.
-    /// </summary>
-    private IEnumerator CoopCompletedSetup(ApiClient api)
-    {
-        var fetchTask = api.GetLobbyReplayAsync(_coopLobbyCode);
-        while (!fetchTask.IsCompleted)
-            yield return null;
-
-        var result = fetchTask.Result;
-        if (!result.Success || result.Data == null)
-        {
-            HideLoading();
-            if (GlobalToast.Instance != null)
-                GlobalToast.Instance.ShowError(result.Error ?? "Replay unavailable");
-            SceneNav.Pop();
-            yield break;
-        }
-
-        var replay = result.Data;
-        var roster = new Dictionary<Guid, CoopPlayer>();
-
-        // Count per-player clears from events.
-        var countsByPlayer = new Dictionary<Guid, int>();
-        if (replay.events != null)
-        {
-            foreach (var evt in replay.events)
-            {
-                if (evt.type == ReplayEventType.Clear && evt.playerId != null)
-                {
-                    countsByPlayer.TryGetValue(evt.playerId.Value, out int c);
-                    countsByPlayer[evt.playerId.Value] = c + 1;
-                }
-            }
-        }
-
-        if (replay.roster != null)
-        {
-            foreach (var entry in replay.roster)
-            {
-                countsByPlayer.TryGetValue(entry.playerId, out int clears);
-                var color = ParseHex(entry.color);
-                roster[entry.playerId] = new CoopPlayer(
-                    entry.playerId,
-                    entry.displayName,
-                    color,
-                    clears,
-                    accumulatedMillis: 0,
-                    online: false,
-                    isLocal: entry.playerId == _coopUserId
-                );
-            }
-        }
-
-        // Best-effort: identify the local player. The replay endpoint
-        // requires registration, so we expect one of the roster entries
-        // to be us — match against the display name saved in PlayerPrefs
-        // since we don't have a guaranteed user-id source here.
-        if (_coopUserId == Guid.Empty && replay.roster != null)
-        {
-            foreach (var entry in replay.roster)
-            {
-                if (entry.displayName == GameSettings.DisplayName)
-                {
-                    _coopUserId = entry.playerId;
-                    if (roster.TryGetValue(entry.playerId, out var p))
-                        roster[entry.playerId] = p.With();
-                    break;
-                }
-            }
-        }
-
-        HideLoading();
-
-        if (hudUIDocument != null && hudUIDocument.rootVisualElement != null)
-        {
-            HideGameplayHudForResults();
-            _coopResults = new CoopResultsScreen(
-                hudUIDocument.rootVisualElement,
-                roster,
-                _coopUserId,
-                _coopLobbyCode,
-                onViewReplay: () =>
-                {
-                    GameSettings.StartReplay(replay);
-                    SceneNav.Push("ReplayViewer");
-                },
-                selfAccumulatedMillisOverride: _coopPlayerTimer?.AccumulatedMillis ?? 0
-            );
-            _coopResults.Show();
-        }
-    }
-
-    private static Color32 ParseHex(string hex)
-    {
-        if (string.IsNullOrEmpty(hex))
-            return new Color32(255, 255, 255, 255);
-        var s = hex.StartsWith("#") ? hex.Substring(1) : hex;
-        if (s.Length != 6)
-            return new Color32(255, 255, 255, 255);
-        try
-        {
-            return new Color32(
-                Convert.ToByte(s.Substring(0, 2), 16),
-                Convert.ToByte(s.Substring(2, 2), 16),
-                Convert.ToByte(s.Substring(4, 2), 16),
-                255
-            );
-        }
-        catch
-        {
-            return new Color32(255, 255, 255, 255);
-        }
-    }
-
-    private IEnumerator CoopSetup()
-    {
-        ResolveHudElements();
-        ShowLoading("Connecting...");
-        yield return null;
-
-        var api = new ApiClient();
-        if (!api.IsLoggedIn)
-        {
-            Debug.LogError("[GameController] Co-op mode requires login.");
-            SceneNav.Pop();
-            yield break;
-        }
-
-        // Completed-lobby path: skip the WS game-state flow and instead
-        // fetch the v6 replay to render the results screen. Set by
-        // CoopHubController when the user opens a Completed lobby.
-        if (GameSettings.IsCompletedLobbyView)
-        {
-            GameSettings.IsCompletedLobbyView = false;
-            yield return CoopCompletedSetup(api);
-            yield break;
-        }
-
-        // Connect WebSocket and send hello.
-        _coopClient = new CoopClient();
-        _coopSnapshotData = null;
-        bool failed = false;
-        string failReason = null;
-
-        _coopClient.MessageReceived += msg =>
-        {
-            switch (msg.Type)
-            {
-                case "welcome":
-                    var uidStr = msg.Payload?.Value<string>("yourUserId");
-                    if (Guid.TryParse(uidStr, out var uid))
-                        _coopUserId = uid;
-                    Debug.Log(
-                        $"[GameController] Co-op welcome for lobby {_coopLobbyCode} (you={_coopUserId})"
-                    );
-                    break;
-                case "gen_progress":
-                    var pct = msg.Payload?.Value<int>("pct") ?? 0;
-                    _loadProgress = pct / 100f;
-                    UpdateLoadingLabel($"Generating... {pct}%");
-                    break;
-                case "gen_complete":
-                    _loadProgress = 1f;
-                    UpdateLoadingLabel("Board ready!");
-                    break;
-                case "snapshot":
-                    // Binary frame follows — handled below.
-                    break;
-                case "lobby_failed":
-                    failed = true;
-                    failReason = "Board generation failed.";
-                    break;
-                case "disconnect":
-                    failed = true;
-                    failReason = msg.Payload?.Value<string>("reason") ?? "Disconnected";
-                    break;
-            }
-        };
-
-        _coopClient.BinaryReceived += data =>
-        {
-            _coopSnapshotData = data;
-        };
-
-        _coopClient.Disconnected += reason =>
-        {
-            if (_coopSnapshotData == null)
-            {
-                failed = true;
-                failReason = $"Disconnected: {reason}";
-                return;
-            }
-
-            // Unexpected disconnect after we were playing — schedule reconnect.
-            // Server-initiated disconnects for terminal states (rate_limited,
-            // lobby_completed, registration_cap) should NOT retry.
-            if (!_coopShouldReconnect)
-                return;
-            if (
-                reason != null
-                && (
-                    reason.Contains("rate_limited")
-                    || reason.Contains("completed")
-                    || reason.Contains("deleted")
-                    || reason.Contains("cap")
-                )
-            )
-                return;
-
-            _coopReconnectInFlight = false;
-            _coopReconnectAt = Time.unscaledTime + GetReconnectDelay(_coopReconnectAttempt);
-            _coopReconnectAttempt++;
-            if (_coopSession != null && GlobalToast.Instance != null)
-                GlobalToast.Instance.ShowInfo("Reconnecting...");
-        };
-
-        // Refresh the access token before the WS upgrade so a stale 15-minute
-        // access JWT (or cookie) isn't rejected. In cookie mode the browser
-        // picks up the fresh arrow_access and attaches it to the upgrade; in
-        // bearer mode we re-read api.Token after the refresh returns.
-        var refreshTask = api.EnsureFreshTokenAsync();
-        while (!refreshTask.IsCompleted)
-            yield return null;
-
-        var connectTask = _coopClient.ConnectAsync(api.BaseWsUrl, _coopLobbyCode, api.Token);
-        while (!connectTask.IsCompleted)
-            yield return null;
-        if (connectTask.IsFaulted)
-        {
-            Debug.LogError($"[GameController] Co-op connect failed: {connectTask.Exception}");
-            SceneNav.Pop();
-            yield break;
-        }
-
-        var helloTask = _coopClient.SendAsync(CoopMessage.Hello(0));
-        while (!helloTask.IsCompleted)
-            yield return null;
-        if (helloTask.IsFaulted)
-        {
-            Debug.LogError($"[GameController] Co-op hello failed: {helloTask.Exception}");
-            SceneNav.Pop();
-            yield break;
-        }
-
-        // Wait for snapshot binary frame (or failure).
-        while (_coopSnapshotData == null && !failed)
-        {
-            if (_cancelRequested)
-            {
-                _coopClient.Dispose();
-                _coopClient = null;
-                SceneNav.Pop();
-                yield break;
-            }
-            yield return null;
-        }
-
-        if (failed)
-        {
-            Debug.LogWarning($"[GameController] Co-op failed: {failReason}");
-            UpdateLoadingLabel(failReason ?? "Failed");
-            // Wait a beat so the user sees the message, then pop.
-            yield return new WaitForSeconds(2f);
-            SceneNav.Pop();
-            yield break;
-        }
-
-        // Decode snapshot and build the board.
-        UpdateLoadingLabel("Loading board...");
-        yield return null;
-
-        Board decodedBoard = null;
-        try
-        {
-            decodedBoard = BinarySnapshot.DecodeFull(_coopSnapshotData);
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"[GameController] Failed to decode co-op snapshot: {e}");
-        }
-        if (decodedBoard == null)
-        {
-            SceneNav.Pop();
-            yield break;
-        }
-        _board = decodedBoard;
-        _w = _board.Width;
-        _h = _board.Height;
-
-        Debug.Log($"[GameController] Co-op board decoded: {_w}x{_h}, {_board.Arrows.Count} arrows");
-
-        // Create the view from the already-populated board. Wrapped so a
-        // rendering failure (missing shader, etc.) doesn't strand the user on
-        // the loading overlay with a dead coroutine.
-        var vs = ThemeManager.Current ?? visualSettings;
-        bool viewInitFailed = false;
-        try
-        {
-            var boardGo = new GameObject("BoardView");
-            _boardView = boardGo.AddComponent<BoardView>();
-            _boardView.Init(_board, vs, spawnArrows: true);
-
-            SetupCamera();
-            _boardView.SetCameraController(_camCtrl);
-            _boardView.ApplyColoring();
-        }
-        catch (Exception e)
-        {
-            Debug.LogError($"[GameController] Co-op board view init failed: {e}");
-            UpdateLoadingLabel("Render failed");
-            viewInitFailed = true;
-        }
-        if (viewInitFailed)
-        {
-            yield return new WaitForSeconds(2f);
-            SceneNav.Pop();
-            yield break;
-        }
-
-        HideLoading();
-
-        // Enable auto-reconnect now that we have a working session.
-        _coopShouldReconnect = true;
-
-        // Tap indicator pool for remote-player taps. Uses the theme-aware
-        // ring color as a fallback when no player color is known.
-        _coopTapPool = new TapIndicatorPool(
-            sprite: null,
-            duration: 0.4f,
-            maxScale: 1.5f,
-            parent: transform
-        );
-
-        // Pass the input handler's last-input timestamp so the timer pauses
-        // during extended idle even when the window keeps focus. Purely
-        // local; not surfaced as a UI status.
-        _coopPlayerTimer = new CoopPlayerTimer(
-            _coopClient,
-            isFocusedProvider: () => Application.isFocused,
-            lastInputProvider: () =>
-                _inputHandler != null ? _inputHandler.LastInputTimeUtc : DateTime.UtcNow
-        );
-
-        // Create the session wrapper + wire server event handlers.
-        _coopSession = new CoopSession(_coopClient, _board, _coopUserId);
-        _coopSession.RemoteCleared += OnCoopRemoteCleared;
-        _coopSession.RemoteRejectedDep += OnCoopRemoteRejectedDep;
-        _coopSession.LocalRejectedRace += _ =>
-        { /* silent; arrow was already animated away */
-        };
-        _coopSession.LocalRejectedRate += _ =>
-        {
-            // Throttle to once per 3 s so a burst doesn't stack toasts.
-            if (Time.unscaledTime - _lastRateLimitToastAt < 3f)
-                return;
-            _lastRateLimitToastAt = Time.unscaledTime;
-            if (GlobalToast.Instance != null)
-                GlobalToast.Instance.ShowError("Slow down");
-        };
-        _coopSession.LobbyCompleted += OnCoopLobbyCompleted;
-        _coopSession.RosterUpdated += OnCoopRosterUpdated;
-
-        // Mount the sidebar into the HUD root. Safe to do before WireHud()
-        // since we only need the UIDocument's root.
-        if (hudUIDocument != null && hudUIDocument.rootVisualElement != null)
-            _coopSidebar = new CoopSidebar(_coopSession, hudUIDocument.rootVisualElement);
-
-        // Mode strategy must exist before wiring so per-mode hooks dispatch.
-        // For co-op, strategy.WireVictory() is intentionally empty (server-driven completion).
-        _modeStrategy = CreateModeStrategy();
-
-        WireHud();
-        WireInput();
-        _modeStrategy.WireVictory();
-    }
-
-    private void OnCoopRemoteCleared(CoopSession.ClearedEvent evt)
-    {
-        if (evt.IsLocal)
-        {
-            // Our own accepted tap: start the per-player timer on the first
-            // clear, and schedule a prompt timer_update so the sidebar row
-            // advances immediately.
-            if (_coopPlayerTimer != null)
-                _coopPlayerTimer.NoteAcceptedClear();
-            return; // already animated locally via optimistic clear
-        }
-        if (evt.Arrow == null || _boardView == null)
-            return;
-
-        // Remote clear: tint the pull-out in the clearer's color and spawn a
-        // tap indicator ring in the same color, so the action is attributed
-        // visually without needing an always-on player overlay.
-        Color tint = new Color32(
-            evt.Color.r,
-            evt.Color.g,
-            evt.Color.b,
-            evt.Color.a == 0 ? (byte)255 : evt.Color.a
-        );
-        _boardView.ClearArrowAnimated(evt.Arrow, flashColor: tint);
-        if (_coopTapPool != null)
-            _coopTapPool.Spawn(evt.TapWorld, tint);
-    }
-
-    private void OnCoopRemoteRejectedDep(CoopSession.RejectedDepEvent evt)
-    {
-        // Server broadcast a dep rejection. Play the standard blocked-tap
-        // flash on that arrow for all players. If it was OUR attempt, the
-        // flash doubles as a rollback signal since we hadn't actually
-        // removed the arrow locally (TrySubmitClear only reads it).
-        if (evt.Arrow != null && _boardView != null)
-        {
-            // TryClearArrow plays the reject animation if the arrow isn't clearable.
-            _boardView.TryClearArrow(evt.Arrow);
-        }
-    }
-
-    private void OnCoopLobbyCompleted()
-    {
-        if (_inputHandler != null)
-            _inputHandler.SetInputEnabled(false);
-        if (GlobalToast.Instance != null)
-            GlobalToast.Instance.ShowInfo("Board cleared!");
-        ShowCoopResultsOverlay();
-    }
-
-    private void ShowCoopResultsOverlay()
-    {
-        if (_coopResults != null || _coopSession == null)
-            return;
-        if (hudUIDocument == null || hudUIDocument.rootVisualElement == null)
-            return;
-        HideGameplayHudForResults();
-        _coopResults = new CoopResultsScreen(
-            hudUIDocument.rootVisualElement,
-            _coopSession.Roster,
-            _coopUserId,
-            _coopLobbyCode,
-            onViewReplay: LaunchCoopReplay,
-            selfAccumulatedMillisOverride: _coopPlayerTimer?.AccumulatedMillis ?? 0
-        );
-        _coopResults.Show();
-    }
-
-    /// <summary>
-    /// Hide HUD elements (back/retry/timer/trail buttons + co-op sidebar)
-    /// before showing the results overlay so they don't bleed through behind
-    /// the modal's translucent backdrop.
-    /// </summary>
-    private void HideGameplayHudForResults()
-    {
-        if (hudUIDocument == null || hudUIDocument.rootVisualElement == null)
-            return;
-        var root = hudUIDocument.rootVisualElement;
-        foreach (
-            var name in new[] { "back-to-menu-btn", "retry-btn", "timer-label", "trail-toggle-btn" }
-        )
-        {
-            var el = root.Q(name);
-            if (el != null)
-                el.style.display = DisplayStyle.None;
-        }
-        _coopSidebar?.Dispose();
-        _coopSidebar = null;
-    }
-
-    private async void LaunchCoopReplay()
-    {
-        var api = new ApiClient();
-        var result = await api.GetLobbyReplayAsync(_coopLobbyCode);
-        if (!result.Success)
-        {
-            if (GlobalToast.Instance != null)
-                GlobalToast.Instance.ShowError(result.Error ?? "Replay unavailable");
-            return;
-        }
-        GameSettings.StartReplay(result.Data);
-        SceneNav.Push("Replay");
-    }
-
-    /// <summary>
-    /// Roster-diff watcher: toasts "name joined" whenever a new user id
-    /// appears in the roster after the initial snapshot. The initial
-    /// <c>roster_full</c> (priming) doesn't fire joined toasts for already-
-    /// present players.
-    /// </summary>
-    private void OnCoopRosterUpdated()
-    {
-        if (_coopSession == null)
-            return;
-
-        if (!_rosterDiffPrimed)
-        {
-            _previousRosterIds = new HashSet<Guid>(_coopSession.Roster.Keys);
-            _rosterDiffPrimed = true;
-            return;
-        }
-
-        foreach (var kvp in _coopSession.Roster)
-        {
-            if (kvp.Key == _coopUserId)
-                continue;
-            if (_previousRosterIds.Contains(kvp.Key))
-                continue;
-            var name = string.IsNullOrEmpty(kvp.Value.DisplayName)
-                ? "Someone"
-                : kvp.Value.DisplayName;
-            if (GlobalToast.Instance != null)
-                GlobalToast.Instance.ShowInfo($"{name} joined");
-        }
-
-        _previousRosterIds = new HashSet<Guid>(_coopSession.Roster.Keys);
-    }
-
-    private static float GetReconnectDelay(int attempt)
-    {
-        if (attempt < 0)
-            attempt = 0;
-        if (attempt >= CoopReconnectDelays.Length)
-            attempt = CoopReconnectDelays.Length - 1;
-        return CoopReconnectDelays[attempt];
-    }
-
-    private const int ReconnectToastGiveUpAttempt = 6;
-
-    /// <summary>
-    /// Per-frame co-op runtime tick: WebSocket pump, heartbeat timer,
-    /// per-player solve timer, auto-reconnect driver. Extracted from the
-    /// original inline <c>Update</c> so <see cref="CoopModeStrategy"/> can
-    /// drive it without GameController knowing about co-op specifics.
-    /// </summary>
-    internal void UpdateCoopRuntime()
-    {
-        // Note: the WebSocket message pump (_coopClient.Update) is driven
-        // unconditionally from GameController.Update so it runs during the
-        // loading window before this strategy is constructed.
-
-        // Co-op heartbeat loop (Phase 6). 15s cadence with current focus state
-        // and last-input timestamp; the server uses these for AFK detection.
-        if (_coopSession != null && _coopClient != null && _coopClient.IsConnected)
-        {
-            _heartbeatAccum += Time.unscaledDeltaTime;
-            if (_heartbeatAccum >= HeartbeatIntervalSec)
-            {
-                _heartbeatAccum = 0f;
-                var lastInput =
-                    _inputHandler != null ? _inputHandler.LastInputTimeUtc : DateTime.UtcNow;
-                _ = _coopClient.SendAsync(CoopMessage.Heartbeat(Application.isFocused, lastInput));
-            }
-        }
-
-        // Per-player solve timer (Phase 7). Ticks only while focused; emits
-        // timer_update every 5 s so other players see our time advance.
-        if (_coopPlayerTimer != null)
-            _coopPlayerTimer.Tick(Time.unscaledDeltaTime);
-
-        // Auto-reconnect driver: fires a single reconnect attempt when the
-        // backoff timer expires. Additional retries are scheduled by the
-        // Disconnected handler when a reconnect itself fails.
-        if (
-            _coopShouldReconnect
-            && _coopClient != null
-            && !_coopClient.IsConnected
-            && !_coopReconnectInFlight
-            && _coopReconnectAt > 0f
-            && Time.unscaledTime >= _coopReconnectAt
-        )
-        {
-            _coopReconnectInFlight = true;
-            _coopReconnectAt = 0f;
-            _ = AttemptCoopReconnectAsync();
-        }
-    }
-
-    /// <summary>
-    /// Internal accessor for the HUD retry button so <see cref="CoopModeStrategy"/>
-    /// can hide it without GameController knowing what HUD tweaks each mode wants.
-    /// </summary>
-    internal Button HudRetryButton => _retryBtn;
-
-    /// <summary>Internal accessors used by <see cref="EndlessModeStrategy"/> to wire its session.</summary>
-    internal Board CurrentBoard => _board;
-
-    /// <summary>Internal accessor: BoardView. See <see cref="EndlessModeStrategy"/>.</summary>
-    internal BoardView CurrentBoardView => _boardView;
-
-    /// <summary>Internal accessor: max arrow length for spawn generation. See <see cref="EndlessModeStrategy"/>.</summary>
-    internal int MaxArrowLength => _maxLen;
-
-    /// <summary>Internal accessor: spawn RNG seed for endless mode (derived from the run's active seed).</summary>
-    internal int ActiveSeed => _activeSeed;
-
-    /// <summary>Internal accessor: HUD UIDocument so per-mode UI can mount onto it.</summary>
-    internal UIDocument HudDocument => hudUIDocument;
-
-    /// <summary>Internal accessor: Victory UIDocument so per-mode result screens can mount onto it.</summary>
-    internal UIDocument VictoryDocument => victoryUIDocument;
-
-    /// <summary>Internal accessor: main camera, so per-mode controllers can modulate its clear color (e.g. endless danger tint).</summary>
-    internal Camera MainCamera => mainCamera;
-
-    /// <summary>Internal accessor: endless-mode HUD overlay UXML asset (cloned into HUD root by strategy).</summary>
-    internal VisualTreeAsset EndlessHudAsset => endlessHudAsset;
-
-    /// <summary>Internal accessor: shared HUD timer-label so endless mode can hide it (timer is classic-only).</summary>
-    internal Label HudTimerLabel => _timerLabel;
-
-    /// <summary>
-    /// Disables gameplay input (taps, drags, keyboard nav) and hides the
-    /// in-game HUD buttons (back / retry / trail toggle). Mirrors the cleanup
-    /// done by the classic <see cref="WireVictoryDefault"/> handler when the
-    /// last arrow clears, exposed for end-of-run sequences in modes that don't
-    /// route through that handler (currently endless mode topout).
-    /// Idempotent — safe to call repeatedly.
-    /// </summary>
-    internal void DisableGameplayHudAndInput()
-    {
-        _victoryStarted = true;
-        if (_inputHandler != null)
-            _inputHandler.SetInputEnabled(false);
-        if (_backBtn != null)
-            _backBtn.style.display = DisplayStyle.None;
-        if (_retryBtn != null)
-            _retryBtn.style.display = DisplayStyle.None;
-        if (_trailToggleBtn != null)
-            _trailToggleBtn.style.display = DisplayStyle.None;
-    }
-
-    /// <summary>
-    /// Internal exposure of <see cref="OnCoopTap"/> so
-    /// <see cref="CoopModeStrategy.TapAttemptHandler"/> can hand it to
-    /// <see cref="InputHandler"/>. Marked internal rather than public to limit
-    /// the blast radius — only same-assembly strategies can wire this up.
-    /// </summary>
-    internal bool OnCoopTapInternal(Cell cell, Vector3 tapWorld) => OnCoopTap(cell, tapWorld);
-
-    private async Task AttemptCoopReconnectAsync()
-    {
-        try
-        {
-            // Refresh the access token before the reconnect — the original
-            // 15-minute access JWT is almost certainly expired by the time a
-            // reconnect attempt runs. In cookie mode this rotates the
-            // arrow_access cookie the browser will attach to the WS upgrade.
-            var api = new ApiClient();
-            await api.EnsureFreshTokenAsync();
-            await _coopClient.ReconnectAsync(api.Token);
-            await _coopClient.SendAsync(CoopMessage.Hello(0));
-            _coopReconnectAttempt = 0;
-            _coopReconnectInFlight = false;
-            if (GlobalToast.Instance != null)
-                GlobalToast.Instance.ShowInfo("Reconnected");
-        }
-        catch (Exception e)
-        {
-            Debug.LogWarning($"[GameController] Co-op reconnect failed: {e.Message}");
-            _coopReconnectInFlight = false;
-            _coopReconnectAt = Time.unscaledTime + GetReconnectDelay(_coopReconnectAttempt);
-            _coopReconnectAttempt++;
-
-            // After walking the full backoff ladder, surface a persistent
-            // "lost connection" toast so the player knows we're still
-            // trying but something's wrong — auto-reconnect keeps going.
-            if (
-                _coopReconnectAttempt == ReconnectToastGiveUpAttempt
-                && GlobalToast.Instance != null
-            )
-            {
-                GlobalToast.Instance.ShowError("Lost connection — still retrying");
-            }
-        }
-    }
-
-    private bool OnCoopTap(Cell cell, Vector3 tapWorld)
-    {
-        if (_coopSession == null)
-            return true;
-        var arrow = _coopSession.TrySubmitClear(cell, tapWorld);
-        if (arrow != null && _boardView != null)
-        {
-            // Optimistic animation — user sees the arrow vanish immediately.
-            // Server accept (`cleared`) does nothing further for our tap;
-            // server reject-dep plays the reject flash; server reject-race
-            // is silent (arrow was already gone).
-            _boardView.TryClearArrow(arrow);
-        }
-        return true;
+        // Mode owns the run-flow: classic wires VictoryController; coop is a
+        // no-op (server-driven completion); endless wires topout result.
+        _mode?.WireRunFlow();
     }
 
     private void UpdateLoadingLabel(string text)
@@ -1084,36 +334,11 @@ public sealed class GameController : MonoBehaviour
             _loadingPercent.text = text;
     }
 
-    // --- Parameter resolution ---
-
-    private void ResolveParameters(out ReplayData priorData, out bool deferredResume)
-    {
-        _w = boardWidth;
-        _h = boardHeight;
-        _maxLen = maxArrowLength;
-        _inspectionDur = inspectionDuration;
-        priorData = null;
-        deferredResume = false;
-
-        if (!GameSettings.IsSet)
-            return;
-
-        if (GameSettings.IsResuming && GameSettings.ResumeData == null)
-        {
-            deferredResume = true;
-            return;
-        }
-
-        _w = GameSettings.Width;
-        _h = GameSettings.Height;
-        _maxLen = GameSettings.MaxArrowLength;
-
-        if (GameSettings.IsResuming)
-        {
-            priorData = GameSettings.ResumeData;
-            _inspectionDur = priorData.inspectionDuration;
-        }
-    }
+    // --- Shared HUD element lookup ---
+    // Classic setup (parameter resolution, generation/restore, recorder,
+    // timer, victory wiring) lives on ClassicMode after phase 2D.
+    // Coop setup (WS connect, snapshot decode, session, sidebar, results
+    // overlay, reconnect, tap submission) lives on CoopMode after phase 2E.
 
     private void ResolveHudElements()
     {
@@ -1137,349 +362,7 @@ public sealed class GameController : MonoBehaviour
         }
     }
 
-    private IEnumerator LoadSaveAsync(Action<ReplayData> onResult)
-    {
-        ReplayData loaded = null;
-        yield return SaveManager.LoadAsync(d => loaded = d);
-        onResult(loaded);
-    }
-
-    private void ApplyResumeData(ReplayData data)
-    {
-        GameSettings.SetResumeData(data);
-        _w = GameSettings.Width;
-        _h = GameSettings.Height;
-        _maxLen = GameSettings.MaxArrowLength;
-        _inspectionDur = data.inspectionDuration;
-    }
-
-    private void ResolveSeed(ReplayData priorData)
-    {
-        _activeSeed =
-            (priorData != null) ? priorData.seed
-            : (GameSettings.IsSet || useRandomSeed) ? Environment.TickCount
-            : seed;
-    }
-
-    // --- Board and view creation ---
-
-    private void CreateBoardAndView()
-    {
-        (_board, _boardView) = BoardSetupHelper.CreateBoardAndView(
-            _w,
-            _h,
-            ThemeManager.Current ?? visualSettings
-        );
-    }
-
-    private void SetupCamera()
-    {
-        if (mainCamera == null)
-            return;
-        float? zoom = GameSettings.IsSet
-            ? PlayerPrefs.GetFloat(GameSettings.ZoomSpeedPrefKey, GameSettings.DefaultZoomSpeed)
-            : null;
-        _camCtrl = BoardSetupHelper.SetupCamera(mainCamera, _board, zoom);
-    }
-
-    // --- Work coroutines (no UI code — just work + _loadProgress) ---
-
-    private IEnumerator RestoreBoard(ReplayData priorData)
-    {
-        // _initialBoardSnapshot was populated from priorData.GetSnapshotArrows() in GenerateAndSetup.
-        int totalArrows = _initialBoardSnapshot.Count;
-        Debug.Log($"[GameController] RestoreBoard: restoring {totalArrows} arrows from snapshot");
-        int totalSteps = totalArrows * 2;
-        var restorer = BoardSetupHelper.RestoreBoardFromSnapshot(
-            _board,
-            _boardView,
-            _initialBoardSnapshot,
-            FrameBudgetMs
-        );
-
-        while (restorer.MoveNext())
-        {
-            if (_cancelRequested)
-            {
-                SceneNav.Pop();
-                yield break;
-            }
-
-            _loadProgress = (float)restorer.Current / totalSteps;
-            yield return null;
-        }
-    }
-
-    private IEnumerator GenerateBoard()
-    {
-        // Endless mode: centermost-first fill biased to the center, capped at
-        // ~70% occupancy to leave initial wiggle room. Classic mode keeps the
-        // existing uniform-random fill-to-saturation behavior.
-        bool centermostFirst = GameSettings.Mode == GameMode.Endless;
-        int targetCells =
-            GameSettings.Mode == GameMode.Endless
-                ? Mathf.RoundToInt(_w * _h * EndlessInitialOccupancy)
-                : 0;
-        var generator = BoardGeneration.FillBoardIncremental(
-            _board,
-            _maxLen,
-            _activeSeed,
-            centermostFirst,
-            targetCells,
-            shortBiased: GameSettings.Mode == GameMode.Endless
-        );
-
-        // Phase-weighted progress (shared with the server generation worker
-        // via GenerationProgress in the domain layer). Client has an extra
-        // view-rebuild phase between Compacting and Finalizing that the server
-        // doesn't — ClientWeights accounts for it.
-        var weights = GenerationProgress.ClientWeights;
-        // Track Arrow refs so we can remove their views after compaction
-        var spawnedArrows = new List<Arrow>();
-        int arrowsBeforeCompaction = 0;
-        var phase = GenerationPhase.Generating;
-        float compactStartRealtime = 0f;
-        // Incremental view rebuild state (set at compact→finalize transition).
-        // While rebuildingViews is true, the inner frame-budget loop adds
-        // ArrowViews instead of advancing the generator.
-        bool rebuildingViews = false;
-        List<Arrow> rebuildList = null;
-        int rebuildIndex = 0;
-        int rebuildTotal = 0;
-
-        while (true)
-        {
-            if (_cancelRequested)
-            {
-                // Defensive dispose in case the generator holds any IDisposable state.
-                (generator as System.IDisposable)?.Dispose();
-                SceneNav.Pop();
-                yield break;
-            }
-
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            bool done = false;
-            while (sw.ElapsedMilliseconds < FrameBudgetMs)
-            {
-                if (rebuildingViews)
-                {
-                    // Spend remaining frame budget adding ArrowViews in batches.
-                    if (rebuildIndex < rebuildTotal)
-                    {
-                        _boardView.AddArrowView(rebuildList[rebuildIndex]);
-                        spawnedArrows.Add(rebuildList[rebuildIndex]);
-                        rebuildIndex++;
-                        continue;
-                    }
-                    // Rebuild complete; fall through to generator advance for finalize.
-                    rebuildingViews = false;
-                    rebuildList = null;
-                }
-
-                if (!generator.MoveNext())
-                {
-                    done = true;
-                    break;
-                }
-
-                if (generator.Current is GenerationPhase nextPhase)
-                {
-                    if (nextPhase == GenerationPhase.Compacting)
-                    {
-                        arrowsBeforeCompaction = _board.Arrows.Count;
-                        compactStartRealtime = Time.realtimeSinceStartup;
-                    }
-                    else if (
-                        nextPhase == GenerationPhase.Finalizing
-                        && phase == GenerationPhase.Compacting
-                    )
-                    {
-                        // Compaction done — remove stale views synchronously (fast)
-                        // and start incremental view rebuild that spans frames.
-                        foreach (Arrow a in spawnedArrows)
-                            _boardView.RemoveArrowView(a);
-                        spawnedArrows.Clear();
-                        rebuildList = new List<Arrow>(_board.Arrows);
-                        rebuildIndex = 0;
-                        rebuildTotal = rebuildList.Count;
-                        rebuildingViews = true;
-                    }
-                    phase = nextPhase;
-                }
-                else if (phase == GenerationPhase.Generating)
-                {
-                    Arrow arrow = _board.Arrows[spawnedArrows.Count];
-                    _boardView.AddArrowView(arrow);
-                    spawnedArrows.Add(arrow);
-                }
-            }
-
-            // Progress calculation per phase (via shared GenerationProgress helper).
-            if (rebuildingViews)
-            {
-                float rebuildRatio = rebuildTotal > 0 ? (float)rebuildIndex / rebuildTotal : 1f;
-                _loadProgress = GenerationProgress.ForRebuildingViews(rebuildRatio, weights);
-            }
-            else
-            {
-                switch (phase)
-                {
-                    case GenerationPhase.Generating:
-                    {
-                        int initial = _board.InitialCandidateCount;
-                        int remaining = _board.RemainingCandidateCount;
-                        float depletion = initial > 0 ? 1f - (float)remaining / initial : 0f;
-                        _loadProgress = GenerationProgress.ForGenerating(depletion, weights);
-                        break;
-                    }
-                    case GenerationPhase.Compacting:
-                    {
-                        float expectedCompactSec = GenerationProgress.ExpectedCompactSeconds(
-                            arrowsBeforeCompaction
-                        );
-                        float elapsed = Time.realtimeSinceStartup - compactStartRealtime;
-                        float timeRatio =
-                            expectedCompactSec > 0.001f ? elapsed / expectedCompactSec : 1f;
-                        _loadProgress = GenerationProgress.ForCompacting(
-                            mergesCompleted: arrowsBeforeCompaction - _board.Arrows.Count,
-                            arrowsBeforeCompaction: arrowsBeforeCompaction,
-                            timeRatio: timeRatio,
-                            w: weights
-                        );
-                        break;
-                    }
-                    case GenerationPhase.Finalizing:
-                    {
-                        int arrowCount = _board.Arrows.Count;
-                        float finalizeRatio =
-                            arrowCount > 0 && generator.Current is int finalized
-                                ? (float)finalized / arrowCount
-                                : 0f;
-                        _loadProgress = GenerationProgress.ForFinalizing(finalizeRatio, weights);
-                        break;
-                    }
-                }
-            }
-
-            if (done)
-                break;
-            yield return null;
-        }
-
-        if (_board.Arrows.Count == 0)
-        {
-            Debug.LogWarning(
-                $"[GameController] GenerateBoard produced 0 arrows (board {_w}x{_h}, maxLen={_maxLen}, seed={_activeSeed}). Returning to menu."
-            );
-            SceneNav.Pop();
-            yield break;
-        }
-        Debug.Log(
-            $"[GameController] GenerateBoard complete: {_board.Arrows.Count} arrows, board={_w}x{_h}, seed={_activeSeed}"
-        );
-
-        _initialBoardSnapshot = new List<List<Cell>>(_board.Arrows.Count);
-        foreach (Arrow arrow in _board.Arrows)
-            _initialBoardSnapshot.Add(new List<Cell>(arrow.Cells));
-    }
-
-    // --- Resume logic ---
-
-    private bool ReplayClears(ReplayData priorData, out double solveElapsed)
-    {
-        bool solving = false;
-        int totalClearEvents = 0;
-        int successfulClears = 0;
-        foreach (ReplayEvent evt in priorData.events)
-        {
-            if (evt.type == ReplayEventType.Clear)
-            {
-                totalClearEvents++;
-                var worldPos = new Vector3(evt.posX ?? 0f, evt.posY ?? 0f, 0f);
-                Cell cell = BoardCoords.WorldToCell(worldPos, _board.Width, _board.Height);
-                if (_board.Contains(cell))
-                {
-                    Arrow arrow = _board.GetArrowAt(cell);
-                    if (arrow != null && _board.IsClearable(arrow))
-                    {
-                        _boardView.RemoveArrowView(arrow);
-                        _board.RemoveArrow(arrow);
-                        successfulClears++;
-                    }
-                    else if (arrow == null)
-                        Debug.LogWarning(
-                            $"[GameController] ReplayClears: no arrow at cell ({cell.X},{cell.Y}) for clear event seq={evt.seq}"
-                        );
-                    else
-                        Debug.LogWarning(
-                            $"[GameController] ReplayClears: arrow at ({cell.X},{cell.Y}) not clearable for clear event seq={evt.seq}"
-                        );
-                }
-                else
-                {
-                    Debug.LogWarning(
-                        $"[GameController] ReplayClears: clear event seq={evt.seq} maps to out-of-bounds cell ({cell.X},{cell.Y})"
-                    );
-                }
-            }
-            if (evt.type == ReplayEventType.StartSolve)
-                solving = true;
-        }
-        solveElapsed = priorData.ComputedSolveElapsed;
-        Debug.Log(
-            $"[GameController] ReplayClears: {successfulClears}/{totalClearEvents} clears applied, solving={solving}, solveElapsed={solveElapsed:F3}s"
-        );
-        return solving;
-    }
-
-    private void SetupResumedRecorder(ReplayData priorData)
-    {
-        _gameId = priorData.gameId;
-        int nextSeq =
-            priorData.events.Count > 0 ? priorData.events[priorData.events.Count - 1].seq + 1 : 0;
-        _recorder = new ReplayRecorder(priorData.events, nextSeq);
-        _recorder.RecordSessionRejoin();
-        Debug.Log(
-            $"[GameController] Resumed game: id={_gameId}, nextSeq={nextSeq}, remainingArrows={_board.Arrows.Count}"
-        );
-    }
-
-    private void SetupNewRecorder()
-    {
-        _gameId = Guid.NewGuid().ToString();
-        _recorder = new ReplayRecorder();
-        _recorder.RecordSessionStart();
-        Debug.Log(
-            $"[GameController] New game: id={_gameId}, arrows={_board.Arrows.Count}, board={_w}x{_h}, seed={_activeSeed}"
-        );
-    }
-
-    private void FinalizeSession(ReplayData priorData)
-    {
-        _initialArrowCount = _board.Arrows.Count;
-        _autosaveEnabled = !SaveManager.HasSave() || priorData != null;
-        _isContinuedGame = priorData != null;
-    }
-
-    // --- Timer and gameplay wiring ---
-
-    private void SetupTimer(bool resumeSolving, double resumeSolveElapsed)
-    {
-        _timer = new GameTimer(_inspectionDur);
-        double wallNow = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
-        if (resumeSolving)
-        {
-            _timer.Resume(wallNow, resumeSolveElapsed);
-            Debug.Log($"[GameController] Timer resumed: priorElapsed={resumeSolveElapsed:F3}s");
-        }
-        else
-        {
-            _timer.Start(wallNow);
-            Debug.Log(
-                $"[GameController] Timer started fresh: inspectionDuration={_inspectionDur}s"
-            );
-        }
-    }
+    // --- HUD wiring ---
 
     private void WireHud()
     {
@@ -1494,9 +377,8 @@ public sealed class GameController : MonoBehaviour
         _leaveModal.Cancelled += OnLeaveCancel;
         _leaveModal.Dismissed += OnLeaveDismiss;
 
-        _retryModal = new ConfirmModal(hudRoot.Q("retry-modal"), "Retry?", "Retry", "Cancel");
-        _retryModal.Confirmed += OnRetryConfirm;
-        _retryModal.Cancelled += OnRetryCancel;
+        // Retry modal is owned by ClassicMode (built in its OnHudWired).
+        // Coop never builds it because the retry button itself is hidden.
 
         if (_backBtn != null)
         {
@@ -1506,26 +388,15 @@ public sealed class GameController : MonoBehaviour
 
         if (_retryBtn != null)
         {
-            // Default: wire retry. Strategies (e.g. CoopModeStrategy) may hide
-            // it via OnHudWired() below.
+            // Default: wire retry → forward to active mode (only ClassicMode
+            // implements it; CoopMode hides the button entirely via OnHudWired).
             _retryBtn.clickable = new Clickable(() => { });
-            _retryBtn.clicked += OnRetryClicked;
+            _retryBtn.clicked += OnRetryClickedDispatch;
         }
 
-        if (_timer != null)
-        {
-            // Default classic behavior. Mode strategies can override in
-            // OnHudWired (e.g. EndlessModeStrategy hides the timer label
-            // and EndlessModeController displays cleared-count in its own
-            // overlay element from EndlessHud.uxml).
-            var timerView = gameObject.AddComponent<GameTimerView>();
-            timerView.Init(_timer, hudUIDocument, inspectionWarningThreshold);
-        }
-        else if (_timerLabel != null)
-        {
-            // Co-op mode: hide the solo timer label.
-            _timerLabel.style.display = DisplayStyle.None;
-        }
+        // Timer view construction lives in ClassicMode.OnHudWired (it owns
+        // the GameTimer). Coop hides the timer-label via CoopMode.OnHudWired
+        // because it has no solo timer.
 
         if (_trailToggleBtn != null)
         {
@@ -1569,7 +440,7 @@ public sealed class GameController : MonoBehaviour
                         Element = _retryBtn,
                         OnActivate = () =>
                         {
-                            OnRetryClicked();
+                            OnRetryClickedDispatch();
                             return true;
                         },
                     }
@@ -1606,8 +477,8 @@ public sealed class GameController : MonoBehaviour
             }
         }
 
-        // Per-mode HUD tweaks (e.g. CoopModeStrategy hides the retry button).
-        _modeStrategy?.OnHudWired();
+        // Per-mode HUD tweaks (e.g. CoopMode hides the retry button).
+        _mode?.OnHudWired();
     }
 
     private void WireInput()
@@ -1619,18 +490,18 @@ public sealed class GameController : MonoBehaviour
             )
             : dragThresholdPixels;
         _inputHandler = gameObject.AddComponent<InputHandler>();
+        // Mode owns timer/recorder/autosave — InputHandler hands it the
+        // tap outcome via OnTapResult and stays mode-agnostic itself.
         _inputHandler.Init(
             _board,
             _boardView,
             _camCtrl,
             dragThreshold,
-            _timer,
-            _recorder,
-            OnArrowCleared,
+            onTapResult: _mode != null ? _mode.OnTapResult : (Action<TapResult>)null,
             onQuickReset: OnQuickReset,
-            onQuickSave: OnQuickSave,
+            onQuickSave: _mode?.OnQuickSaveHandler,
             onToggleTrail: ToggleTrail,
-            onTapAttempt: _modeStrategy?.TapAttemptHandler,
+            onTapAttempt: _mode?.TapAttemptHandler,
             hudUIDocument: hudUIDocument
         );
 
@@ -1649,37 +520,15 @@ public sealed class GameController : MonoBehaviour
         SceneNav.Replace("Game");
     }
 
-    private void OnRetryClicked()
+    /// <summary>
+    /// Dispatches the retry-button click to the active mode if it implements
+    /// retry behavior. ClassicMode shows the retry confirmation modal; coop
+    /// hides the button entirely so this never fires from coop.
+    /// </summary>
+    private void OnRetryClickedDispatch()
     {
-        if (HasAnyClearedArrows)
-        {
-            _retryModal?.Show();
-            if (_inputHandler != null)
-                _inputHandler.SetInputEnabled(false);
-        }
-        else
-        {
-            OnQuickReset();
-        }
-    }
-
-    private void OnRetryConfirm()
-    {
-        _retryModal?.Hide();
-        OnQuickReset();
-    }
-
-    private void OnRetryCancel()
-    {
-        _retryModal?.Hide();
-        if (_inputHandler != null)
-            _inputHandler.SetInputEnabled(true);
-    }
-
-    private void OnQuickSave()
-    {
-        if (_recorder != null)
-            SaveManager.Save(BuildReplayData());
+        if (_mode is ClassicMode classic)
+            classic.OnRetryClickedExternal();
     }
 
     private void OnEscape()
@@ -1697,7 +546,7 @@ public sealed class GameController : MonoBehaviour
         if (_leaveModal == null)
             return;
 
-        if (WouldOverwriteDifferentSave)
+        if (_mode != null && _mode.WouldOverwriteDifferentSave)
         {
             _leaveModal.Reconfigure(
                 "Save before leaving?",
@@ -1719,17 +568,21 @@ public sealed class GameController : MonoBehaviour
 
     private void OnLeaveConfirm()
     {
-        if (WouldOverwriteDifferentSave)
-            SaveAndLeave();
-        else if (_autosaveEnabled && (_isContinuedGame || HasAnyClearedArrows))
-            SaveAndLeave();
+        // Decision tree delegated to the active mode:
+        //  - "would overwrite different save" → SaveAndLeave (mode persists, then pop)
+        //  - "supports save AND has in-progress changes" → SaveAndLeave
+        //  - else → just leave
+        if (_mode != null && _mode.WouldOverwriteDifferentSave)
+            _mode.SaveAndLeave();
+        else if (_mode != null && _mode.SupportsSaveOnLeave && _mode.HasInProgressChanges)
+            _mode.SaveAndLeave();
         else
             ReturnToModeSelect();
     }
 
     private void OnLeaveCancel()
     {
-        if (WouldOverwriteDifferentSave)
+        if (_mode != null && _mode.WouldOverwriteDifferentSave)
             ReturnToModeSelect(); // "Leave without saving"
         else
             OnLeaveDismiss(); // "Stay"
@@ -1748,50 +601,7 @@ public sealed class GameController : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Default victory wiring: instantiate <see cref="VictoryController"/> and
-    /// hook it to <see cref="BoardView.LastArrowClearing"/> and
-    /// <see cref="BoardView.BoardCleared"/>. Called by
-    /// <see cref="ClassicModeStrategy.WireVictory"/>; co-op skips this entirely
-    /// (server-driven completion); endless will wire its topout result here in
-    /// phase 4.
-    /// </summary>
-    internal void WireVictoryDefault()
-    {
-        if (
-            victoryUIDocument == null
-            || !victoryUIDocument.enabled
-            || victoryUIDocument.rootVisualElement == null
-        )
-            return;
-
-        var victory = gameObject.AddComponent<VictoryController>();
-        victory.Init(
-            victoryUIDocument,
-            _boardView.GridRenderer,
-            _camCtrl,
-            _w,
-            _h,
-            _timer,
-            hudUIDocument,
-            BuildReplayData
-        );
-        _boardView.LastArrowClearing += () =>
-        {
-            _victoryStarted = true;
-            _inputHandler.SetInputEnabled(false);
-            if (_backBtn != null)
-                _backBtn.style.display = DisplayStyle.None;
-            if (_retryBtn != null)
-                _retryBtn.style.display = DisplayStyle.None;
-            if (_recorder != null)
-                _recorder.RecordEndSolve();
-            if (_autosaveEnabled)
-                SaveManager.Delete();
-            victory.OnLastArrowClearing();
-        };
-        _boardView.BoardCleared += victory.OnBoardCleared;
-    }
+    // WireVictoryDefault moved into ClassicMode.WireRunFlow (phase 2D).
 
     // --- Loading overlay ---
 
@@ -1867,11 +677,6 @@ public sealed class GameController : MonoBehaviour
 
     // --- Leave modal ---
 
-    private bool HasAnyClearedArrows => _board != null && _board.Arrows.Count < _initialArrowCount;
-
-    private bool WouldOverwriteDifferentSave =>
-        !_autosaveEnabled && HasAnyClearedArrows && SaveManager.HasSave();
-
     private void OnLeaveDismiss()
     {
         _leaveModal?.Hide();
@@ -1879,57 +684,13 @@ public sealed class GameController : MonoBehaviour
             _inputHandler.SetInputEnabled(true);
     }
 
-    // --- Save ---
-
-    private void OnArrowCleared()
-    {
-        if (!_autosaveEnabled || _recorder == null || _timer == null)
-            return;
-
-        _clearsSinceLastSave++;
-        if (_clearsSinceLastSave >= AutosaveInterval)
-        {
-            _clearsSinceLastSave = 0;
-            int cleared = _initialArrowCount - _board.Arrows.Count;
-            Debug.Log(
-                $"[GameController] Autosave triggered: {cleared}/{_initialArrowCount} arrows cleared"
-            );
-            SaveManager.Save(BuildReplayData());
-        }
-    }
-
     private void ReturnToModeSelect()
     {
-        // Stop reconnect attempts before tearing down the scene.
-        _coopShouldReconnect = false;
+        // Dispose the active mode before pop so coop's reconnect driver halts
+        // immediately (one-frame race window before OnDestroy fires otherwise).
+        // Mode Dispose is idempotent — OnDestroy still calls it.
+        _mode?.Dispose();
         SceneNav.Pop();
-    }
-
-    private void SaveAndLeave()
-    {
-        if (_recorder != null && _timer != null)
-        {
-            _recorder.RecordSessionLeave();
-            Debug.Log(
-                $"[GameController] SaveAndLeave: saving game id={_gameId}, arrows remaining={_board?.Arrows.Count}"
-            );
-            SaveManager.Save(BuildReplayData());
-        }
-        ReturnToModeSelect();
-    }
-
-    private ReplayData BuildReplayData()
-    {
-        return _recorder.ToReplayData(
-            _gameId,
-            _activeSeed,
-            _w,
-            _h,
-            _maxLen,
-            _inspectionDur,
-            boardSnapshot: _initialBoardSnapshot,
-            gameVersion: UnityEngine.Application.version
-        );
     }
 
     // --- Utilities ---

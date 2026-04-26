@@ -18,9 +18,7 @@ public sealed class InputHandler : MonoBehaviour
     private BoardView _boardView = null!;
     private CameraController _camCtrl = null!;
     private UIDocument _hudUIDocument;
-    private GameTimer _timer;
-    private ReplayRecorder _recorder;
-    private Action _onArrowCleared;
+    private Action<TapResult> _onTapResult;
     private Action _onQuickReset;
     private Action _onQuickSave;
     private Action _onToggleTrail;
@@ -58,9 +56,7 @@ public sealed class InputHandler : MonoBehaviour
         BoardView boardView,
         CameraController camCtrl,
         float dragThresholdPixels = 15f,
-        GameTimer timer = null,
-        ReplayRecorder recorder = null,
-        Action onArrowCleared = null,
+        Action<TapResult> onTapResult = null,
         Action onQuickReset = null,
         Action onQuickSave = null,
         Action onToggleTrail = null,
@@ -72,9 +68,7 @@ public sealed class InputHandler : MonoBehaviour
         _boardView = boardView;
         _camCtrl = camCtrl;
         _dragThresholdPixels = dragThresholdPixels;
-        _timer = timer;
-        _recorder = recorder;
-        _onArrowCleared = onArrowCleared;
+        _onTapResult = onTapResult;
         _onQuickReset = onQuickReset;
         _onQuickSave = onQuickSave;
         _onToggleTrail = onToggleTrail;
@@ -232,58 +226,42 @@ public sealed class InputHandler : MonoBehaviour
 
         // Co-op interceptor: delegates the entire clear flow (optimistic
         // animation, server send, accept/reject handling) to CoopSession.
+        // Bypasses the OnTapResult pipeline entirely because the server is
+        // authoritative — local optimistic actions don't constitute a "result".
         if (_onTapAttempt != null)
         {
             _onTapAttempt(cell, worldPos);
             return;
         }
 
+        double wallTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
         Arrow arrow = _board.GetArrowAt(cell);
+
         if (arrow == null)
         {
-            if (_recorder != null)
-                _recorder.RecordMiss(worldPos.x, worldPos.y);
+            _onTapResult?.Invoke(
+                new TapResult(TapResultKind.Missed, cell, worldPos, arrow: null, wallTime)
+            );
             return;
         }
 
-        double wallTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
-
-        // Any arrow tap starts the solve timer (ends inspection)
-        bool wasInspecting = _timer != null && !_timer.IsSolving;
-        if (wasInspecting)
+        ClearResult clear = _boardView.TryClearArrow(arrow);
+        TapResultKind kind = clear switch
         {
-            _timer.StartSolve(wallTime);
-            Debug.Log("[InputHandler] Inspection ended — solve timer started");
-            if (_recorder != null)
-                _recorder.RecordStartSolve();
-        }
+            ClearResult.Blocked => TapResultKind.Blocked,
+            ClearResult.ClearedFirst => TapResultKind.ClearedFirst,
+            ClearResult.ClearedLast => TapResultKind.ClearedLast,
+            _ => TapResultKind.Cleared,
+        };
 
-        ClearResult result = _boardView.TryClearArrow(arrow);
+        _onTapResult?.Invoke(new TapResult(kind, cell, worldPos, arrow, wallTime));
 
-        if (result != ClearResult.Blocked)
-        {
-            if (_recorder != null)
-                _recorder.RecordClear(worldPos.x, worldPos.y);
-
-            if (result == ClearResult.ClearedLast)
-            {
-                if (_timer != null)
-                    _timer.Finish(wallTime);
-                Debug.Log(
-                    $"[InputHandler] Last arrow cleared — timer finished, solveElapsed={(_timer != null ? _timer.SolveElapsed.ToString("F3") : "N/A")}s"
-                );
-                _boardView.NotifyLastArrowClearing();
-            }
-            else
-            {
-                _onArrowCleared?.Invoke();
-            }
-        }
-        else
-        {
-            if (_recorder != null)
-                _recorder.RecordReject(worldPos.x, worldPos.y);
-        }
+        // Win-condition signal stays a render-side event so the victory
+        // animation framework keeps its existing subscriber (mode wires it
+        // in WireRunFlow). Fire AFTER the mode's OnTapResult so timer.Finish
+        // / RecordEndSolve order is preserved.
+        if (kind == TapResultKind.ClearedLast)
+            _boardView.NotifyLastArrowClearing();
     }
 
     private void HandleScrollZoom()
