@@ -101,16 +101,15 @@ public sealed class EndlessModeController : MonoBehaviour
     private float pushIntervalStepDownPerTier = 0.1f;
 
     /// <summary>
-    /// Combo size in <i>garbage points</i> (each arrow contributes its
-    /// cell-count). Constant baseline — only the occupancy catch-up bonus
-    /// modulates it. Difficulty escalation comes from push cadence, not
-    /// combo size.
-    ///
-    /// Roughly 1 point ≈ 1 cell of arrow. With avg arrow length ~4, a combo
-    /// of 12 points = ~3 arrows.
+    /// Baseline combo size as a fraction of total board cells. Each arrow's
+    /// garbage cost is roughly its cell count, so this is roughly the
+    /// fraction of the board that one combo will fill at minimum. Defaults
+    /// match prior absolute tuning on a 20×20 board (9 / 400 = 2.25%) and
+    /// scale linearly with board area, so 5×5 and 10×10 don't immediately
+    /// top out from oversized combos.
     /// </summary>
-    [SerializeField]
-    private int comboBaseRate = 9;
+    [SerializeField, Range(0.005f, 0.1f)]
+    private float comboBasePctOfBoard = 0.0225f;
 
     /// <summary>
     /// Clear count for the first difficulty tier. Subsequent tiers follow
@@ -139,13 +138,15 @@ public sealed class EndlessModeController : MonoBehaviour
     private float targetOccupancy = 0.5f;
 
     /// <summary>
-    /// Peak magnitude of the occupancy catch-up bonus. At empty (occupancy
-    /// 0) the bonus is +scale; the bonus rolls off smoothly via a quarter-
+    /// Peak magnitude of the occupancy catch-up bonus, expressed as a
+    /// fraction of board cells. At empty (occupancy 0) the bonus is
+    /// +scale × boardCells; the bonus rolls off smoothly via a quarter-
     /// cosine curve and reaches 0 at <see cref="targetOccupancy"/>.
-    /// Above target, the bonus stays clamped at 0.
+    /// Above target, the bonus stays clamped at 0. Default matches prior
+    /// absolute tuning on a 20×20 board (22 / 400 = 5.5%).
     /// </summary>
-    [SerializeField]
-    private float occupancyAdaptiveScale = 22f;
+    [SerializeField, Range(0f, 0.2f)]
+    private float occupancyAdaptivePctOfBoard = 0.055f;
 
     /// <summary>
     /// Combo timer: if no clear lands within this window after the last one,
@@ -472,10 +473,16 @@ public sealed class EndlessModeController : MonoBehaviour
 
     private int ComputeComboSize()
     {
-        // Combo size = fixed baseline + occupancy catch-up bonus (positive
-        // only, ramps from +scale at empty to 0 at target via a quarter-
-        // cosine, clamped at 0 above). Difficulty progression doesn't
-        // touch combo size — it accelerates push cadence instead.
+        // Combo size = baseline + occupancy catch-up bonus (positive only,
+        // ramps from +scale at empty to 0 at target via a quarter-cosine,
+        // clamped at 0 above). Both terms scale linearly with board area
+        // — a 5×5 board would otherwise top out from one push since the
+        // absolute defaults assume a 20×20 reference.
+        // Difficulty progression doesn't touch combo size — it accelerates
+        // push cadence instead.
+        Board board = _session.Board;
+        int boardCells = board.Width * board.Height;
+
         float occupancy = OccupancyRatio();
         float adaptive = 0f;
         if (occupancy < targetOccupancy && targetOccupancy > 0f)
@@ -483,9 +490,9 @@ public sealed class EndlessModeController : MonoBehaviour
             // t in [0, 1] across [0, target]; cos(t * π/2) gives 1 at empty,
             // 0 at target — smooth roll-off with no abrupt knee.
             float t = occupancy / targetOccupancy;
-            adaptive = Mathf.Cos(t * Mathf.PI * 0.5f) * occupancyAdaptiveScale;
+            adaptive = Mathf.Cos(t * Mathf.PI * 0.5f) * occupancyAdaptivePctOfBoard * boardCells;
         }
-        int size = comboBaseRate + Mathf.RoundToInt(adaptive);
+        int size = Mathf.RoundToInt(comboBasePctOfBoard * boardCells + adaptive);
         if (size < 1)
             size = 1;
         return size;
