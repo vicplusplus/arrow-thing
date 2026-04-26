@@ -204,6 +204,8 @@ public class NavigationCoverageTests : UILayoutTestBase
         {
             "back-sp-btn",
             "leaderboard-btn",
+            "sp-tab-classic",
+            "sp-tab-endless",
             "preset-small",
             "preset-medium",
             "preset-large",
@@ -225,6 +227,8 @@ public class NavigationCoverageTests : UILayoutTestBase
         {
             "back-sp-btn",
             "leaderboard-btn",
+            "sp-tab-classic",
+            "sp-tab-endless",
             "preset-small",
             "preset-medium",
             "preset-large",
@@ -232,6 +236,29 @@ public class NavigationCoverageTests : UILayoutTestBase
             "preset-custom",
             "start-btn",
             "continue-btn",
+        }
+    );
+
+    private static readonly UIState MainMenu_Singleplayer_EndlessTab = new UIState(
+        "MainMenu/Singleplayer+EndlessTab",
+        setup: root =>
+        {
+            root.Q("menu-root").AddToClassList("screen--hidden");
+            root.Q("menu-singleplayer").RemoveFromClassList("screen--hidden");
+            // Swap visible panel: hide classic's preset/start row, show endless's.
+            root.Q("sp-classic-panel").AddToClassList("screen--hidden");
+            root.Q("sp-endless-panel").RemoveFromClassList("screen--hidden");
+        },
+        navigable: new[]
+        {
+            "back-sp-btn",
+            "leaderboard-btn",
+            "sp-tab-classic",
+            "sp-tab-endless",
+            "endless-preset-small",
+            "endless-preset-medium",
+            "endless-preset-large",
+            "endless-btn",
         }
     );
 
@@ -263,6 +290,7 @@ public class NavigationCoverageTests : UILayoutTestBase
         yield return MainMenu_Play;
         yield return MainMenu_Singleplayer;
         yield return MainMenu_Singleplayer_WithContinue;
+        yield return MainMenu_Singleplayer_EndlessTab;
         yield return MainMenu_Multiplayer;
         yield return MainMenu_QuitModal;
     }
