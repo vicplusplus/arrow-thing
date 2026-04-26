@@ -229,8 +229,8 @@ public sealed class ClassicMode : MonoBehaviour, IGameMode
                 SceneNav.Pop();
                 yield break;
             }
-            SetupResumedRecorder(priorData);
-            FinalizeSession(priorData);
+            SetupResumedRecorder(board, priorData);
+            FinalizeSession(board, priorData);
             boardView.ApplyColoring();
             _controller.HideLoadingInternal();
             SetupTimer(resumeSolving, resumeSolveElapsed);
@@ -238,7 +238,7 @@ public sealed class ClassicMode : MonoBehaviour, IGameMode
         else
         {
             SetupNewRecorder(board);
-            FinalizeSession(null);
+            FinalizeSession(board, null);
             boardView.ApplyColoring();
             _controller.HideLoadingInternal();
             SetupTimer(false, 0.0);
@@ -525,7 +525,7 @@ public sealed class ClassicMode : MonoBehaviour, IGameMode
         return solving;
     }
 
-    private void SetupResumedRecorder(ReplayData priorData)
+    private void SetupResumedRecorder(Board board, ReplayData priorData)
     {
         _gameId = priorData.gameId;
         int nextSeq =
@@ -533,7 +533,7 @@ public sealed class ClassicMode : MonoBehaviour, IGameMode
         _recorder = new ReplayRecorder(priorData.events, nextSeq);
         _recorder.RecordSessionRejoin();
         Debug.Log(
-            $"[ClassicMode] Resumed game: id={_gameId}, nextSeq={nextSeq}, remainingArrows={_controller.CurrentBoard.Arrows.Count}"
+            $"[ClassicMode] Resumed game: id={_gameId}, nextSeq={nextSeq}, remainingArrows={board.Arrows.Count}"
         );
     }
 
@@ -565,12 +565,13 @@ public sealed class ClassicMode : MonoBehaviour, IGameMode
 
     /// <summary>
     /// Captures the initial arrow count + autosave-enable decision. Called
-    /// after recorder + initial board state exist. Public so external resume
-    /// flows (and tests) can trigger it directly if needed.
+    /// after recorder + initial board state exist. Takes the board directly
+    /// (rather than going through <c>_controller.CurrentBoard</c>) because
+    /// the controller's board field isn't assigned until after Setup returns.
     /// </summary>
-    public void FinalizeSession(ReplayData priorData)
+    public void FinalizeSession(Board board, ReplayData priorData)
     {
-        _initialArrowCount = _controller.CurrentBoard.Arrows.Count;
+        _initialArrowCount = board.Arrows.Count;
         // Autosave enabled when there's no existing save (we can write fresh)
         // OR we're continuing (we own that save). Otherwise disabled to avoid
         // clobbering another save.
