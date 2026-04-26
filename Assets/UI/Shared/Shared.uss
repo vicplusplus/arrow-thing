@@ -1174,6 +1174,32 @@
     margin-bottom: 12px;
 }
 
+/* Singleplayer mode-tab row (Classic | Endless). Sits above the size
+ * picker; small bottom margin so it doesn't crowd the section label. */
+.sp-mode-tabs {
+    margin-bottom: 8px;
+}
+
+/* Fixed-height area that wraps the per-tab panels (sp-classic-panel +
+ * sp-endless-panel). Sized to fit classic's tallest layout (custom
+ * panel expanded), so switching to endless's smaller content doesn't
+ * reflow the tab bar / section label above. min-height because Unity
+ * Yoga doesn't always honor `height` on flex children with shrinking
+ * siblings — min-height is the reliable knob. */
+.sp-panel-area {
+    min-height: 380px;
+    align-items: stretch;
+}
+
+/* Per-tab panels inside .sp-panel-area. align-items: center matches
+ * what .menu-panel did for these elements before the wrapper was
+ * introduced — keeps the custom-panel slider centered, preset grid
+ * centered, etc. */
+#sp-classic-panel,
+#sp-endless-panel {
+    align-items: center;
+}
+
 .preset-btn {
     width: 160px;
     height: 80px;

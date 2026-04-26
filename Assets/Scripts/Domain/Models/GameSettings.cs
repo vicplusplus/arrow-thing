@@ -10,6 +10,14 @@ public static class GameSettings
     public static int Height { get; private set; }
     public static int MaxArrowLength { get; private set; }
 
+    /// <summary>
+    /// Top-level mode for the next Game scene load. Set by the main menu before
+    /// <see cref="SceneNav.Push"/>; consumed by GameController during setup to
+    /// branch between classic fixed-board and endless flows. Reset on
+    /// <see cref="Reset"/>.
+    /// </summary>
+    public static GameMode Mode { get; set; } = GameMode.Classic;
+
     /// <summary>True when the player is continuing a previously saved game.</summary>
     public static bool IsResuming { get; private set; }
 
@@ -58,6 +66,9 @@ public static class GameSettings
         IsSet = true;
         IsResuming = true;
         ResumeData = null;
+        // Saves are classic-only in phase 4. Defensive reset so a stale
+        // in-process Endless flag doesn't carry into a resumed run.
+        Mode = GameMode.Classic;
     }
 
     /// <summary>
@@ -150,5 +161,6 @@ public static class GameSettings
         Width = 0;
         Height = 0;
         MaxArrowLength = 0;
+        Mode = GameMode.Classic;
     }
 }

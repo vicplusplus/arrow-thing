@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
 /// <summary>
@@ -572,14 +573,265 @@ public static class NativeGeneration
     }
 
     /// <summary>
+    /// Full board-solvability check via Kahn's topological sort over the
+    /// native dep-bitset graph. Returns true iff every live arrow can be
+    /// drained (no cycle).
+    ///
+    /// Used as a post-spawn safety net for endless mode: even if the
+    /// incremental cycle detector inside <see cref="TryGenerateArrow"/>
+    /// misses an edge case, this catches it. O(n * stride + n²) where n =
+    /// nextGenIndex; for the 20×20 endless board (n &lt;= ~200) this is on
+    /// the order of tens of thousands of ops — negligible per spawn.
+    ///
+    /// Dead slots (freed via <see cref="RemoveArrow"/>) have zero dep
+    /// rows AND no other arrow depends on them, so they are processed
+    /// immediately and don't affect the result.
+    /// </summary>
+    public static bool IsBoardSolvable(ref NativeGenerationState state)
+    {
+        int n = state.nextGenIndex;
+        if (n == 0)
+            return true;
+
+        int stride = state.bitsetWords;
+        int activeWords = (n + 63) >> 6;
+        if (activeWords > stride)
+            activeWords = stride;
+
+        var inDeg = new int[n];
+        for (int i = 0; i < n; i++)
+        {
+            int offset = i * stride;
+            int count = 0;
+            for (int w = 0; w < activeWords; w++)
+            {
+                ulong bits = state.depsBitsFlat[offset + w];
+                while (bits != 0)
+                {
+                    bits &= bits - 1;
+                    count++;
+                }
+            }
+            inDeg[i] = count;
+        }
+
+        var queue = new System.Collections.Generic.Queue<int>(n);
+        for (int i = 0; i < n; i++)
+            if (inDeg[i] == 0)
+                queue.Enqueue(i);
+
+        int processed = 0;
+        while (queue.Count > 0)
+        {
+            int idx = queue.Dequeue();
+            processed++;
+
+            // Decrement in-degree of every arrow whose dep row contains idx.
+            int word = idx >> 6;
+            ulong mask = 1UL << (idx & 63);
+            for (int j = 0; j < n; j++)
+            {
+                int off = j * stride + word;
+                if ((state.depsBitsFlat[off] & mask) != 0)
+                {
+                    inDeg[j]--;
+                    if (inDeg[j] == 0)
+                        queue.Enqueue(j);
+                }
+            }
+        }
+
+        return processed == n;
+    }
+
+    /// <summary>
+    /// Removes a previously-placed arrow from native state: clears occupancy,
+    /// removes from ray index, zeros the arrow's dep-row bitset, and clears
+    /// the arrow's bit from every other arrow's dep row. Also rebuilds the
+    /// candidate pool so head positions whose cells just freed re-enter
+    /// candidacy (without this, the pool monotonically shrinks across the
+    /// life of an endless run, eventually starving spawns even on a mostly-
+    /// empty board).
+    ///
+    /// Used by the endless-mode session to take a cleared real arrow out of
+    /// the live generation cache, so subsequent pending spawns don't see it
+    /// as a blocker AND can re-use its cells. The generation index slot
+    /// becomes dead — <c>nextGenIndex</c> is not rewound, so the slot is
+    /// simply unused (matches the pattern in
+    /// <see cref="Board.RemoveArrowForGeneration"/>).
+    ///
+    /// Since removal only ever prunes dependencies (never creates them), no
+    /// other arrow's cycle-reachability data becomes invalid as a result of
+    /// this call — the dep state is strictly monotonically shrinking between
+    /// spawns. The candidate pool is the one piece that needs to grow back.
+    /// </summary>
+    public static void RemoveArrow(
+        ref NativeGenerationState state,
+        int genIndex,
+        IReadOnlyList<Cell> cells
+    )
+    {
+        int w = state.boardWidth;
+
+        // Clear occupancy
+        for (int i = 0; i < cells.Count; i++)
+            state.occupancy[cells[i].Y * w + cells[i].X] = -1;
+
+        // Remove from ray index
+        int headX = state.genHeadX[genIndex];
+        int headY = state.genHeadY[genIndex];
+        int dir = state.genDir[genIndex];
+        RemoveFromRayIndex(ref state, genIndex, headX, headY, dir);
+
+        // Zero the arrow's dep row bitset
+        int stride = state.bitsetWords;
+        int baseOffset = genIndex * stride;
+        for (int i = 0; i < stride; i++)
+            state.depsBitsFlat[baseOffset + i] = 0;
+        state.hasAnyDeps[genIndex] = false;
+        state.depsNonZeroCount[genIndex] = 0;
+
+        // Clear the arrow's bit from every other arrow's dep row
+        int word = genIndex >> 6;
+        ulong mask = ~(1UL << (genIndex & 63));
+        for (int i = 0; i < state.nextGenIndex; i++)
+            state.depsBitsFlat[i * stride + word] &= mask;
+
+        // Recycle the slot. Endless mode reuses gen indices via this stack so
+        // nextGenIndex stays bounded by max simultaneously-live arrows.
+        state.freeSlots[state.freeSlotCount++] = genIndex;
+
+        // Rebuild candidate pool. Costs O(W*H) — trivial on the 20×20 endless
+        // board. Lazy occupancy/cycle pruning inside TryGenerateArrow handles
+        // the cleanup as candidates are sampled.
+        state.InitializeCandidates();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void RemoveFromRayIndex(
+        ref NativeGenerationState state,
+        int genIdx,
+        int headX,
+        int headY,
+        int direction
+    )
+    {
+        int w = state.boardWidth,
+            h = state.boardHeight;
+        switch (direction)
+        {
+            case 0: // Up
+            {
+                int col = headX;
+                int count = state.upByColCount[col];
+                int colBase = col * h;
+                for (int i = 0; i < count; i++)
+                {
+                    if (state.upByCol[colBase + i] == genIdx)
+                    {
+                        state.upByCol[colBase + i] = state.upByCol[colBase + count - 1];
+                        state.upByColCount[col] = count - 1;
+                        return;
+                    }
+                }
+                break;
+            }
+            case 1: // Right
+            {
+                int row = headY;
+                int count = state.rightByRowCount[row];
+                int rowBase = row * w;
+                for (int i = 0; i < count; i++)
+                {
+                    if (state.rightByRow[rowBase + i] == genIdx)
+                    {
+                        state.rightByRow[rowBase + i] = state.rightByRow[rowBase + count - 1];
+                        state.rightByRowCount[row] = count - 1;
+                        return;
+                    }
+                }
+                break;
+            }
+            case 2: // Down
+            {
+                int col = headX;
+                int count = state.downByColCount[col];
+                int colBase = col * h;
+                for (int i = 0; i < count; i++)
+                {
+                    if (state.downByCol[colBase + i] == genIdx)
+                    {
+                        state.downByCol[colBase + i] = state.downByCol[colBase + count - 1];
+                        state.downByColCount[col] = count - 1;
+                        return;
+                    }
+                }
+                break;
+            }
+            case 3: // Left
+            {
+                int row = headY;
+                int count = state.leftByRowCount[row];
+                int rowBase = row * w;
+                for (int i = 0; i < count; i++)
+                {
+                    if (state.leftByRow[rowBase + i] == genIdx)
+                    {
+                        state.leftByRow[rowBase + i] = state.leftByRow[rowBase + count - 1];
+                        state.leftByRowCount[row] = count - 1;
+                        return;
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Places an arrow with explicit cells into native state. Used by the endless
+    /// session to reconstruct native state from a finalized Board at the start of
+    /// a run (the Board's own generation-time arrays have been nulled by
+    /// <see cref="Board.FinalizeGenerationIncremental"/>, so the native state
+    /// must be rebuilt in order to support further spawns).
+    ///
+    /// Copies cells into the state's scratch buffers, then calls the same
+    /// placement logic used during the initial fill loop.
+    /// </summary>
+    public static void PlaceArrowExplicit(
+        ref NativeGenerationState state,
+        IReadOnlyList<Cell> cells,
+        int direction
+    )
+    {
+        for (int i = 0; i < cells.Count; i++)
+        {
+            state.scratchCellsX[i] = cells[i].X;
+            state.scratchCellsY[i] = cells[i].Y;
+        }
+        PlaceArrow(ref state, cells.Count, direction);
+    }
+
+    /// <summary>
     /// Places a generated arrow into native state: occupancy, bitsets, ray index.
     /// Reads cells from scratchCellsX/Y[0..cellCount].
     /// </summary>
     private static void PlaceArrow(ref NativeGenerationState state, int cellCount, int direction)
     {
-        int nIdx = state.nextGenIndex++;
-        if (nIdx >= state.bitsetWords * 64)
-            state.GrowBitsetCapacity();
+        // Reuse a freed slot if any (endless-mode clear path pushes here).
+        // Otherwise allocate the next sequential index. Without this, an
+        // endless run grows nextGenIndex unbounded and overruns bitsetWords
+        // (capped at maxArrows).
+        int nIdx;
+        if (state.freeSlotCount > 0)
+        {
+            nIdx = state.freeSlots[--state.freeSlotCount];
+        }
+        else
+        {
+            nIdx = state.nextGenIndex++;
+            if (nIdx >= state.bitsetWords * 64)
+                state.GrowBitsetCapacity();
+        }
 
         int w = state.boardWidth,
             h = state.boardHeight;
@@ -594,8 +846,12 @@ public static class NativeGeneration
         for (int i = 0; i < cellCount; i++)
             state.occupancy[state.scratchCellsY[i] * w + state.scratchCellsX[i]] = nIdx;
 
-        // Forward deps: walk ray, set bits
+        // Forward deps: walk ray, set bits. Also count perpendicular deps
+        // for endless-mode garbage weighting (collinear deps are trivial,
+        // perpendicular deps are the interesting puzzle).
         bool hasDeps = false;
+        int perpDeps = 0;
+        int dirParity = direction & 1; // 0 = vertical (Up/Down), 1 = horizontal (Left/Right)
         GetDirectionStep(direction, out int dx, out int dy);
         int cx = headX + dx,
             cy = headY + dy;
@@ -607,11 +863,14 @@ public static class NativeGeneration
                 int dWord = hitIdx >> 6;
                 SetDepBit(ref state, nIdx, dWord, 1UL << (hitIdx & 63));
                 hasDeps = true;
+                if ((state.genDir[hitIdx] & 1) != dirParity)
+                    perpDeps++;
             }
             cx += dx;
             cy += dy;
         }
         state.hasAnyDeps[nIdx] = hasDeps;
+        state.lastPlacedPerpDeps = perpDeps;
 
         // Reverse deps: existing arrows whose rays cross this arrow's cells
         ulong nBit = 1UL << (nIdx & 63);
@@ -660,6 +919,7 @@ public static class NativeGeneration
         AddToRayIndex(ref state, nIdx, headX, headY, direction);
 
         state.lastArrowCellCount = cellCount;
+        state.lastPlacedIndex = nIdx;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -226,6 +226,60 @@ public sealed class ArrowView : MonoBehaviour
             _trailLine.SetActive(visible);
     }
 
+    // ---- Pending-mode rendering (endless mode) ----------------------------
+
+    // Pending mode modulates material alpha as a sine wave so the arrow reads
+    // as "about to commit" without being unreadable. The existing ArrowBody
+    // shader (Assets/Art/Shaders/ArrowBody.shader) already supports alpha
+    // (Transparent queue + SrcAlpha blend), so no material reconfiguration is
+    // needed — just write _Color.a per frame. See docs/TODO.md
+    // (Endless Mode → Pending arrow visuals) for spec.
+    private bool _isPending;
+    private const float PendingAlphaBase = 0.12f;
+    private const float PendingAlphaAmplitude = 0.08f;
+    private const float PendingWavelengthSeconds = 1f;
+
+    /// <summary>
+    /// Enables pending rendering: body and head material alpha modulated as
+    /// <c>0.12 ± 0.08 * sin(2π * t / 1s)</c>. Phase is shared across pending
+    /// arrows (driven by <see cref="Time.time"/>) so simultaneous ones pulse
+    /// in unison.
+    /// </summary>
+    public void EnterPendingMode()
+    {
+        _isPending = true;
+        // Hide trail line on pending arrows — they're not yet blocking
+        // anything, a trail would be visual noise.
+        SetTrailVisible(false);
+    }
+
+    /// <summary>
+    /// Disables pending rendering and restores full opacity. Called on commit
+    /// (pending becomes real) and before returning to the view pool.
+    /// </summary>
+    public void ExitPendingMode()
+    {
+        _isPending = false;
+        Color body = _materialInstance.GetColor(ColorId);
+        _materialInstance.SetColor(ColorId, new Color(body.r, body.g, body.b, 1f));
+        Color head = _headMaterialInstance.GetColor(ColorId);
+        _headMaterialInstance.SetColor(ColorId, new Color(head.r, head.g, head.b, 1f));
+    }
+
+    private void Update()
+    {
+        if (!_isPending)
+            return;
+
+        float t = Time.time * 2f * Mathf.PI / PendingWavelengthSeconds;
+        float alpha = PendingAlphaBase + PendingAlphaAmplitude * Mathf.Sin(t);
+
+        Color body = _materialInstance.GetColor(ColorId);
+        _materialInstance.SetColor(ColorId, new Color(body.r, body.g, body.b, alpha));
+        Color head = _headMaterialInstance.GetColor(ColorId);
+        _headMaterialInstance.SetColor(ColorId, new Color(head.r, head.g, head.b, alpha));
+    }
+
     // ---- Pooling support --------------------------------------------------
 
     /// <summary>
@@ -237,6 +291,7 @@ public sealed class ArrowView : MonoBehaviour
     {
         StopAllCoroutines();
         gameObject.SetActive(true);
+        _isPending = false;
 
         // Destroy old child objects (arrowhead, trail)
         if (_arrowHead != null)

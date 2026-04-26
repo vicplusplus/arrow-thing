@@ -1,5 +1,7 @@
-/* GameHud-specific styles. Shared components live in Shared.uss. */
-/* .modal--hidden moved to Shared.uss */
+/* GameHud-specific styles. Shared components live in Shared.uss.
+ * Mode-specific styles (endless meter, endless clears label) live in
+ * the mode's own USS asset (e.g. EndlessHud.uss) so they can't bleed
+ * into other modes. */
 
 .timer-label {
     position: absolute;

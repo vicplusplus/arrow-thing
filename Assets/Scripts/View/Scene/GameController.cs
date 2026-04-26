@@ -22,6 +22,12 @@ public sealed class GameController : MonoBehaviour
     [SerializeField]
     private UIDocument hudUIDocument;
 
+    [Tooltip(
+        "Endless-mode HUD overlay (garbage meter + cleared count). Cloned into the shared HUD root by EndlessMode at run start. Leave unassigned to disable endless-specific HUD elements."
+    )]
+    [SerializeField]
+    private VisualTreeAsset endlessHudAsset;
+
     [Header("Timer")]
     [Tooltip("Inspection phase duration in seconds.")]
     [SerializeField]
@@ -154,10 +160,11 @@ public sealed class GameController : MonoBehaviour
     }
 
     /// <summary>
-    /// Picks the active mode by peeking <see cref="GameSettings.ActiveLobbyCode"/>
-    /// (CoopMode itself consumes the value during <see cref="CoopMode.Setup"/>).
-    /// Mode is added as a sibling component so it can carry coroutines, then
-    /// bound to this controller.
+    /// Picks the active mode based on <see cref="GameSettings.ActiveLobbyCode"/>
+    /// (coop) and <see cref="GameSettings.Mode"/> (classic vs endless). Mode is
+    /// added as a sibling component so it can carry coroutines, then bound to
+    /// this controller. Coop takes precedence over the Mode flag so a coop
+    /// lobby invite always lands in coop regardless of the menu mode setting.
     /// </summary>
     private IGameMode CreateMode()
     {
@@ -166,6 +173,12 @@ public sealed class GameController : MonoBehaviour
             var coop = gameObject.AddComponent<CoopMode>();
             coop.Bind(this);
             return coop;
+        }
+        if (GameSettings.Mode == GameMode.Endless)
+        {
+            var endless = gameObject.AddComponent<EndlessMode>();
+            endless.Bind(this);
+            return endless;
         }
         var classic = gameObject.AddComponent<ClassicMode>();
         classic.Bind(this);
@@ -201,6 +214,15 @@ public sealed class GameController : MonoBehaviour
     /// <summary>Internal: inspection-warning threshold SerializeField, consumed by ClassicMode timer view.</summary>
     internal float InspectionWarningThreshold => inspectionWarningThreshold;
 
+    /// <summary>Internal: endless-mode HUD UXML asset, cloned into HUD root by <see cref="EndlessMode.Setup"/>.</summary>
+    internal VisualTreeAsset EndlessHudAsset => endlessHudAsset;
+
+    /// <summary>Internal: shared HUD timer-label so EndlessMode can hide it (timer is classic-only).</summary>
+    internal Label HudTimerLabel => _timerLabel;
+
+    /// <summary>Internal: main camera, so per-mode controllers can modulate its clear color (endless danger tint).</summary>
+    internal Camera MainCamera => mainCamera;
+
     // ---- Editor-override SerializeField accessors (classic only) ---------
 
     internal int EditorBoardWidth => boardWidth;
@@ -222,6 +244,29 @@ public sealed class GameController : MonoBehaviour
 
     /// <summary>Internal: marks the victory sequence as started so Escape stops opening the leave modal.</summary>
     internal void MarkVictoryStarted() => _victoryStarted = true;
+
+    /// <summary>
+    /// Internal: freezes gameplay at end-of-run (used by EndlessMode topout
+    /// and could be used by any future mode with a delayed result screen).
+    /// Disables input, hides all shared HUD chrome (back / retry / trail
+    /// toggle / timer label), sets victory-started so Escape stops opening
+    /// the leave modal. Mode-specific HUD overlays (endless meter, coop
+    /// sidebar) are the mode's own responsibility to hide.
+    /// </summary>
+    internal void DisableGameplayHudAndInput()
+    {
+        _victoryStarted = true;
+        if (_inputHandler != null)
+            _inputHandler.SetInputEnabled(false);
+        if (_backBtn != null)
+            _backBtn.style.display = DisplayStyle.None;
+        if (_retryBtn != null)
+            _retryBtn.style.display = DisplayStyle.None;
+        if (_trailToggleBtn != null)
+            _trailToggleBtn.style.display = DisplayStyle.None;
+        if (_timerLabel != null)
+            _timerLabel.style.display = DisplayStyle.None;
+    }
 
     /// <summary>Internal: triggers a same-mode scene reload (Ctrl+R / retry-confirmed).</summary>
     internal void RequestQuickReset() => OnQuickReset();

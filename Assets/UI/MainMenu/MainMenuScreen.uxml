@@ -38,7 +38,7 @@
             </ui:VisualElement>
         </ui:VisualElement>
 
-        <!-- Singleplayer sub-menu (size select + continue) -->
+        <!-- Singleplayer sub-menu (mode tabs + size select + continue) -->
         <ui:VisualElement name="menu-singleplayer" class="menu-panel screen--hidden">
             <ui:VisualElement class="icon-row icon-row--top-left">
                 <ui:Button name="back-sp-btn" class="icon-btn">
@@ -50,25 +50,62 @@
                     <ui:VisualElement class="icon-btn__icon icon--trophy" />
                 </ui:Button>
             </ui:VisualElement>
+
+            <!-- Mode tab bar: Classic vs Endless. Each tab swaps the visible
+                 preset grid + start button below. -->
+            <ui:VisualElement class="tab-bar sp-mode-tabs">
+                <ui:Button name="sp-tab-classic" class="tab-bar__tab tab-bar__tab--active" text="Classic" />
+                <ui:Button name="sp-tab-endless" class="tab-bar__tab" text="Endless" />
+            </ui:VisualElement>
+
             <ui:Label class="section-label" text="Select Board Size" />
-            <ui:VisualElement class="preset-grid">
-                <ui:Button name="preset-small"  class="preset-btn" text="Small&#10;10 × 10" />
-                <ui:Button name="preset-medium" class="preset-btn" text="Medium&#10;20 × 20" />
-                <ui:Button name="preset-large"  class="preset-btn" text="Large&#10;40 × 40" />
-                <ui:Button name="preset-xlarge" class="preset-btn" text="XLarge&#10;100 × 100" />
-                <ui:Button name="preset-custom" class="preset-btn" text="Custom" />
-            </ui:VisualElement>
-            <ui:VisualElement name="custom-panel" class="custom-panel screen--hidden">
-                <ui:VisualElement name="custom-width-row" class="preset-custom-row">
-                    <ui:Label class="preset-custom-dim-label" text="W" />
+
+            <!-- Fixed-height wrapper so switching tabs (which swaps the
+                 panels below) doesn't reflow the tab bar / section label
+                 above. Sized to fit classic's tallest layout (custom
+                 panel expanded). Endless's smaller content packs at the
+                 top of the wrapper, leaving empty space below. -->
+            <ui:VisualElement class="sp-panel-area">
+
+                <!-- Classic preset grid + custom panel + start/continue row. -->
+                <ui:VisualElement name="sp-classic-panel">
+                    <ui:VisualElement class="preset-grid">
+                        <ui:Button name="preset-small"  class="preset-btn" text="Small&#10;10 × 10" />
+                        <ui:Button name="preset-medium" class="preset-btn" text="Medium&#10;20 × 20" />
+                        <ui:Button name="preset-large"  class="preset-btn" text="Large&#10;40 × 40" />
+                        <ui:Button name="preset-xlarge" class="preset-btn" text="XLarge&#10;100 × 100" />
+                        <ui:Button name="preset-custom" class="preset-btn" text="Custom" />
+                    </ui:VisualElement>
+                    <ui:VisualElement name="custom-panel" class="custom-panel screen--hidden">
+                        <ui:VisualElement name="custom-width-row" class="preset-custom-row">
+                            <ui:Label class="preset-custom-dim-label" text="W" />
+                        </ui:VisualElement>
+                        <ui:VisualElement name="custom-height-row" class="preset-custom-row">
+                            <ui:Label class="preset-custom-dim-label" text="H" />
+                        </ui:VisualElement>
+                    </ui:VisualElement>
+                    <ui:VisualElement name="start-row" class="play-choice-row">
+                        <ui:Button name="start-btn" class="menu-btn start-btn play-choice-btn" text="Start" />
+                        <ui:Button name="continue-btn" class="menu-btn continue-btn play-choice-btn screen--hidden" text="Continue" />
+                    </ui:VisualElement>
                 </ui:VisualElement>
-                <ui:VisualElement name="custom-height-row" class="preset-custom-row">
-                    <ui:Label class="preset-custom-dim-label" text="H" />
+
+                <!-- Endless preset grid + endless start. Three fixed sizes;
+                     no custom (run length depends on board fill rate, which
+                     would make custom sizes uncomparable on the leaderboard).
+                     Caps at 20×20 — anything larger doesn't fit one screen
+                     with its dependency graph. -->
+                <ui:VisualElement name="sp-endless-panel" class="screen--hidden">
+                    <ui:VisualElement class="preset-grid">
+                        <ui:Button name="endless-preset-small"  class="preset-btn" text="Small&#10;5 × 5" />
+                        <ui:Button name="endless-preset-medium" class="preset-btn" text="Medium&#10;10 × 10" />
+                        <ui:Button name="endless-preset-large"  class="preset-btn" text="Large&#10;20 × 20" />
+                    </ui:VisualElement>
+                    <ui:VisualElement class="play-choice-row">
+                        <ui:Button name="endless-btn" class="menu-btn start-btn play-choice-btn" text="Start" />
+                    </ui:VisualElement>
                 </ui:VisualElement>
-            </ui:VisualElement>
-            <ui:VisualElement name="start-row" class="play-choice-row">
-                <ui:Button name="start-btn" class="menu-btn start-btn play-choice-btn" text="Start" />
-                <ui:Button name="continue-btn" class="menu-btn continue-btn play-choice-btn screen--hidden" text="Continue" />
+
             </ui:VisualElement>
         </ui:VisualElement>
 
