@@ -275,7 +275,12 @@ public sealed class EndlessModeController : MonoBehaviour
         // Seed the meter with one combo so the first push tick has something
         // to send to pending instead of an empty queue.
         _meter.Add(ComputeComboSize());
-        RebuildMeterUI();
+
+        // Fire the first push immediately rather than waiting for the empty-
+        // board push interval. Empty-board start (no initial fill) means the
+        // player would otherwise stare at a blank board for the full interval
+        // before any arrows appear.
+        OnPushTick();
     }
 
     public Board Board => _session?.Board;

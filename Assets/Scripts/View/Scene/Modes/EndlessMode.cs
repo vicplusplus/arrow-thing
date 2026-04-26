@@ -1,14 +1,13 @@
 using System;
 using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UIElements;
 
 /// <summary>
-/// Endless mode: initial fill to ~70% occupancy (uniform-random heads +
-/// uniform length sampling, like classic but capped at 70% instead of
-/// saturation), then a continuous push-tick loop that spawns pending arrows
-/// the player must clear before the next push or topout.
+/// Endless mode: starts with an empty board, then a continuous push-tick loop
+/// spawns pending arrows the player must clear before the next push or topout.
+/// No initial fill — the board grows from nothing as garbage accumulates,
+/// like Tetris.
 ///
 /// EndlessMode is the <see cref="IGameMode"/> adapter. The heavy lifting
 /// (push-tick scheduling, garbage-meter UI, danger tint, topout detection,
@@ -31,14 +30,6 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
     private int _h;
     private int _maxLen;
     private int _activeSeed;
-
-    private const float FrameBudgetMs = 12f;
-
-    /// <summary>
-    /// Target initial occupancy for endless mode: fills until ~70% of cells
-    /// are occupied so the player has visible wiggle room to start.
-    /// </summary>
-    private const float InitialOccupancy = 0.70f;
 
     public string Name => "Endless";
 
@@ -114,9 +105,10 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
 
         Debug.Log($"[EndlessMode] Setup: board={_w}x{_h}, maxLen={_maxLen}, seed={_activeSeed}");
 
-        _controller.ShowLoadingInternal("Generating...");
+        _controller.ShowLoadingInternal("Loading...");
         yield return null;
 
+        // Empty board — endless grows it from nothing via the push-tick loop.
         var visualSettings = ThemeManager.Current ?? context.VisualSettings;
         (Board board, BoardView boardView) = BoardSetupHelper.CreateBoardAndView(
             _w,
@@ -137,11 +129,6 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
         context.CameraController = camCtrl;
         boardView.SetCameraController(camCtrl);
 
-        yield return GenerateBoard(board, boardView);
-        if (board.Arrows.Count == 0)
-            yield break; // GenerateBoard logged + popped
-
-        boardView.ApplyColoring();
         _controller.HideLoadingInternal();
 
         // Construct the endless controller now that board+view+camera exist.
@@ -198,167 +185,6 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
             (GameSettings.IsSet || _controller.EditorUseRandomSeed)
                 ? Environment.TickCount
                 : _controller.EditorSeed;
-    }
-
-    // ---- Initial board generation ------------------------------------------
-    //
-    // Mirrors ClassicMode.GenerateBoard but with one endless-specific flag:
-    // ~70% occupancy cap (initial wiggle room). Centermost-first and
-    // short-biased length sampling were both tried in the prototype but
-    // dropped — uniform-random head selection + uniform length sampling
-    // produce a more natural-feeling start state. Could be unified with
-    // classic via a shared helper in a future pass; kept duplicated for
-    // now to keep the endless reintroduction surgical.
-
-    private IEnumerator GenerateBoard(Board board, BoardView boardView)
-    {
-        int targetCells = Mathf.RoundToInt(_w * _h * InitialOccupancy);
-        var generator = BoardGeneration.FillBoardIncremental(
-            board,
-            _maxLen,
-            _activeSeed,
-            targetCellCount: targetCells
-        );
-
-        var weights = GenerationProgress.ClientWeights;
-        var spawnedArrows = new List<Arrow>();
-        int arrowsBeforeCompaction = 0;
-        var phase = GenerationPhase.Generating;
-        float compactStartRealtime = 0f;
-        bool rebuildingViews = false;
-        List<Arrow> rebuildList = null;
-        int rebuildIndex = 0;
-        int rebuildTotal = 0;
-
-        while (true)
-        {
-            if (_controller.CancelRequested)
-            {
-                (generator as System.IDisposable)?.Dispose();
-                SceneNav.Pop();
-                yield break;
-            }
-
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            bool done = false;
-            while (sw.ElapsedMilliseconds < FrameBudgetMs)
-            {
-                if (rebuildingViews)
-                {
-                    if (rebuildIndex < rebuildTotal)
-                    {
-                        boardView.AddArrowView(rebuildList[rebuildIndex]);
-                        spawnedArrows.Add(rebuildList[rebuildIndex]);
-                        rebuildIndex++;
-                        continue;
-                    }
-                    rebuildingViews = false;
-                    rebuildList = null;
-                }
-
-                if (!generator.MoveNext())
-                {
-                    done = true;
-                    break;
-                }
-
-                if (generator.Current is GenerationPhase nextPhase)
-                {
-                    if (nextPhase == GenerationPhase.Compacting)
-                    {
-                        arrowsBeforeCompaction = board.Arrows.Count;
-                        compactStartRealtime = Time.realtimeSinceStartup;
-                    }
-                    else if (
-                        nextPhase == GenerationPhase.Finalizing
-                        && phase == GenerationPhase.Compacting
-                    )
-                    {
-                        foreach (Arrow a in spawnedArrows)
-                            boardView.RemoveArrowView(a);
-                        spawnedArrows.Clear();
-                        rebuildList = new List<Arrow>(board.Arrows);
-                        rebuildIndex = 0;
-                        rebuildTotal = rebuildList.Count;
-                        rebuildingViews = true;
-                    }
-                    phase = nextPhase;
-                }
-                else if (phase == GenerationPhase.Generating)
-                {
-                    Arrow arrow = board.Arrows[spawnedArrows.Count];
-                    boardView.AddArrowView(arrow);
-                    spawnedArrows.Add(arrow);
-                }
-            }
-
-            float progress;
-            if (rebuildingViews)
-            {
-                float rebuildRatio = rebuildTotal > 0 ? (float)rebuildIndex / rebuildTotal : 1f;
-                progress = GenerationProgress.ForRebuildingViews(rebuildRatio, weights);
-            }
-            else
-            {
-                switch (phase)
-                {
-                    case GenerationPhase.Generating:
-                    {
-                        int initial = board.InitialCandidateCount;
-                        int remaining = board.RemainingCandidateCount;
-                        float depletion = initial > 0 ? 1f - (float)remaining / initial : 0f;
-                        progress = GenerationProgress.ForGenerating(depletion, weights);
-                        break;
-                    }
-                    case GenerationPhase.Compacting:
-                    {
-                        float expectedCompactSec = GenerationProgress.ExpectedCompactSeconds(
-                            arrowsBeforeCompaction
-                        );
-                        float elapsed = Time.realtimeSinceStartup - compactStartRealtime;
-                        float timeRatio =
-                            expectedCompactSec > 0.001f ? elapsed / expectedCompactSec : 1f;
-                        progress = GenerationProgress.ForCompacting(
-                            mergesCompleted: arrowsBeforeCompaction - board.Arrows.Count,
-                            arrowsBeforeCompaction: arrowsBeforeCompaction,
-                            timeRatio: timeRatio,
-                            w: weights
-                        );
-                        break;
-                    }
-                    case GenerationPhase.Finalizing:
-                    {
-                        int arrowCount = board.Arrows.Count;
-                        float finalizeRatio =
-                            arrowCount > 0 && generator.Current is int finalized
-                                ? (float)finalized / arrowCount
-                                : 0f;
-                        progress = GenerationProgress.ForFinalizing(finalizeRatio, weights);
-                        break;
-                    }
-                    default:
-                        progress = 0f;
-                        break;
-                }
-            }
-            _controller.SetLoadProgress(progress);
-
-            if (done)
-                break;
-            yield return null;
-        }
-
-        if (board.Arrows.Count == 0)
-        {
-            Debug.LogWarning(
-                $"[EndlessMode] GenerateBoard produced 0 arrows (board {_w}x{_h}, maxLen={_maxLen}, seed={_activeSeed}). Returning to menu."
-            );
-            SceneNav.Pop();
-            yield break;
-        }
-        Debug.Log(
-            $"[EndlessMode] GenerateBoard complete: {board.Arrows.Count} arrows, board={_w}x{_h}, seed={_activeSeed}"
-        );
     }
 
     // ---- End-of-run sequence -----------------------------------------------
