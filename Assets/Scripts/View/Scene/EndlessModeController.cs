@@ -25,9 +25,17 @@ public sealed class EndlessModeController : MonoBehaviour
 {
     // ---- Tuning (provisional; SerializeFields tunable in the inspector) ---
 
-    /// <summary>Preview phase duration: how long a pending arrow is visible before committing.</summary>
-    [SerializeField]
-    private float previewDurationSeconds = 3f;
+    /// <summary>
+    /// Preview phase as a fraction of the current push interval. Pending
+    /// arrows commit after <c>pushInterval × this</c> seconds. Must be
+    /// strictly less than 1 — otherwise pending from one push wouldn't
+    /// commit before the next push spawns more, and the board fills with
+    /// uninteractable pending arrows. Default 0.6 leaves the player ~40%
+    /// of the cycle to clear committed arrows before the next preview
+    /// appears.
+    /// </summary>
+    [SerializeField, Range(0.2f, 0.9f)]
+    private float previewDurationFractionOfPush = 0.6f;
 
     /// <summary>
     /// Max arrow length the spawn generator may produce. Smaller values mean
@@ -111,13 +119,16 @@ public sealed class EndlessModeController : MonoBehaviour
     private float comboBasePctOfBoard = 0.09f;
 
     /// <summary>
-    /// Clear count for the first difficulty tier. Subsequent tiers follow
-    /// the power-law curve <c>tier = floor((clears / firstTier)^power)</c>.
-    /// Tier feeds into push-interval speedup (see
-    /// <see cref="pushIntervalStepDownPerTier"/>).
+    /// Clear count for the first difficulty tier on a 100-cell (10×10)
+    /// board. Scales linearly with board area so smaller boards (which
+    /// produce fewer total clears per unit time) ramp through tiers
+    /// faster: a 5×5 board hits tier 1 at ~3 clears, a 20×20 at ~40.
+    /// Subsequent tiers follow the power-law curve
+    /// <c>tier = floor((clears / scaledFirstTier)^power)</c>. Tier feeds
+    /// into push-interval speedup (see <see cref="pushIntervalStepDownPerTier"/>).
     /// </summary>
     [SerializeField]
-    private int clearsForFirstTier = 10;
+    private int clearsForFirstTierAt100Cells = 10;
 
     /// <summary>
     /// Power-law exponent for the difficulty tier ramp.
@@ -146,6 +157,17 @@ public sealed class EndlessModeController : MonoBehaviour
     /// </summary>
     [SerializeField, Range(0f, 0.5f)]
     private float occupancyAdaptivePctOfBoard = 0.22f;
+
+    /// <summary>
+    /// Hard cap on combo size as a fraction of board cells. Without this,
+    /// pending arrows queued up faster than the player could clear them
+    /// would inevitably fill the board (combo size scales with board area
+    /// but board cells are finite). Default 40% means a single combo can
+    /// never request more than ~40% of the board's worth of arrows in one
+    /// push, so the player always has theoretical room to recover.
+    /// </summary>
+    [SerializeField, Range(0.05f, 1f)]
+    private float maxComboPctOfBoard = 0.40f;
 
     /// <summary>
     /// Combo timer: if no clear lands within this window after the last one,
@@ -313,7 +335,7 @@ public sealed class EndlessModeController : MonoBehaviour
         // (which will topout if it's still not zero).
         if (_activeShortfall > 0)
         {
-            float commitAt = Time.time + previewDurationSeconds;
+            float commitAt = Time.time + CurrentPreviewDurationSeconds();
             while (_activeShortfall > 0)
             {
                 if (!TrySpawnOnePending(commitAt, out int weight))
@@ -370,7 +392,7 @@ public sealed class EndlessModeController : MonoBehaviour
     /// </summary>
     private int SpawnComboPoints(int comboPoints)
     {
-        float commitAt = Time.time + previewDurationSeconds;
+        float commitAt = Time.time + CurrentPreviewDurationSeconds();
         int placed = 0;
         while (placed < comboPoints)
         {
@@ -476,7 +498,13 @@ public sealed class EndlessModeController : MonoBehaviour
         // ramps from +scale at empty to 0 at target via a quarter-cosine,
         // clamped at 0 above). Both terms scale linearly with board area
         // — a 5×5 board would otherwise top out from one push since the
-        // absolute defaults assume a 20×20 reference.
+        // absolute defaults assume a 10×10 reference.
+        //
+        // Capped at maxComboPctOfBoard × boardCells so a single combo can
+        // never request more than that fraction of the board, no matter
+        // how the bonuses stack. Without the cap, late-game pending arrow
+        // pile-up could fill the board faster than the player could clear.
+        //
         // Difficulty progression doesn't touch combo size — it accelerates
         // push cadence instead.
         Board board = _session.Board;
@@ -492,23 +520,41 @@ public sealed class EndlessModeController : MonoBehaviour
             adaptive = Mathf.Cos(t * Mathf.PI * 0.5f) * occupancyAdaptivePctOfBoard * boardCells;
         }
         int size = Mathf.RoundToInt(comboBasePctOfBoard * boardCells + adaptive);
+        int maxSize = Mathf.Max(1, Mathf.CeilToInt(maxComboPctOfBoard * boardCells));
+        if (size > maxSize)
+            size = maxSize;
         if (size < 1)
             size = 1;
         return size;
     }
 
     /// <summary>
+    /// Board-area-scaled first-tier clear count. Smaller boards cycle
+    /// through tiers faster because they produce fewer clears per unit
+    /// time. 100 cells (10×10) → use the configured value; 25 cells
+    /// (5×5) → 25%; 400 cells (20×20) → 4×.
+    /// </summary>
+    private int ScaledClearsForFirstTier()
+    {
+        Board board = _session.Board;
+        int boardCells = board.Width * board.Height;
+        int scaled = Mathf.RoundToInt(clearsForFirstTierAt100Cells * boardCells / 100f);
+        return Mathf.Max(1, scaled);
+    }
+
+    /// <summary>
     /// Power-law difficulty tier.
-    /// <c>tier = floor((clears / firstTier)^power)</c>. With default
-    /// <c>firstTier=10, power=0.78</c>: tiers fire near 10, 25, 43, 64, 87,
-    /// 113, 140, 168, 198, 230, 263, 297, 332, 367 clears. Used to ramp
-    /// the push interval downward over time.
+    /// <c>tier = floor((clears / scaledFirstTier)^power)</c>. With default
+    /// <c>firstTierAt100Cells=10, power=0.78</c> on a 10×10 board: tiers
+    /// fire near 10, 25, 43, 64, 87... clears. On 5×5 (scaled to 3): much
+    /// faster ramp; on 20×20 (scaled to 40): much slower.
     /// </summary>
     private int ComputeDifficultyTier()
     {
-        if (ClearCount < clearsForFirstTier)
+        int firstTier = ScaledClearsForFirstTier();
+        if (ClearCount < firstTier)
             return 0;
-        float ratio = ClearCount / (float)clearsForFirstTier;
+        float ratio = ClearCount / (float)firstTier;
         return Mathf.FloorToInt(Mathf.Pow(ratio, difficultyTierPower));
     }
 
@@ -521,6 +567,17 @@ public sealed class EndlessModeController : MonoBehaviour
         float interval =
             pushIntervalAtStartSeconds - ComputeDifficultyTier() * pushIntervalStepDownPerTier;
         return interval < pushIntervalMinSeconds ? pushIntervalMinSeconds : interval;
+    }
+
+    /// <summary>
+    /// Current preview (pending → committed) duration. Always shorter than
+    /// the push interval so pending from one push commits before the next
+    /// push spawns its pending — otherwise the board fills with overlapping
+    /// uninteractable pending arrows.
+    /// </summary>
+    private float CurrentPreviewDurationSeconds()
+    {
+        return CurrentPushIntervalSeconds() * previewDurationFractionOfPush;
     }
 
     /// <summary>
