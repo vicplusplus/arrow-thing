@@ -520,6 +520,7 @@ public sealed class MainMenuController : NavigableScene
         _endlessSelectedSize = size;
         PlayerPrefs.SetInt(EndlessSizePrefKey, size);
         UpdateEndlessHighlight();
+        UpdateActiveTabDownLink();
     }
 
     private void UpdateEndlessHighlight()
@@ -934,22 +935,36 @@ public sealed class MainMenuController : NavigableScene
         int topLeft = topRow[0];
         int topRight = topRow[topRow.Count - 1];
 
-        // Tabs sit between the icon row and the preset grid: icons ↓ → tabs,
-        // tabs ↑ → icons, tabs ↓ → top preset row, top preset row ↑ → tabs.
-        Navigator.Link(_spBackIdx, FocusNavigator.NavDir.Down, _spTabClassicIdx);
-        Navigator.Link(_spBackIdx, FocusNavigator.NavDir.Right, _spTabClassicIdx);
-        Navigator.LinkBidi(_spBackIdx, FocusNavigator.NavDir.Right, _spLeaderboardIdx);
-        Navigator.Link(_spLeaderboardIdx, FocusNavigator.NavDir.Down, _spTabEndlessIdx);
+        // Top of the singleplayer screen behaves as one logical row:
+        //   Back ↔ Classic ↔ Endless ↔ Leaderboard
+        // Visually Back/Leaderboard are corner icons and the tabs sit
+        // centered between them, but for nav purposes Left/Right cycles
+        // through all four.
+        Navigator.LinkBidi(_spBackIdx, FocusNavigator.NavDir.Right, _spTabClassicIdx);
+        Navigator.LinkBidi(_spTabClassicIdx, FocusNavigator.NavDir.Right, _spTabEndlessIdx);
+        Navigator.LinkBidi(_spTabEndlessIdx, FocusNavigator.NavDir.Right, _spLeaderboardIdx);
 
-        Navigator.Link(_spTabClassicIdx, FocusNavigator.NavDir.Up, _spBackIdx);
-        Navigator.Link(_spTabClassicIdx, FocusNavigator.NavDir.Left, _spBackIdx);
-        Navigator.Link(_spTabEndlessIdx, FocusNavigator.NavDir.Up, _spLeaderboardIdx);
-        Navigator.Link(_spTabEndlessIdx, FocusNavigator.NavDir.Right, _spLeaderboardIdx);
-
-        Navigator.LinkBidi(_spTabClassicIdx, FocusNavigator.NavDir.Down, topLeft);
-        Navigator.Link(_spTabEndlessIdx, FocusNavigator.NavDir.Down, topRight);
-        // Top preset row ↑ goes back to the active tab (whichever's lit).
+        // Top-row ↓ targets:
+        //   Active tab → currently-selected preset (so pressing ↓ on the
+        //   tab jumps to whatever the user picked last, not always the
+        //   leftmost). Inactive tab + corner icons fall back to the
+        //   nearest column (Back/Classic → topLeft, Endless/Leaderboard
+        //   → topRight) since the user shouldn't be lingering there anyway.
         int activeTabIdx = _endlessTabActive ? _spTabEndlessIdx : _spTabClassicIdx;
+        int inactiveTabIdx = _endlessTabActive ? _spTabClassicIdx : _spTabEndlessIdx;
+        int selectedPresetIdx = GetPresetIndex();
+
+        Navigator.Link(_spBackIdx, FocusNavigator.NavDir.Down, topLeft);
+        Navigator.Link(_spLeaderboardIdx, FocusNavigator.NavDir.Down, topRight);
+        Navigator.Link(activeTabIdx, FocusNavigator.NavDir.Down, selectedPresetIdx);
+        Navigator.Link(
+            inactiveTabIdx,
+            FocusNavigator.NavDir.Down,
+            inactiveTabIdx == _spTabClassicIdx ? topLeft : topRight
+        );
+
+        // Top preset row ↑ → active tab (preserves the "preset belongs to
+        // a tab" mental model regardless of which preset column you're on).
         for (int i = 0; i < topRow.Count; i++)
             Navigator.Link(topRow[i], FocusNavigator.NavDir.Up, activeTabIdx);
     }
@@ -991,6 +1006,8 @@ public sealed class MainMenuController : NavigableScene
         UpdateAllPresetHighlights();
         if (wasCustom && _sizeSelectInitialized)
             RebuildNavigator(preserveFocus: true);
+        else
+            UpdateActiveTabDownLink();
     }
 
     private void SelectCustom()
@@ -1003,6 +1020,21 @@ public sealed class MainMenuController : NavigableScene
         UpdateAllPresetHighlights();
         if (!wasCustom && _sizeSelectInitialized)
             RebuildNavigator(preserveFocus: true);
+        else
+            UpdateActiveTabDownLink();
+    }
+
+    /// <summary>
+    /// Re-points the active tab's ↓ link at the currently-selected preset
+    /// so pressing Down on the tab jumps to the user's last pick (instead
+    /// of always landing on the leftmost preset).
+    /// </summary>
+    private void UpdateActiveTabDownLink()
+    {
+        if (_currentState != MenuState.Singleplayer || !_sizeSelectInitialized)
+            return;
+        int activeTabIdx = _endlessTabActive ? _spTabEndlessIdx : _spTabClassicIdx;
+        Navigator.Link(activeTabIdx, FocusNavigator.NavDir.Down, GetPresetIndex());
     }
 
     private void UpdateAllPresetHighlights()
