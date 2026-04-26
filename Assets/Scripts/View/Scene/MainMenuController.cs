@@ -73,6 +73,8 @@ public sealed class MainMenuController : NavigableScene
     private int _spPresetBase;
     private int _spBackIdx;
     private int _spLeaderboardIdx;
+    private int _spTabClassicIdx;
+    private int _spTabEndlessIdx;
 
     protected override KeybindManager.Context NavContext => KeybindManager.Context.MainMenu;
 
@@ -496,6 +498,7 @@ public sealed class MainMenuController : NavigableScene
 
     private void SetSpTab(bool endless)
     {
+        bool changed = endless != _endlessTabActive;
         _endlessTabActive = endless;
         PlayerPrefs.SetString(SpTabPrefKey, endless ? "endless" : "classic");
 
@@ -504,6 +507,12 @@ public sealed class MainMenuController : NavigableScene
 
         ToggleClass(_spTabClassic, "tab-bar__tab--active", !endless);
         ToggleClass(_spTabEndless, "tab-bar__tab--active", endless);
+
+        // Rebuild the nav graph: preset items + start row swap with the
+        // active tab. Preserve focus where possible (e.g. switching tabs
+        // via mouse from a focused preset shouldn't yank focus to nowhere).
+        if (changed && _sizeSelectInitialized)
+            RebuildNavigator(preserveFocus: true);
     }
 
     private void SelectEndlessSize(int size)
@@ -560,7 +569,113 @@ public sealed class MainMenuController : NavigableScene
             }
         );
 
+        // Mode tab pair (Classic | Endless). Switching a tab rebuilds the
+        // graph, so the OnActivate handlers are safe — focus jumps to the
+        // new tab's first preset via RebuildNavigator.
+        _spTabClassicIdx = items.Count;
+        items.Add(
+            new FocusNavigator.FocusItem
+            {
+                Element = _spTabClassic,
+                OnActivate = () =>
+                {
+                    SetSpTab(endless: false);
+                    return true;
+                },
+            }
+        );
+        _spTabEndlessIdx = items.Count;
+        items.Add(
+            new FocusNavigator.FocusItem
+            {
+                Element = _spTabEndless,
+                OnActivate = () =>
+                {
+                    SetSpTab(endless: true);
+                    return true;
+                },
+            }
+        );
+
         _spPresetBase = items.Count;
+        if (_endlessTabActive)
+            BuildEndlessPresetItems(items);
+        else
+            BuildClassicPresetItems(items);
+
+        int startIdx = items.Count;
+        if (_endlessTabActive)
+        {
+            items.Add(
+                new FocusNavigator.FocusItem
+                {
+                    Element = Root.Q<Button>("endless-btn"),
+                    OnActivate = () =>
+                    {
+                        OnStartEndless();
+                        return true;
+                    },
+                }
+            );
+        }
+        else
+        {
+            items.Add(
+                new FocusNavigator.FocusItem
+                {
+                    Element = Root.Q<Button>("start-btn"),
+                    OnActivate = () =>
+                    {
+                        OnStartGame();
+                        return true;
+                    },
+                }
+            );
+        }
+        _spStartIdx = startIdx;
+
+        int continueIdx = -1;
+        var continueBtn = Root.Q<Button>("continue-btn");
+        bool hasContinue = !_endlessTabActive && !continueBtn.ClassListContains("screen--hidden");
+        if (hasContinue)
+        {
+            continueIdx = items.Count;
+            items.Add(
+                new FocusNavigator.FocusItem
+                {
+                    Element = continueBtn,
+                    OnActivate = () =>
+                    {
+                        OnContinue();
+                        return true;
+                    },
+                }
+            );
+        }
+
+        nav.SetItems(items, GetPresetIndex());
+
+        // Grid links built after layout resolves. Hook the visible grid
+        // (only one of the two per-tab grids is in the layout pass at a time).
+        var presetGrid = ActivePresetGrid();
+        if (presetGrid != null)
+        {
+            presetGrid.UnregisterCallback<GeometryChangedEvent>(OnPresetGridLayout);
+            presetGrid.RegisterCallback<GeometryChangedEvent>(OnPresetGridLayout);
+        }
+
+        // Tabs: bidi horizontal pair, plus vertical links to icons above
+        // and the preset grid below (filled in by LinkPresetGrid using the
+        // resolved row layout).
+        nav.LinkBidi(_spTabClassicIdx, FocusNavigator.NavDir.Right, _spTabEndlessIdx);
+
+        // Start / Continue side by side (classic only).
+        if (hasContinue)
+            nav.LinkBidi(startIdx, FocusNavigator.NavDir.Right, continueIdx);
+    }
+
+    private void BuildClassicPresetItems(List<FocusNavigator.FocusItem> items)
+    {
         items.Add(
             new FocusNavigator.FocusItem
             {
@@ -650,53 +765,50 @@ public sealed class MainMenuController : NavigableScene
                 }
             );
         }
+    }
 
-        int startIdx = items.Count;
+    private void BuildEndlessPresetItems(List<FocusNavigator.FocusItem> items)
+    {
         items.Add(
             new FocusNavigator.FocusItem
             {
-                Element = Root.Q<Button>("start-btn"),
+                Element = _endlessPresetSmall,
                 OnActivate = () =>
                 {
-                    OnStartGame();
+                    SelectEndlessSize(5);
                     return true;
                 },
             }
         );
-        _spStartIdx = startIdx;
-
-        var continueBtn = Root.Q<Button>("continue-btn");
-        bool hasContinue = !continueBtn.ClassListContains("screen--hidden");
-        int continueIdx = -1;
-        if (hasContinue)
-        {
-            continueIdx = items.Count;
-            items.Add(
-                new FocusNavigator.FocusItem
+        items.Add(
+            new FocusNavigator.FocusItem
+            {
+                Element = _endlessPresetMedium,
+                OnActivate = () =>
                 {
-                    Element = continueBtn,
-                    OnActivate = () =>
-                    {
-                        OnContinue();
-                        return true;
-                    },
-                }
-            );
-        }
+                    SelectEndlessSize(10);
+                    return true;
+                },
+            }
+        );
+        items.Add(
+            new FocusNavigator.FocusItem
+            {
+                Element = _endlessPresetLarge,
+                OnActivate = () =>
+                {
+                    SelectEndlessSize(20);
+                    return true;
+                },
+            }
+        );
+    }
 
-        nav.SetItems(items, GetPresetIndex());
-
-        // Grid links built after layout resolves.
-        var presetGrid = Root.Q(className: "preset-grid");
-        if (presetGrid != null)
-        {
-            presetGrid.UnregisterCallback<GeometryChangedEvent>(OnPresetGridLayout);
-            presetGrid.RegisterCallback<GeometryChangedEvent>(OnPresetGridLayout);
-        }
-
-        // Start / Continue side by side.
-        if (hasContinue)
-            nav.LinkBidi(startIdx, FocusNavigator.NavDir.Right, continueIdx);
+    /// <summary>The visible per-tab panel's preset-grid element.</summary>
+    private VisualElement ActivePresetGrid()
+    {
+        var panel = _endlessTabActive ? _spEndlessPanel : _spClassicPanel;
+        return panel?.Q(className: "preset-grid");
     }
 
     private void OnPresetGridLayout(GeometryChangedEvent evt) => LinkPresetGrid();
@@ -708,9 +820,13 @@ public sealed class MainMenuController : NavigableScene
 
         Navigator.ClearLinks();
 
-        // Re-link Start/Continue side by side (ClearLinks wipes everything).
+        // Re-link tab pair (ClearLinks wipes everything, including the bidi
+        // we set in BuildSingleplayerNavGraph).
+        Navigator.LinkBidi(_spTabClassicIdx, FocusNavigator.NavDir.Right, _spTabEndlessIdx);
+
+        // Re-link Start/Continue side by side (classic only).
         var continueBtn = Root.Q<Button>("continue-btn");
-        bool hasContinue = !continueBtn.ClassListContains("screen--hidden");
+        bool hasContinue = !_endlessTabActive && !continueBtn.ClassListContains("screen--hidden");
         if (hasContinue)
         {
             int continueIdx = _spStartIdx + 1;
@@ -718,14 +834,9 @@ public sealed class MainMenuController : NavigableScene
         }
 
         int b = _spPresetBase;
-        Button[] presets =
-        {
-            _presetSmall,
-            _presetMedium,
-            _presetLarge,
-            _presetXLarge,
-            _presetCustom,
-        };
+        Button[] presets = _endlessTabActive
+            ? new[] { _endlessPresetSmall, _endlessPresetMedium, _endlessPresetLarge }
+            : new[] { _presetSmall, _presetMedium, _presetLarge, _presetXLarge, _presetCustom };
 
         var rows = new List<List<int>>();
         float lastY = float.MinValue;
@@ -768,58 +879,95 @@ public sealed class MainMenuController : NavigableScene
         }
 
         var lastPresetRow = rows[rows.Count - 1];
-        int customIdx = b + 4;
-        int xlargeIdx = b + 3;
 
-        if (_isCustomSelected)
+        if (_endlessTabActive)
         {
-            // Last preset row → first custom slider
-            int firstSlider = customIdx + 1;
+            // Endless: every preset → endless start. Start ↑ goes to the
+            // closest preset (tracked column).
             foreach (int idx in lastPresetRow)
-                Navigator.LinkBidi(idx, FocusNavigator.NavDir.Down, firstSlider);
-            // Custom slider chain → Start
-            Navigator.LinkChain(customIdx, _spStartIdx - customIdx + 1);
-            // Continue ↑ → last slider (height)
-            if (hasContinue)
-            {
-                int heightSliderIdx = _spStartIdx - 1;
-                Navigator.Link(_spStartIdx + 1, FocusNavigator.NavDir.Up, heightSliderIdx);
-            }
+                Navigator.LinkBidi(idx, FocusNavigator.NavDir.Down, _spStartIdx);
+            Navigator.Link(
+                _spStartIdx,
+                FocusNavigator.NavDir.Up,
+                lastPresetRow[lastPresetRow.Count - 1]
+            );
         }
         else
         {
-            // Non-Custom presets in last row → Start
-            foreach (int idx in lastPresetRow)
+            int customIdx = b + 4;
+            int xlargeIdx = b + 3;
+
+            if (_isCustomSelected)
             {
-                if (idx != customIdx)
-                    Navigator.LinkBidi(idx, FocusNavigator.NavDir.Down, _spStartIdx);
+                // Last preset row → first custom slider
+                int firstSlider = customIdx + 1;
+                foreach (int idx in lastPresetRow)
+                    Navigator.LinkBidi(idx, FocusNavigator.NavDir.Down, firstSlider);
+                // Custom slider chain → Start
+                Navigator.LinkChain(customIdx, _spStartIdx - customIdx + 1);
+                // Continue ↑ → last slider (height)
+                if (hasContinue)
+                {
+                    int heightSliderIdx = _spStartIdx - 1;
+                    Navigator.Link(_spStartIdx + 1, FocusNavigator.NavDir.Up, heightSliderIdx);
+                }
             }
-            // Custom → Continue (if exists), else Start
-            int customTarget = hasContinue ? _spStartIdx + 1 : _spStartIdx;
-            Navigator.LinkBidi(customIdx, FocusNavigator.NavDir.Down, customTarget);
-            // Start ↑ → XLarge, Continue ↑ → Custom
-            Navigator.Link(_spStartIdx, FocusNavigator.NavDir.Up, xlargeIdx);
-            if (hasContinue)
-                Navigator.Link(_spStartIdx + 1, FocusNavigator.NavDir.Up, customIdx);
+            else
+            {
+                // Non-Custom presets in last row → Start
+                foreach (int idx in lastPresetRow)
+                {
+                    if (idx != customIdx)
+                        Navigator.LinkBidi(idx, FocusNavigator.NavDir.Down, _spStartIdx);
+                }
+                // Custom → Continue (if exists), else Start
+                int customTarget = hasContinue ? _spStartIdx + 1 : _spStartIdx;
+                Navigator.LinkBidi(customIdx, FocusNavigator.NavDir.Down, customTarget);
+                // Start ↑ → XLarge, Continue ↑ → Custom
+                Navigator.Link(_spStartIdx, FocusNavigator.NavDir.Up, xlargeIdx);
+                if (hasContinue)
+                    Navigator.Link(_spStartIdx + 1, FocusNavigator.NavDir.Up, customIdx);
+            }
         }
 
         var topRow = rows[0];
         int topLeft = topRow[0];
         int topRight = topRow[topRow.Count - 1];
 
-        Navigator.Link(_spBackIdx, FocusNavigator.NavDir.Down, topLeft);
-        Navigator.Link(_spBackIdx, FocusNavigator.NavDir.Right, topLeft);
+        // Tabs sit between the icon row and the preset grid: icons ↓ → tabs,
+        // tabs ↑ → icons, tabs ↓ → top preset row, top preset row ↑ → tabs.
+        Navigator.Link(_spBackIdx, FocusNavigator.NavDir.Down, _spTabClassicIdx);
+        Navigator.Link(_spBackIdx, FocusNavigator.NavDir.Right, _spTabClassicIdx);
         Navigator.LinkBidi(_spBackIdx, FocusNavigator.NavDir.Right, _spLeaderboardIdx);
-        Navigator.Link(_spLeaderboardIdx, FocusNavigator.NavDir.Down, topRight);
-        Navigator.Link(topLeft, FocusNavigator.NavDir.Up, _spBackIdx);
-        Navigator.Link(topLeft, FocusNavigator.NavDir.Left, _spBackIdx);
-        for (int i = 1; i < topRow.Count; i++)
-            Navigator.Link(topRow[i], FocusNavigator.NavDir.Up, _spLeaderboardIdx);
+        Navigator.Link(_spLeaderboardIdx, FocusNavigator.NavDir.Down, _spTabEndlessIdx);
+
+        Navigator.Link(_spTabClassicIdx, FocusNavigator.NavDir.Up, _spBackIdx);
+        Navigator.Link(_spTabClassicIdx, FocusNavigator.NavDir.Left, _spBackIdx);
+        Navigator.Link(_spTabEndlessIdx, FocusNavigator.NavDir.Up, _spLeaderboardIdx);
+        Navigator.Link(_spTabEndlessIdx, FocusNavigator.NavDir.Right, _spLeaderboardIdx);
+
+        Navigator.LinkBidi(_spTabClassicIdx, FocusNavigator.NavDir.Down, topLeft);
+        Navigator.Link(_spTabEndlessIdx, FocusNavigator.NavDir.Down, topRight);
+        // Top preset row ↑ goes back to the active tab (whichever's lit).
+        int activeTabIdx = _endlessTabActive ? _spTabEndlessIdx : _spTabClassicIdx;
+        for (int i = 0; i < topRow.Count; i++)
+            Navigator.Link(topRow[i], FocusNavigator.NavDir.Up, activeTabIdx);
     }
 
     private int GetPresetIndex()
     {
         int b = _spPresetBase;
+        if (_endlessTabActive)
+        {
+            // Endless: b+0 small (5), b+1 medium (10), b+2 large (20).
+            if (_endlessSelectedSize == 5)
+                return b;
+            if (_endlessSelectedSize == 10)
+                return b + 1;
+            if (_endlessSelectedSize == 20)
+                return b + 2;
+            return b + 1;
+        }
         if (_isCustomSelected)
             return b + 4;
         if (_selectedWidth == 10 && _selectedHeight == 10)
