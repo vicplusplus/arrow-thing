@@ -56,11 +56,14 @@ public interface IGameMode
     Func<Cell, Vector3, bool> TapAttemptHandler { get; }
 
     /// <summary>
-    /// Called whenever the player clears a real arrow (wired through
-    /// <see cref="InputHandler.OnArrowCleared"/>). Classic uses this for
-    /// autosave; coop ignores it (server is authoritative).
+    /// Called for every tap that reaches the board's bounds, with the
+    /// outcome (Missed / Blocked / Cleared* ). Classic uses this to drive
+    /// timer phase transitions, replay-event recording, and autosave.
+    /// Hardcore (planned) flips to a death screen on
+    /// <see cref="TapResultKind.Blocked"/>. Coop ignores it (the
+    /// <see cref="TapAttemptHandler"/> short-circuits before this fires).
     /// </summary>
-    void OnArrowCleared();
+    void OnTapResult(TapResult result);
 
     /// <summary>
     /// Wires the end-of-run flow. Classic instantiates <see cref="VictoryController"/>

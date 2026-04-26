@@ -490,19 +490,15 @@ public sealed class GameController : MonoBehaviour
             )
             : dragThresholdPixels;
         _inputHandler = gameObject.AddComponent<InputHandler>();
-        // Timer + recorder live on ClassicMode now; coop has neither (passes null).
-        var classic = _mode as ClassicMode;
+        // Mode owns timer/recorder/autosave — InputHandler hands it the
+        // tap outcome via OnTapResult and stays mode-agnostic itself.
         _inputHandler.Init(
             _board,
             _boardView,
             _camCtrl,
             dragThreshold,
-            classic?.Timer,
-            classic?.Recorder,
-            // Mode-driven: classic autosave / nothing for coop.
-            onArrowCleared: () => _mode?.OnArrowCleared(),
+            onTapResult: _mode != null ? _mode.OnTapResult : (Action<TapResult>)null,
             onQuickReset: OnQuickReset,
-            // Mode-driven: classic save-to-disk / null for coop.
             onQuickSave: _mode?.OnQuickSaveHandler,
             onToggleTrail: ToggleTrail,
             onTapAttempt: _mode?.TapAttemptHandler,

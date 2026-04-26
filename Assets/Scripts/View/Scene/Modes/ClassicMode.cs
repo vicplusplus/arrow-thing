@@ -82,22 +82,59 @@ public sealed class ClassicMode : MonoBehaviour, IGameMode
 
     public Func<Cell, Vector3, bool> TapAttemptHandler => null;
 
-    public void OnArrowCleared()
+    public void OnTapResult(TapResult result)
     {
-        // Autosave: every Nth cleared arrow, persist current state.
-        if (!_autosaveEnabled || _recorder == null || _timer == null)
+        if (_recorder == null)
             return;
 
-        _clearsSinceLastSave++;
-        if (_clearsSinceLastSave >= AutosaveInterval)
+        // Any arrow tap (even Blocked) ends the inspection phase. Missed
+        // (empty cell) doesn't — it's not engagement with the puzzle.
+        if (result.Kind != TapResultKind.Missed && _timer != null && !_timer.IsSolving)
         {
-            _clearsSinceLastSave = 0;
-            int cleared = _initialArrowCount - _controller.CurrentBoard.Arrows.Count;
-            Debug.Log(
-                $"[ClassicMode] Autosave triggered: {cleared}/{_initialArrowCount} arrows cleared"
-            );
-            SaveManager.Save(BuildReplayData());
+            _timer.StartSolve(result.WallTimeSeconds);
+            Debug.Log("[ClassicMode] Inspection ended — solve timer started");
+            _recorder.RecordStartSolve();
         }
+
+        switch (result.Kind)
+        {
+            case TapResultKind.Missed:
+                _recorder.RecordMiss(result.WorldPos.x, result.WorldPos.y);
+                break;
+            case TapResultKind.Blocked:
+                _recorder.RecordReject(result.WorldPos.x, result.WorldPos.y);
+                break;
+            case TapResultKind.Cleared:
+            case TapResultKind.ClearedFirst:
+                _recorder.RecordClear(result.WorldPos.x, result.WorldPos.y);
+                MaybeAutosave();
+                break;
+            case TapResultKind.ClearedLast:
+                _recorder.RecordClear(result.WorldPos.x, result.WorldPos.y);
+                if (_timer != null)
+                    _timer.Finish(result.WallTimeSeconds);
+                Debug.Log(
+                    $"[ClassicMode] Last arrow cleared — timer finished, solveElapsed={(_timer != null ? _timer.SolveElapsed.ToString("F3") : "N/A")}s"
+                );
+                // Save deletion + RecordEndSolve still fire from
+                // BoardView.LastArrowClearing -> WireVictory's subscriber.
+                break;
+        }
+    }
+
+    private void MaybeAutosave()
+    {
+        if (!_autosaveEnabled || _timer == null)
+            return;
+        _clearsSinceLastSave++;
+        if (_clearsSinceLastSave < AutosaveInterval)
+            return;
+        _clearsSinceLastSave = 0;
+        int cleared = _initialArrowCount - _controller.CurrentBoard.Arrows.Count;
+        Debug.Log(
+            $"[ClassicMode] Autosave triggered: {cleared}/{_initialArrowCount} arrows cleared"
+        );
+        SaveManager.Save(BuildReplayData());
     }
 
     public void WireRunFlow() => WireVictory();
@@ -128,12 +165,6 @@ public sealed class ClassicMode : MonoBehaviour, IGameMode
     public void Dispose() { }
 
     // ---- Public accessors (read by GameController for shared wiring) -------
-
-    /// <summary>Live timer; consumed by <see cref="GameController.WireInput"/>.</summary>
-    public GameTimer Timer => _timer;
-
-    /// <summary>Live recorder; consumed by <see cref="GameController.WireInput"/>.</summary>
-    public ReplayRecorder Recorder => _recorder;
 
     public List<List<Cell>> InitialBoardSnapshot => _initialBoardSnapshot;
 
