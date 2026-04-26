@@ -806,8 +806,12 @@ public sealed class MainMenuController : NavigableScene
     }
 
     /// <summary>
-    /// Endless mode entry: same size selection but mode flag flipped so
-    /// <see cref="GameController.CreateMode"/> instantiates <see cref="EndlessMode"/>.
+    /// Endless mode entry. Board size is fixed inside <see cref="EndlessMode"/>
+    /// (the menu size picker is classic-only — anything past ~20×20 is
+    /// unplayable at the late-game push cadence). We still call
+    /// <see cref="GameSettings.Apply"/> so <c>GameSettings.IsSet</c> flips
+    /// true (consumed by other code paths), but the dimensions are
+    /// ignored by the endless setup pipeline.
     /// </summary>
     private void OnStartEndless()
     {

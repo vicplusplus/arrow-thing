@@ -25,11 +25,16 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
     private GameController _controller;
     private EndlessModeController _endless;
 
-    // Resolved board parameters. Endless ignores GameSettings.MaxArrowLength
-    // entirely — EndlessModeController has its own arrow-length cap for
-    // spawn-time generation.
-    private int _w;
-    private int _h;
+    /// <summary>
+    /// Fixed endless board size. The size picker on the main menu is ignored
+    /// for endless — anything much past 20×20 becomes impossible to keep
+    /// clear at the late-game push cadence; 10×10 is too repetitive. 16×16
+    /// is the sweet spot. Centralized here as a const so any future "endless
+    /// size variant" mode (small / large) can clone EndlessMode and pick its
+    /// own value.
+    /// </summary>
+    private const int BoardSize = 16;
+
     private int _activeSeed;
 
     public string Name => "Endless";
@@ -102,9 +107,9 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
 
     private IEnumerator RunSetup(GameContext context)
     {
-        ResolveParameters();
+        ResolveSeed();
 
-        Debug.Log($"[EndlessMode] Setup: board={_w}x{_h}, seed={_activeSeed}");
+        Debug.Log($"[EndlessMode] Setup: board={BoardSize}x{BoardSize}, seed={_activeSeed}");
 
         _controller.ShowLoadingInternal("Loading...");
         yield return null;
@@ -112,8 +117,8 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
         // Empty board — endless grows it from nothing via the push-tick loop.
         var visualSettings = ThemeManager.Current ?? context.VisualSettings;
         (Board board, BoardView boardView) = BoardSetupHelper.CreateBoardAndView(
-            _w,
-            _h,
+            BoardSize,
+            BoardSize,
             visualSettings
         );
         context.Board = board;
@@ -167,18 +172,11 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
         _endless.ResultReady += OnResultReady;
     }
 
-    private void ResolveParameters()
+    private void ResolveSeed()
     {
-        if (GameSettings.IsSet)
-        {
-            _w = GameSettings.Width;
-            _h = GameSettings.Height;
-        }
-        else
-        {
-            _w = _controller.EditorBoardWidth;
-            _h = _controller.EditorBoardHeight;
-        }
+        // Endless boards always use a fresh random seed when launched from
+        // the menu. Editor playthrough honors the editor seed toggle so
+        // dev iterations on a specific board are possible.
         _activeSeed =
             (GameSettings.IsSet || _controller.EditorUseRandomSeed)
                 ? Environment.TickCount
