@@ -86,13 +86,11 @@ public sealed class GameController : MonoBehaviour
     private int _h;
     private int _maxLen;
     private float _inspectionDur;
-    private int _initialArrowCount;
-    private bool _autosaveEnabled;
-    private bool _isContinuedGame;
-    private int _clearsSinceLastSave;
-    private const int AutosaveInterval = 10;
-    private List<List<Cell>> _initialBoardSnapshot;
     private const float FrameBudgetMs = 12f;
+
+    // Autosave / save-state moved to ClassicMode (FinalizeSession is the
+    // integration point GameController calls after recorder + initial board
+    // exist).
 
     // Co-op mode state (active when GameSettings.ActiveLobbyCode is set)
     private bool _isCoopMode;
@@ -150,12 +148,20 @@ public sealed class GameController : MonoBehaviour
     private Button _backBtn;
     private Button _retryBtn;
     private ConfirmModal _leaveModal;
-    private ConfirmModal _retryModal;
+
+    // _retryModal moved to ClassicMode (built in OnHudWired).
     private FocusNavigator _focusNavigator;
     private VisualElement _cancelGenModal;
     private float _loadProgress;
     private bool _loadingActive;
     private float _loadingFadeStart;
+
+    // Active mode (Classic, Coop, future Endless/PvP). Picked once in Awake
+    // based on GameSettings; all per-frame and per-event mode-specific
+    // dispatch routes through this. Replaces the previously scattered
+    // `if (_isCoopMode)` branches across Update / WireHud / WireInput /
+    // WireVictory.
+    private IGameMode _mode;
 
     // --- Lifecycle ---
 
@@ -184,6 +190,7 @@ public sealed class GameController : MonoBehaviour
 
     private void OnDestroy()
     {
+        _mode?.Dispose();
         _focusNavigator?.Dispose();
         _coopResults?.Dispose();
         _coopSidebar?.Dispose();
@@ -194,23 +201,38 @@ public sealed class GameController : MonoBehaviour
         ThemeManager.ThemeChanged -= OnThemeChanged;
     }
 
-    private void OnThemeChanged(VisualSettings theme)
+    /// <summary>
+    /// Picks the active mode based on co-op activation flag (legacy signal:
+    /// <see cref="GameSettings.ActiveLobbyCode"/> consumed in
+    /// <see cref="GenerateAndSetup"/>) and adds it as a sibling component
+    /// so SerializeFields / coroutines work. The returned mode is bound
+    /// to this controller; subsequent calls dispatch through it.
+    /// </summary>
+    private IGameMode CreateMode()
     {
-        if (mainCamera != null)
-            mainCamera.backgroundColor = theme.backgroundColor;
-        if (_boardView != null)
-            _boardView.ApplyTheme(theme);
+        if (_isCoopMode)
+        {
+            var coop = gameObject.AddComponent<CoopMode>();
+            coop.Bind(this);
+            return coop;
+        }
+        var classic = gameObject.AddComponent<ClassicMode>();
+        classic.Bind(this);
+        return classic;
     }
 
-    private void OnSettingsOpenChanged(bool open)
-    {
-        if (_inputHandler != null)
-            _inputHandler.SetInputEnabled(!open);
-    }
+    // ---- Internal hooks for IGameMode implementations -----------------------
+    // These are the back-doors mode classes call into during phase 1 of the
+    // per-mode encapsulation refactor. Phase 2 will absorb most of these
+    // bodies into the mode classes themselves; for now they preserve the
+    // existing GameController logic verbatim.
 
-    private void Update()
+    /// <summary>Runs the co-op heartbeat / reconnect / per-player-timer ticks. Called by <see cref="CoopMode.Tick"/>.</summary>
+    internal void UpdateCoopRuntime()
     {
-        _coopClient?.Update();
+        // Note: the WebSocket message pump (_coopClient.Update) is driven
+        // unconditionally from GameController.Update so it runs during the
+        // loading window before this mode is constructed.
 
         // Co-op heartbeat loop (Phase 6). 15s cadence with current focus state
         // and last-input timestamp; the server uses these for AFK detection.
@@ -247,6 +269,98 @@ public sealed class GameController : MonoBehaviour
             _coopReconnectAt = 0f;
             _ = AttemptCoopReconnectAsync();
         }
+    }
+
+    /// <summary>Internal: HUD retry button so <see cref="CoopMode.OnHudWired"/> can hide it.</summary>
+    internal Button HudRetryButton => _retryBtn;
+
+    /// <summary>Internal: Board, for ClassicMode autosave / save-and-leave logic.</summary>
+    internal Board CurrentBoard => _board;
+
+    /// <summary>Internal: GameTimer, for ClassicMode save serialization.</summary>
+    internal GameTimer Timer => _timer;
+
+    /// <summary>Internal: ReplayRecorder, for ClassicMode save serialization.</summary>
+    internal ReplayRecorder Recorder => _recorder;
+
+    /// <summary>Internal: game ID assigned at session start.</summary>
+    internal string GameId => _gameId;
+
+    /// <summary>Internal: active board seed (resolved from save / GameSettings / random).</summary>
+    internal int ActiveSeed => _activeSeed;
+
+    /// <summary>Internal: board width.</summary>
+    internal int Width => _w;
+
+    /// <summary>Internal: board height.</summary>
+    internal int Height => _h;
+
+    /// <summary>Internal: max arrow length.</summary>
+    internal int MaxArrowLength => _maxLen;
+
+    /// <summary>Internal: inspection-phase duration.</summary>
+    internal float InspectionDuration => _inspectionDur;
+
+    /// <summary>Internal: live <see cref="InputHandler"/> after WireInput runs.</summary>
+    internal InputHandler ActiveInputHandler => _inputHandler;
+
+    /// <summary>Internal: HUD UIDocument, so modes can resolve their own elements.</summary>
+    internal UIDocument HudDocument => hudUIDocument;
+
+    /// <summary>Internal: triggers a same-mode scene reload (Ctrl+R / retry-confirmed).</summary>
+    internal void RequestQuickReset() => OnQuickReset();
+
+    /// <summary>Internal: returns to the main menu (Leave / topout).</summary>
+    internal void RequestReturnToModeSelect() => ReturnToModeSelect();
+
+    /// <summary>Internal: <see cref="OnCoopTap"/> wrapper so <see cref="CoopMode.TapAttemptHandler"/> can hand it to InputHandler.</summary>
+    internal bool OnCoopTapInternal(Cell cell, Vector3 tapWorld) => OnCoopTap(cell, tapWorld);
+
+    /// <summary>Internal: classic-mode victory wiring. Called by <see cref="ClassicMode.WireRunFlow"/>. Will move into ClassicMode in phase 2C.</summary>
+    internal void WireClassicVictory() => WireVictoryDefault();
+
+    /// <summary>
+    /// Stub for <see cref="ClassicMode.Setup"/>; phase 1 keeps the existing
+    /// <see cref="GenerateAndSetup"/> classic branch intact, so this is
+    /// unused. Phase 2 will move that branch's body here, and
+    /// <c>GenerateAndSetup</c> will become a thin coordinator that just
+    /// awaits <c>_mode.Setup(...)</c>.
+    /// </summary>
+    internal IEnumerator RunClassicSetupCoroutine(GameContext context)
+    {
+        yield break;
+    }
+
+    /// <summary>Stub mirror of <see cref="RunClassicSetupCoroutine"/> for co-op.</summary>
+    internal IEnumerator RunCoopSetupCoroutine(GameContext context)
+    {
+        yield break;
+    }
+
+    private void OnThemeChanged(VisualSettings theme)
+    {
+        if (mainCamera != null)
+            mainCamera.backgroundColor = theme.backgroundColor;
+        if (_boardView != null)
+            _boardView.ApplyTheme(theme);
+    }
+
+    private void OnSettingsOpenChanged(bool open)
+    {
+        if (_inputHandler != null)
+            _inputHandler.SetInputEnabled(!open);
+    }
+
+    private void Update()
+    {
+        // WebSocket message pump must run during the loading window too —
+        // CoopSetup waits on snapshot/hello messages that arrive via this pump
+        // before the mode is constructed. Kept outside the mode dispatch.
+        _coopClient?.Update();
+
+        // Per-mode tick: coop runs heartbeat / reconnect / player-timer here;
+        // future endless / pvp run their spawn timers here.
+        _mode?.Tick();
 
         // Tick FocusNavigator for modal keyboard nav (leave/cancel modals).
         if (_focusNavigator != null)
@@ -284,6 +398,11 @@ public sealed class GameController : MonoBehaviour
         // Check for co-op mode FIRST — it bypasses all solo parameter resolution.
         _coopLobbyCode = GameSettings.ConsumeActiveLobbyCode();
         _isCoopMode = !string.IsNullOrEmpty(_coopLobbyCode);
+
+        // Pick + bind the active mode. All per-frame and per-event mode-specific
+        // dispatch (Update tick, HUD tweaks, tap handler, run-flow wiring) goes
+        // through this from here on.
+        _mode = CreateMode();
 
         if (_isCoopMode)
         {
@@ -331,7 +450,10 @@ public sealed class GameController : MonoBehaviour
 
         if (hasSnapshot)
         {
-            _initialBoardSnapshot = priorData.GetSnapshotArrows();
+            // Hand the snapshot to the active mode (classic owns it for save
+            // serialization). RestoreBoard reads it back via the mode.
+            if (_mode is ClassicMode classic)
+                classic.SetInitialBoardSnapshot(priorData.GetSnapshotArrows());
             yield return RestoreBoard(priorData);
         }
         else
@@ -365,7 +487,9 @@ public sealed class GameController : MonoBehaviour
 
         WireHud();
         WireInput();
-        WireVictory();
+        // Mode owns the run-flow: classic wires VictoryController; coop is a
+        // no-op (server-driven completion); endless wires topout result.
+        _mode?.WireRunFlow();
     }
 
     // --- Co-op mode setup ---
@@ -742,7 +866,9 @@ public sealed class GameController : MonoBehaviour
 
         WireHud();
         WireInput();
-        // Skip WireVictory — co-op completion is handled by the server.
+        // Mode owns the run-flow: CoopMode.WireRunFlow is a no-op
+        // (server-driven completion).
+        _mode?.WireRunFlow();
     }
 
     private void OnCoopRemoteCleared(CoopSession.ClearedEvent evt)
@@ -1055,14 +1181,15 @@ public sealed class GameController : MonoBehaviour
 
     private IEnumerator RestoreBoard(ReplayData priorData)
     {
-        // _initialBoardSnapshot was populated from priorData.GetSnapshotArrows() in GenerateAndSetup.
-        int totalArrows = _initialBoardSnapshot.Count;
+        // Snapshot lives on ClassicMode (it owns save serialization).
+        var snapshot = (_mode is ClassicMode classic) ? classic.InitialBoardSnapshot : null;
+        int totalArrows = snapshot?.Count ?? 0;
         Debug.Log($"[GameController] RestoreBoard: restoring {totalArrows} arrows from snapshot");
         int totalSteps = totalArrows * 2;
         var restorer = BoardSetupHelper.RestoreBoardFromSnapshot(
             _board,
             _boardView,
-            _initialBoardSnapshot,
+            snapshot,
             FrameBudgetMs
         );
 
@@ -1232,9 +1359,14 @@ public sealed class GameController : MonoBehaviour
             $"[GameController] GenerateBoard complete: {_board.Arrows.Count} arrows, board={_w}x{_h}, seed={_activeSeed}"
         );
 
-        _initialBoardSnapshot = new List<List<Cell>>(_board.Arrows.Count);
-        foreach (Arrow arrow in _board.Arrows)
-            _initialBoardSnapshot.Add(new List<Cell>(arrow.Cells));
+        // Hand a fresh snapshot to ClassicMode for save serialization.
+        if (_mode is ClassicMode classic)
+        {
+            var snap = new List<List<Cell>>(_board.Arrows.Count);
+            foreach (Arrow arrow in _board.Arrows)
+                snap.Add(new List<Cell>(arrow.Cells));
+            classic.SetInitialBoardSnapshot(snap);
+        }
     }
 
     // --- Resume logic ---
@@ -1308,11 +1440,15 @@ public sealed class GameController : MonoBehaviour
         );
     }
 
+    /// <summary>
+    /// Phase-2 transitional shim: forwards <c>FinalizeSession</c> to the
+    /// active classic mode so the autosave/continue state lives in one
+    /// place. Coop never reaches here (its setup path doesn't call this).
+    /// </summary>
     private void FinalizeSession(ReplayData priorData)
     {
-        _initialArrowCount = _board.Arrows.Count;
-        _autosaveEnabled = !SaveManager.HasSave() || priorData != null;
-        _isContinuedGame = priorData != null;
+        if (_mode is ClassicMode classic)
+            classic.FinalizeSession(priorData);
     }
 
     // --- Timer and gameplay wiring ---
@@ -1348,9 +1484,8 @@ public sealed class GameController : MonoBehaviour
         _leaveModal.Cancelled += OnLeaveCancel;
         _leaveModal.Dismissed += OnLeaveDismiss;
 
-        _retryModal = new ConfirmModal(hudRoot.Q("retry-modal"), "Retry?", "Retry", "Cancel");
-        _retryModal.Confirmed += OnRetryConfirm;
-        _retryModal.Cancelled += OnRetryCancel;
+        // Retry modal is owned by ClassicMode (built in its OnHudWired).
+        // Coop never builds it because the retry button itself is hidden.
 
         if (_backBtn != null)
         {
@@ -1360,15 +1495,10 @@ public sealed class GameController : MonoBehaviour
 
         if (_retryBtn != null)
         {
-            if (_isCoopMode)
-            {
-                _retryBtn.style.display = DisplayStyle.None;
-            }
-            else
-            {
-                _retryBtn.clickable = new Clickable(() => { });
-                _retryBtn.clicked += OnRetryClicked;
-            }
+            // Default: wire retry → forward to active mode (only ClassicMode
+            // implements it; CoopMode hides the button entirely via OnHudWired).
+            _retryBtn.clickable = new Clickable(() => { });
+            _retryBtn.clicked += OnRetryClickedDispatch;
         }
 
         if (_timer != null)
@@ -1424,7 +1554,7 @@ public sealed class GameController : MonoBehaviour
                         Element = _retryBtn,
                         OnActivate = () =>
                         {
-                            OnRetryClicked();
+                            OnRetryClickedDispatch();
                             return true;
                         },
                     }
@@ -1460,6 +1590,9 @@ public sealed class GameController : MonoBehaviour
                     _focusNavigator.LinkBidi(backIdx, FocusNavigator.NavDir.Down, trailIdx);
             }
         }
+
+        // Per-mode HUD tweaks (e.g. CoopMode hides the retry button).
+        _mode?.OnHudWired();
     }
 
     private void WireInput()
@@ -1478,11 +1611,13 @@ public sealed class GameController : MonoBehaviour
             dragThreshold,
             _timer,
             _recorder,
-            OnArrowCleared,
+            // Mode-driven: classic autosave / nothing for coop.
+            onArrowCleared: () => _mode?.OnArrowCleared(),
             onQuickReset: OnQuickReset,
-            onQuickSave: OnQuickSave,
+            // Mode-driven: classic save-to-disk / null for coop.
+            onQuickSave: _mode?.OnQuickSaveHandler,
             onToggleTrail: ToggleTrail,
-            onTapAttempt: _isCoopMode ? (Func<Cell, Vector3, bool>)OnCoopTap : null,
+            onTapAttempt: _mode?.TapAttemptHandler,
             hudUIDocument: hudUIDocument
         );
 
@@ -1501,37 +1636,15 @@ public sealed class GameController : MonoBehaviour
         SceneNav.Replace("Game");
     }
 
-    private void OnRetryClicked()
+    /// <summary>
+    /// Dispatches the retry-button click to the active mode if it implements
+    /// retry behavior. ClassicMode shows the retry confirmation modal; coop
+    /// hides the button entirely so this never fires from coop.
+    /// </summary>
+    private void OnRetryClickedDispatch()
     {
-        if (HasAnyClearedArrows)
-        {
-            _retryModal?.Show();
-            if (_inputHandler != null)
-                _inputHandler.SetInputEnabled(false);
-        }
-        else
-        {
-            OnQuickReset();
-        }
-    }
-
-    private void OnRetryConfirm()
-    {
-        _retryModal?.Hide();
-        OnQuickReset();
-    }
-
-    private void OnRetryCancel()
-    {
-        _retryModal?.Hide();
-        if (_inputHandler != null)
-            _inputHandler.SetInputEnabled(true);
-    }
-
-    private void OnQuickSave()
-    {
-        if (_recorder != null)
-            SaveManager.Save(BuildReplayData());
+        if (_mode is ClassicMode classic)
+            classic.OnRetryClickedExternal();
     }
 
     private void OnEscape()
@@ -1549,7 +1662,7 @@ public sealed class GameController : MonoBehaviour
         if (_leaveModal == null)
             return;
 
-        if (WouldOverwriteDifferentSave)
+        if (_mode != null && _mode.WouldOverwriteDifferentSave)
         {
             _leaveModal.Reconfigure(
                 "Save before leaving?",
@@ -1571,17 +1684,21 @@ public sealed class GameController : MonoBehaviour
 
     private void OnLeaveConfirm()
     {
-        if (WouldOverwriteDifferentSave)
-            SaveAndLeave();
-        else if (_autosaveEnabled && (_isContinuedGame || HasAnyClearedArrows))
-            SaveAndLeave();
+        // Decision tree delegated to the active mode:
+        //  - "would overwrite different save" → SaveAndLeave (mode persists, then pop)
+        //  - "supports save AND has in-progress changes" → SaveAndLeave
+        //  - else → just leave
+        if (_mode != null && _mode.WouldOverwriteDifferentSave)
+            _mode.SaveAndLeave();
+        else if (_mode != null && _mode.SupportsSaveOnLeave && _mode.HasInProgressChanges)
+            _mode.SaveAndLeave();
         else
             ReturnToModeSelect();
     }
 
     private void OnLeaveCancel()
     {
-        if (WouldOverwriteDifferentSave)
+        if (_mode != null && _mode.WouldOverwriteDifferentSave)
             ReturnToModeSelect(); // "Leave without saving"
         else
             OnLeaveDismiss(); // "Stay"
@@ -1600,7 +1717,7 @@ public sealed class GameController : MonoBehaviour
         }
     }
 
-    private void WireVictory()
+    private void WireVictoryDefault()
     {
         if (
             victoryUIDocument == null
@@ -1608,6 +1725,12 @@ public sealed class GameController : MonoBehaviour
             || victoryUIDocument.rootVisualElement == null
         )
             return;
+
+        // BuildReplayData + autosave-enabled flag come from ClassicMode.
+        // (WireVictoryDefault is classic-only — coop skips victory wiring.)
+        ClassicMode classic = _mode as ClassicMode;
+        System.Func<ReplayData> buildReplay =
+            classic != null ? (System.Func<ReplayData>)classic.BuildReplayData : null;
 
         var victory = gameObject.AddComponent<VictoryController>();
         victory.Init(
@@ -1618,7 +1741,7 @@ public sealed class GameController : MonoBehaviour
             _h,
             _timer,
             hudUIDocument,
-            BuildReplayData
+            buildReplay
         );
         _boardView.LastArrowClearing += () =>
         {
@@ -1630,7 +1753,7 @@ public sealed class GameController : MonoBehaviour
                 _retryBtn.style.display = DisplayStyle.None;
             if (_recorder != null)
                 _recorder.RecordEndSolve();
-            if (_autosaveEnabled)
+            if (classic != null && classic.AutosaveEnabled)
                 SaveManager.Delete();
             victory.OnLastArrowClearing();
         };
@@ -1711,11 +1834,6 @@ public sealed class GameController : MonoBehaviour
 
     // --- Leave modal ---
 
-    private bool HasAnyClearedArrows => _board != null && _board.Arrows.Count < _initialArrowCount;
-
-    private bool WouldOverwriteDifferentSave =>
-        !_autosaveEnabled && HasAnyClearedArrows && SaveManager.HasSave();
-
     private void OnLeaveDismiss()
     {
         _leaveModal?.Hide();
@@ -1723,57 +1841,11 @@ public sealed class GameController : MonoBehaviour
             _inputHandler.SetInputEnabled(true);
     }
 
-    // --- Save ---
-
-    private void OnArrowCleared()
-    {
-        if (!_autosaveEnabled || _recorder == null || _timer == null)
-            return;
-
-        _clearsSinceLastSave++;
-        if (_clearsSinceLastSave >= AutosaveInterval)
-        {
-            _clearsSinceLastSave = 0;
-            int cleared = _initialArrowCount - _board.Arrows.Count;
-            Debug.Log(
-                $"[GameController] Autosave triggered: {cleared}/{_initialArrowCount} arrows cleared"
-            );
-            SaveManager.Save(BuildReplayData());
-        }
-    }
-
     private void ReturnToModeSelect()
     {
         // Stop reconnect attempts before tearing down the scene.
         _coopShouldReconnect = false;
         SceneNav.Pop();
-    }
-
-    private void SaveAndLeave()
-    {
-        if (_recorder != null && _timer != null)
-        {
-            _recorder.RecordSessionLeave();
-            Debug.Log(
-                $"[GameController] SaveAndLeave: saving game id={_gameId}, arrows remaining={_board?.Arrows.Count}"
-            );
-            SaveManager.Save(BuildReplayData());
-        }
-        ReturnToModeSelect();
-    }
-
-    private ReplayData BuildReplayData()
-    {
-        return _recorder.ToReplayData(
-            _gameId,
-            _activeSeed,
-            _w,
-            _h,
-            _maxLen,
-            _inspectionDur,
-            boardSnapshot: _initialBoardSnapshot,
-            gameVersion: UnityEngine.Application.version
-        );
     }
 
     // --- Utilities ---
