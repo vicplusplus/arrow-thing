@@ -127,12 +127,7 @@ public sealed class EndlessBoardSession
             bool found = false;
             for (int attempt = 0; attempt < maxAttempts; attempt++)
             {
-                bool placed = NativeGeneration.TryGenerateArrow(
-                    ref _state,
-                    _maxLength,
-                    ref _rng,
-                    centermostFirst: false
-                );
+                bool placed = NativeGeneration.TryGenerateArrow(ref _state, _maxLength, ref _rng);
                 if (!placed)
                     break; // pool exhausted
 

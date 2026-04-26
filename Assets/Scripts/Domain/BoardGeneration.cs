@@ -10,18 +10,8 @@ public static class BoardGeneration
     /// Incremental version of board filling using the portable NativeGeneration kernel.
     /// Places as many arrows as possible, yielding after each arrow for progress.
     /// Yields <see cref="GenerationPhase"/> values between phases.
-    ///
-    /// <paramref name="centermostFirst"/> selects head candidates by minimum
-    /// Chebyshev distance from the board center (with uniform random tie-break)
-    /// instead of uniformly at random. Produces a square-ring fill pattern.
-    /// Default is uniform random — preserves existing callers.
     /// </summary>
-    public static IEnumerator FillBoardIncremental(
-        Board board,
-        int maxLength,
-        int seed,
-        bool centermostFirst = false
-    )
+    public static IEnumerator FillBoardIncremental(Board board, int maxLength, int seed)
     {
         int maxPossibleArrows = board.Width * board.Height / 2;
 
@@ -40,7 +30,7 @@ public static class BoardGeneration
 
         while (created < maxPossibleArrows && state.candidateCount > 0)
         {
-            if (!NativeGeneration.TryGenerateArrow(ref state, maxLength, ref rng, centermostFirst))
+            if (!NativeGeneration.TryGenerateArrow(ref state, maxLength, ref rng))
                 break;
 
             // Extract arrow from scratch buffers

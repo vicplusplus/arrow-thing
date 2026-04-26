@@ -9,15 +9,4 @@ public static class TestBoardHelper
         var enumerator = BoardGeneration.FillBoardIncremental(board, maxLength, seed);
         while (enumerator.MoveNext()) { }
     }
-
-    public static void FillBoardCentermost(Board board, int maxLength, int seed)
-    {
-        var enumerator = BoardGeneration.FillBoardIncremental(
-            board,
-            maxLength,
-            seed,
-            centermostFirst: true
-        );
-        while (enumerator.MoveNext()) { }
-    }
 }

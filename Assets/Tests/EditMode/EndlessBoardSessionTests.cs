@@ -13,15 +13,15 @@ public class EndlessBoardSessionTests
     private static Board BuildFilledBoard(int w, int h, int maxLength, int seed)
     {
         var board = new Board(w, h);
-        var e = BoardGeneration.FillBoardIncremental(board, maxLength, seed, centermostFirst: true);
+        var e = BoardGeneration.FillBoardIncremental(board, maxLength, seed);
         while (e.MoveNext()) { }
         return board;
     }
 
     // Saturates a board then clears ~25% of arrows to leave spawn room.
-    // Mirrors realistic mid-game endless state. A freshly-filled board from
-    // centermost-first generation is typically saturated to topout; these
-    // tests need headroom for new ghosts.
+    // Mirrors realistic mid-game endless state. A freshly-filled board is
+    // typically saturated to topout; these tests need headroom for new
+    // ghosts.
     private static Board BuildMidGameBoard(int w, int h, int maxLength, int seed)
     {
         var board = BuildFilledBoard(w, h, maxLength, seed);

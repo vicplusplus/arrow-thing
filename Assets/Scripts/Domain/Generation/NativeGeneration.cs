@@ -98,16 +98,11 @@ public static class NativeGeneration
     /// Attempts to generate one arrow. On success, the arrow's cells are written to
     /// <c>state.scratchCellsX/Y[0..state.lastArrowCellCount]</c> and the arrow is
     /// placed into native state (occupancy, bitsets, ray index). Returns true on success.
-    ///
-    /// <paramref name="centermostFirst"/> selects the head candidate by minimum
-    /// Chebyshev distance from the board center instead of uniformly at random.
-    /// Ties are broken uniformly at random. Produces a square-ring fill pattern.
     /// </summary>
     public static bool TryGenerateArrow(
         ref NativeGenerationState state,
         int maxLength,
-        ref PortableRandom rng,
-        bool centermostFirst = false
+        ref PortableRandom rng
     )
     {
         int targetLength = rng.NextInt(MinArrowLength, maxLength + 1);
@@ -115,9 +110,7 @@ public static class NativeGeneration
 
         while (state.candidateCount > 0)
         {
-            int headIndex = centermostFirst
-                ? SelectCentermostCandidate(ref state, ref rng)
-                : rng.NextInt(state.candidateCount);
+            int headIndex = rng.NextInt(state.candidateCount);
             NativeArrowHeadData candidate = state.candidates[headIndex];
 
             // Reject if head or next occupied
@@ -1049,73 +1042,6 @@ public static class NativeGeneration
                 dy = 0;
                 break;
         }
-    }
-
-    /// <summary>
-    /// Scans the candidate pool for the minimum Chebyshev distance from the board
-    /// center (integer "twice-Chebyshev" — avoids fractional center for even-sized
-    /// boards), then picks one candidate uniformly at random among ties.
-    ///
-    /// O(N) per call in candidate count. Not a hot path for endless-mode spawning
-    /// (one arrow per spawn tick), and acceptable for initial fill: on a 20x20
-    /// board the candidate pool is ~1600 entries and fills complete in under 100
-    /// arrows, so total work is bounded.
-    /// </summary>
-    private static int SelectCentermostCandidate(
-        ref NativeGenerationState state,
-        ref PortableRandom rng
-    )
-    {
-        int c2x = state.boardWidth - 1;
-        int c2y = state.boardHeight - 1;
-
-        // First pass: find minimum twice-Chebyshev distance, count ties.
-        int minDist = int.MaxValue;
-        int tieCount = 0;
-        for (int i = 0; i < state.candidateCount; i++)
-        {
-            NativeArrowHeadData c = state.candidates[i];
-            int dx = (c.headX << 1) - c2x;
-            int dy = (c.headY << 1) - c2y;
-            if (dx < 0)
-                dx = -dx;
-            if (dy < 0)
-                dy = -dy;
-            int d = dx > dy ? dx : dy;
-            if (d < minDist)
-            {
-                minDist = d;
-                tieCount = 1;
-            }
-            else if (d == minDist)
-            {
-                tieCount++;
-            }
-        }
-
-        // Second pass: pick the kth tied candidate.
-        int k = rng.NextInt(tieCount);
-        int seen = 0;
-        for (int i = 0; i < state.candidateCount; i++)
-        {
-            NativeArrowHeadData c = state.candidates[i];
-            int dx = (c.headX << 1) - c2x;
-            int dy = (c.headY << 1) - c2y;
-            if (dx < 0)
-                dx = -dx;
-            if (dy < 0)
-                dy = -dy;
-            int d = dx > dy ? dx : dy;
-            if (d == minDist)
-            {
-                if (seen == k)
-                    return i;
-                seen++;
-            }
-        }
-
-        // Unreachable: tieCount > 0 guarantees a match.
-        return 0;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
