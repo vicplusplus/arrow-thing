@@ -73,6 +73,13 @@ public sealed class GameController : MonoBehaviour
     [SerializeField]
     private float loadingFadeDuration = 0.3f;
 
+    [Header("Per-Mode HUD Assets")]
+    [Tooltip(
+        "Endless-mode HUD overlay (garbage meter + cleared count). Cloned into the shared HUD root by EndlessModeStrategy at run start. Leave unassigned to disable endless-specific HUD."
+    )]
+    [SerializeField]
+    private VisualTreeAsset endlessHudAsset;
+
     // Game state
     private Board _board;
     private BoardView _boardView;
@@ -91,6 +98,13 @@ public sealed class GameController : MonoBehaviour
     private bool _isContinuedGame;
     private int _clearsSinceLastSave;
     private const int AutosaveInterval = 10;
+
+    /// <summary>
+    /// Target initial occupancy for endless mode: fills until ~70% of cells
+    /// are occupied so the player has visible wiggle room to start. See
+    /// docs/TODO.md (Endless Mode → Board) for rationale.
+    /// </summary>
+    private const float EndlessInitialOccupancy = 0.70f;
     private List<List<Cell>> _initialBoardSnapshot;
     private const float FrameBudgetMs = 12f;
 
@@ -140,6 +154,13 @@ public sealed class GameController : MonoBehaviour
     /// <summary>Set to true once the victory sequence begins. Blocks Escape/leave modal.</summary>
     private bool _victoryStarted;
 
+    // Per-mode hook surface (see Assets/Scripts/View/Scene/GameModeStrategies/).
+    // Centralizes per-frame and per-event branching that previously lived as
+    // scattered `if (_isCoopMode)` blocks in Update / WireHud / WireInput /
+    // WireVictory. Selected once per run after the board is created and
+    // before any wiring runs.
+    private IGameModeStrategy _modeStrategy;
+
     // Loading overlay state — driven by Update()
     private VisualElement _loadingOverlay;
     private VisualElement _loadingBarFill;
@@ -184,6 +205,7 @@ public sealed class GameController : MonoBehaviour
 
     private void OnDestroy()
     {
+        _modeStrategy?.Dispose();
         _focusNavigator?.Dispose();
         _coopResults?.Dispose();
         _coopSidebar?.Dispose();
@@ -192,6 +214,23 @@ public sealed class GameController : MonoBehaviour
         _coopClient?.Dispose();
         SettingsController.IsOpenChanged -= OnSettingsOpenChanged;
         ThemeManager.ThemeChanged -= OnThemeChanged;
+    }
+
+    /// <summary>
+    /// Picks the per-mode strategy based on co-op activation and
+    /// <see cref="GameSettings.Mode"/>. Co-op takes precedence (legacy signal
+    /// via <c>GameSettings.ActiveLobbyCode</c> consumed earlier in
+    /// <see cref="GenerateAndSetup"/>); otherwise the explicit mode flag wins.
+    /// </summary>
+    private IGameModeStrategy CreateModeStrategy()
+    {
+        if (_isCoopMode)
+            return new CoopModeStrategy(this);
+        return GameSettings.Mode switch
+        {
+            GameMode.Endless => new EndlessModeStrategy(this),
+            _ => new ClassicModeStrategy(this),
+        };
     }
 
     private void OnThemeChanged(VisualSettings theme)
@@ -210,43 +249,16 @@ public sealed class GameController : MonoBehaviour
 
     private void Update()
     {
+        // WebSocket message pump must run during the loading window too —
+        // CoopSetup waits on snapshot/hello messages that arrive via this pump
+        // before the strategy is constructed. Kept outside the strategy
+        // dispatch for that reason.
         _coopClient?.Update();
 
-        // Co-op heartbeat loop (Phase 6). 15s cadence with current focus state
-        // and last-input timestamp; the server uses these for AFK detection.
-        if (_coopSession != null && _coopClient != null && _coopClient.IsConnected)
-        {
-            _heartbeatAccum += Time.unscaledDeltaTime;
-            if (_heartbeatAccum >= HeartbeatIntervalSec)
-            {
-                _heartbeatAccum = 0f;
-                var lastInput =
-                    _inputHandler != null ? _inputHandler.LastInputTimeUtc : DateTime.UtcNow;
-                _ = _coopClient.SendAsync(CoopMessage.Heartbeat(Application.isFocused, lastInput));
-            }
-        }
-
-        // Per-player solve timer (Phase 7). Ticks only while focused; emits
-        // timer_update every 5 s so other players see our time advance.
-        if (_coopPlayerTimer != null)
-            _coopPlayerTimer.Tick(Time.unscaledDeltaTime);
-
-        // Auto-reconnect driver: fires a single reconnect attempt when the
-        // backoff timer expires. Additional retries are scheduled by the
-        // Disconnected handler when a reconnect itself fails.
-        if (
-            _coopShouldReconnect
-            && _coopClient != null
-            && !_coopClient.IsConnected
-            && !_coopReconnectInFlight
-            && _coopReconnectAt > 0f
-            && Time.unscaledTime >= _coopReconnectAt
-        )
-        {
-            _coopReconnectInFlight = true;
-            _coopReconnectAt = 0f;
-            _ = AttemptCoopReconnectAsync();
-        }
+        // Per-mode tick (co-op heartbeat / reconnect / player-timer; endless
+        // spawn scheduling in phase 4). Replaces the previous inline
+        // `if (_isCoopMode)` blocks.
+        _modeStrategy?.Update();
 
         // Tick FocusNavigator for modal keyboard nav (leave/cancel modals).
         if (_focusNavigator != null)
@@ -363,9 +375,13 @@ public sealed class GameController : MonoBehaviour
             SetupTimer(false, 0.0);
         }
 
+        // Mode strategy must be created BEFORE wiring so per-mode hooks
+        // (HUD tweaks, tap handler, victory wiring) can dispatch through it.
+        _modeStrategy = CreateModeStrategy();
+
         WireHud();
         WireInput();
-        WireVictory();
+        _modeStrategy.WireVictory();
     }
 
     // --- Co-op mode setup ---
@@ -740,9 +756,13 @@ public sealed class GameController : MonoBehaviour
         if (hudUIDocument != null && hudUIDocument.rootVisualElement != null)
             _coopSidebar = new CoopSidebar(_coopSession, hudUIDocument.rootVisualElement);
 
+        // Mode strategy must exist before wiring so per-mode hooks dispatch.
+        // For co-op, strategy.WireVictory() is intentionally empty (server-driven completion).
+        _modeStrategy = CreateModeStrategy();
+
         WireHud();
         WireInput();
-        // Skip WireVictory — co-op completion is handled by the server.
+        _modeStrategy.WireVictory();
     }
 
     private void OnCoopRemoteCleared(CoopSession.ClearedEvent evt)
@@ -893,6 +913,117 @@ public sealed class GameController : MonoBehaviour
     }
 
     private const int ReconnectToastGiveUpAttempt = 6;
+
+    /// <summary>
+    /// Per-frame co-op runtime tick: WebSocket pump, heartbeat timer,
+    /// per-player solve timer, auto-reconnect driver. Extracted from the
+    /// original inline <c>Update</c> so <see cref="CoopModeStrategy"/> can
+    /// drive it without GameController knowing about co-op specifics.
+    /// </summary>
+    internal void UpdateCoopRuntime()
+    {
+        // Note: the WebSocket message pump (_coopClient.Update) is driven
+        // unconditionally from GameController.Update so it runs during the
+        // loading window before this strategy is constructed.
+
+        // Co-op heartbeat loop (Phase 6). 15s cadence with current focus state
+        // and last-input timestamp; the server uses these for AFK detection.
+        if (_coopSession != null && _coopClient != null && _coopClient.IsConnected)
+        {
+            _heartbeatAccum += Time.unscaledDeltaTime;
+            if (_heartbeatAccum >= HeartbeatIntervalSec)
+            {
+                _heartbeatAccum = 0f;
+                var lastInput =
+                    _inputHandler != null ? _inputHandler.LastInputTimeUtc : DateTime.UtcNow;
+                _ = _coopClient.SendAsync(CoopMessage.Heartbeat(Application.isFocused, lastInput));
+            }
+        }
+
+        // Per-player solve timer (Phase 7). Ticks only while focused; emits
+        // timer_update every 5 s so other players see our time advance.
+        if (_coopPlayerTimer != null)
+            _coopPlayerTimer.Tick(Time.unscaledDeltaTime);
+
+        // Auto-reconnect driver: fires a single reconnect attempt when the
+        // backoff timer expires. Additional retries are scheduled by the
+        // Disconnected handler when a reconnect itself fails.
+        if (
+            _coopShouldReconnect
+            && _coopClient != null
+            && !_coopClient.IsConnected
+            && !_coopReconnectInFlight
+            && _coopReconnectAt > 0f
+            && Time.unscaledTime >= _coopReconnectAt
+        )
+        {
+            _coopReconnectInFlight = true;
+            _coopReconnectAt = 0f;
+            _ = AttemptCoopReconnectAsync();
+        }
+    }
+
+    /// <summary>
+    /// Internal accessor for the HUD retry button so <see cref="CoopModeStrategy"/>
+    /// can hide it without GameController knowing what HUD tweaks each mode wants.
+    /// </summary>
+    internal Button HudRetryButton => _retryBtn;
+
+    /// <summary>Internal accessors used by <see cref="EndlessModeStrategy"/> to wire its session.</summary>
+    internal Board CurrentBoard => _board;
+
+    /// <summary>Internal accessor: BoardView. See <see cref="EndlessModeStrategy"/>.</summary>
+    internal BoardView CurrentBoardView => _boardView;
+
+    /// <summary>Internal accessor: max arrow length for spawn generation. See <see cref="EndlessModeStrategy"/>.</summary>
+    internal int MaxArrowLength => _maxLen;
+
+    /// <summary>Internal accessor: spawn RNG seed for endless mode (derived from the run's active seed).</summary>
+    internal int ActiveSeed => _activeSeed;
+
+    /// <summary>Internal accessor: HUD UIDocument so per-mode UI can mount onto it.</summary>
+    internal UIDocument HudDocument => hudUIDocument;
+
+    /// <summary>Internal accessor: Victory UIDocument so per-mode result screens can mount onto it.</summary>
+    internal UIDocument VictoryDocument => victoryUIDocument;
+
+    /// <summary>Internal accessor: main camera, so per-mode controllers can modulate its clear color (e.g. endless danger tint).</summary>
+    internal Camera MainCamera => mainCamera;
+
+    /// <summary>Internal accessor: endless-mode HUD overlay UXML asset (cloned into HUD root by strategy).</summary>
+    internal VisualTreeAsset EndlessHudAsset => endlessHudAsset;
+
+    /// <summary>Internal accessor: shared HUD timer-label so endless mode can hide it (timer is classic-only).</summary>
+    internal Label HudTimerLabel => _timerLabel;
+
+    /// <summary>
+    /// Disables gameplay input (taps, drags, keyboard nav) and hides the
+    /// in-game HUD buttons (back / retry / trail toggle). Mirrors the cleanup
+    /// done by the classic <see cref="WireVictoryDefault"/> handler when the
+    /// last arrow clears, exposed for end-of-run sequences in modes that don't
+    /// route through that handler (currently endless mode topout).
+    /// Idempotent — safe to call repeatedly.
+    /// </summary>
+    internal void DisableGameplayHudAndInput()
+    {
+        _victoryStarted = true;
+        if (_inputHandler != null)
+            _inputHandler.SetInputEnabled(false);
+        if (_backBtn != null)
+            _backBtn.style.display = DisplayStyle.None;
+        if (_retryBtn != null)
+            _retryBtn.style.display = DisplayStyle.None;
+        if (_trailToggleBtn != null)
+            _trailToggleBtn.style.display = DisplayStyle.None;
+    }
+
+    /// <summary>
+    /// Internal exposure of <see cref="OnCoopTap"/> so
+    /// <see cref="CoopModeStrategy.TapAttemptHandler"/> can hand it to
+    /// <see cref="InputHandler"/>. Marked internal rather than public to limit
+    /// the blast radius — only same-assembly strategies can wire this up.
+    /// </summary>
+    internal bool OnCoopTapInternal(Cell cell, Vector3 tapWorld) => OnCoopTap(cell, tapWorld);
 
     private async Task AttemptCoopReconnectAsync()
     {
@@ -1081,7 +1212,22 @@ public sealed class GameController : MonoBehaviour
 
     private IEnumerator GenerateBoard()
     {
-        var generator = BoardGeneration.FillBoardIncremental(_board, _maxLen, _activeSeed);
+        // Endless mode: centermost-first fill biased to the center, capped at
+        // ~70% occupancy to leave initial wiggle room. Classic mode keeps the
+        // existing uniform-random fill-to-saturation behavior.
+        bool centermostFirst = GameSettings.Mode == GameMode.Endless;
+        int targetCells =
+            GameSettings.Mode == GameMode.Endless
+                ? Mathf.RoundToInt(_w * _h * EndlessInitialOccupancy)
+                : 0;
+        var generator = BoardGeneration.FillBoardIncremental(
+            _board,
+            _maxLen,
+            _activeSeed,
+            centermostFirst,
+            targetCells,
+            shortBiased: GameSettings.Mode == GameMode.Endless
+        );
 
         // Phase-weighted progress (shared with the server generation worker
         // via GenerationProgress in the domain layer). Client has an extra
@@ -1360,19 +1506,18 @@ public sealed class GameController : MonoBehaviour
 
         if (_retryBtn != null)
         {
-            if (_isCoopMode)
-            {
-                _retryBtn.style.display = DisplayStyle.None;
-            }
-            else
-            {
-                _retryBtn.clickable = new Clickable(() => { });
-                _retryBtn.clicked += OnRetryClicked;
-            }
+            // Default: wire retry. Strategies (e.g. CoopModeStrategy) may hide
+            // it via OnHudWired() below.
+            _retryBtn.clickable = new Clickable(() => { });
+            _retryBtn.clicked += OnRetryClicked;
         }
 
         if (_timer != null)
         {
+            // Default classic behavior. Mode strategies can override in
+            // OnHudWired (e.g. EndlessModeStrategy hides the timer label
+            // and EndlessModeController displays cleared-count in its own
+            // overlay element from EndlessHud.uxml).
             var timerView = gameObject.AddComponent<GameTimerView>();
             timerView.Init(_timer, hudUIDocument, inspectionWarningThreshold);
         }
@@ -1460,6 +1605,9 @@ public sealed class GameController : MonoBehaviour
                     _focusNavigator.LinkBidi(backIdx, FocusNavigator.NavDir.Down, trailIdx);
             }
         }
+
+        // Per-mode HUD tweaks (e.g. CoopModeStrategy hides the retry button).
+        _modeStrategy?.OnHudWired();
     }
 
     private void WireInput()
@@ -1482,7 +1630,7 @@ public sealed class GameController : MonoBehaviour
             onQuickReset: OnQuickReset,
             onQuickSave: OnQuickSave,
             onToggleTrail: ToggleTrail,
-            onTapAttempt: _isCoopMode ? (Func<Cell, Vector3, bool>)OnCoopTap : null,
+            onTapAttempt: _modeStrategy?.TapAttemptHandler,
             hudUIDocument: hudUIDocument
         );
 
@@ -1600,7 +1748,15 @@ public sealed class GameController : MonoBehaviour
         }
     }
 
-    private void WireVictory()
+    /// <summary>
+    /// Default victory wiring: instantiate <see cref="VictoryController"/> and
+    /// hook it to <see cref="BoardView.LastArrowClearing"/> and
+    /// <see cref="BoardView.BoardCleared"/>. Called by
+    /// <see cref="ClassicModeStrategy.WireVictory"/>; co-op skips this entirely
+    /// (server-driven completion); endless will wire its topout result here in
+    /// phase 4.
+    /// </summary>
+    internal void WireVictoryDefault()
     {
         if (
             victoryUIDocument == null

@@ -409,6 +409,9 @@ public sealed class MainMenuController : NavigableScene
         _presetXLarge.clicked += () => SelectPreset(100, 100);
         _presetCustom.clicked += SelectCustom;
         root.Q<Button>("start-btn").clicked += OnStartGame;
+        var endlessBtn = root.Q<Button>("endless-btn");
+        if (endlessBtn != null)
+            endlessBtn.clicked += OnStartEndless;
 
         // Restore selection from GameSettings.
         if (GameSettings.IsSet)
@@ -798,6 +801,18 @@ public sealed class MainMenuController : NavigableScene
     private void OnStartGame()
     {
         GameSettings.Apply(_selectedWidth, _selectedHeight);
+        GameSettings.Mode = GameMode.Classic;
+        SceneNav.Push("Game");
+    }
+
+    /// <summary>
+    /// Endless mode entry: same size selection but mode flag flipped so
+    /// GameController routes through <see cref="EndlessModeStrategy"/>.
+    /// </summary>
+    private void OnStartEndless()
+    {
+        GameSettings.Apply(_selectedWidth, _selectedHeight);
+        GameSettings.Mode = GameMode.Endless;
         SceneNav.Push("Game");
     }
 

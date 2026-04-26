@@ -10,8 +10,27 @@ public static class BoardGeneration
     /// Incremental version of board filling using the portable NativeGeneration kernel.
     /// Places as many arrows as possible, yielding after each arrow for progress.
     /// Yields <see cref="GenerationPhase"/> values between phases.
+    ///
+    /// <paramref name="centermostFirst"/> selects head candidates by minimum
+    /// Chebyshev distance from the board center (with uniform random tie-break)
+    /// instead of uniformly at random. Produces a square-ring fill pattern for
+    /// the endless mode. Default is uniform random — preserves existing callers.
+    ///
+    /// <paramref name="targetCellCount"/> caps the fill at approximately the
+    /// given occupied-cell count. 0 (default) means fill until the generator
+    /// exhausts (saturation). Endless mode uses ~70% of board area to leave
+    /// initial wiggle room. Stops as soon as occupancy reaches the target —
+    /// the actual final count may overshoot slightly because the last arrow's
+    /// length isn't known until it's placed.
     /// </summary>
-    public static IEnumerator FillBoardIncremental(Board board, int maxLength, int seed)
+    public static IEnumerator FillBoardIncremental(
+        Board board,
+        int maxLength,
+        int seed,
+        bool centermostFirst = false,
+        int targetCellCount = 0,
+        bool shortBiased = false
+    )
     {
         int maxPossibleArrows = board.Width * board.Height / 2;
 
@@ -30,7 +49,15 @@ public static class BoardGeneration
 
         while (created < maxPossibleArrows && state.candidateCount > 0)
         {
-            if (!NativeGeneration.TryGenerateArrow(ref state, maxLength, ref rng))
+            if (
+                !NativeGeneration.TryGenerateArrow(
+                    ref state,
+                    maxLength,
+                    ref rng,
+                    centermostFirst,
+                    shortBiased
+                )
+            )
                 break;
 
             // Extract arrow from scratch buffers
@@ -46,6 +73,10 @@ public static class BoardGeneration
             board._nativeRemainingCandidates = state.candidateCount;
             created++;
             yield return null;
+
+            // Endless-mode early-stop: target occupancy reached.
+            if (targetCellCount > 0 && board.OccupiedCellCount >= targetCellCount)
+                break;
         }
 
         // Copy generation state to Board's managed fields for compaction

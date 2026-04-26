@@ -1,0 +1,18 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <Style src="../Shared/Shared.uss" />
+    <Style src="EndlessHud.uss" />
+
+    <!-- Endless-mode HUD additions. Cloned into the shared HUD root by
+         EndlessModeStrategy at run start. No other game mode references
+         these elements; safe to add/remove freely without affecting
+         classic or co-op. -->
+
+    <!-- Garbage meter: vertical bar on the left, populated by
+         EndlessModeController.RebuildMeterUI. Picking ignored so it
+         doesn't intercept board taps. -->
+    <ui:VisualElement name="endless-meter" class="endless-meter" picking-mode="Ignore" />
+
+    <!-- Cleared-arrow counter (replaces the timer in the lower-left for
+         endless mode). EndlessModeController writes the count each frame. -->
+    <ui:Label name="endless-clears-label" class="endless-clears-label" text="0" />
+</ui:UXML>

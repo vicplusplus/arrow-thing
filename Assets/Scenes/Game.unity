@@ -187,7 +187,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2b356203ee21fba428ac4e24d888c2ab, type: 3}
   m_Name: 
   m_EditorClassIdentifier: ArrowThing::UIThemeApplier
-  visualSettings: {fileID: 11400000, guid: f7b34a78b24c8fb408fadddec598eca5, type: 2}
 --- !u!1 &600507207
 GameObject:
   m_ObjectHideFlags: 0
@@ -409,7 +408,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2b356203ee21fba428ac4e24d888c2ab, type: 3}
   m_Name: 
   m_EditorClassIdentifier: ArrowThing::UIThemeApplier
-  visualSettings: {fileID: 11400000, guid: f7b34a78b24c8fb408fadddec598eca5, type: 2}
 --- !u!1 &1767663918
 GameObject:
   m_ObjectHideFlags: 0
@@ -441,7 +439,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: ArrowThing::GameController
   visualSettings: {fileID: 11400000, guid: f7b34a78b24c8fb408fadddec598eca5, type: 2}
   mainCamera: {fileID: 600507209}
-  inputActions: {fileID: -944628639613478452, guid: 2bcd2660ca9b64942af0de543d8d7100, type: 3}
   victoryUIDocument: {fileID: 338058734}
   hudUIDocument: {fileID: 1011308178}
   inspectionDuration: 15
@@ -449,11 +446,11 @@ MonoBehaviour:
   dragThresholdPixels: 20
   boardWidth: 20
   boardHeight: 20
-  minArrowLength: 2
   maxArrowLength: 30
   useRandomSeed: 1
   seed: 69
   loadingFadeDuration: 0.3
+  endlessHudAsset: {fileID: 9197481963319205126, guid: 7b77cae29738156448697e377095df9d, type: 3}
 --- !u!4 &1767663920
 Transform:
   m_ObjectHideFlags: 0

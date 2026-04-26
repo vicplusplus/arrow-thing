@@ -57,6 +57,27 @@ public struct NativeGenerationState
     public int[] scratchCellsY;
     public int lastArrowCellCount;
 
+    // Generation index of the just-placed arrow. With slot reuse via
+    // freeSlots, this isn't necessarily nextGenIndex-1, so callers must read
+    // this field instead of inferring from nextGenIndex.
+    public int lastPlacedIndex;
+
+    // Number of forward dependencies of the just-placed arrow that are
+    // PERPENDICULAR to it (different orientation parity). Trivial collinear
+    // deps don't contribute. Used by endless mode to weight garbage points
+    // by how much "cross-traffic" each arrow introduces — collinear chains
+    // are easy and cheap; crossings are the interesting puzzle.
+    public int lastPlacedPerpDeps;
+
+    // Free-slot reuse stack. When an arrow is removed (endless mode), its
+    // generation-index slot is pushed here; PlaceArrow pops from the stack
+    // before falling back to nextGenIndex++. Without this, nextGenIndex grows
+    // unbounded across an endless run and overruns bitsetWords (capped at
+    // maxArrows = w*h/2). Stack capacity = maxArrows: at most that many
+    // simultaneously-live arrows can exist on the board.
+    public int[] freeSlots;
+    public int freeSlotCount;
+
     public NativeGenerationState(int width, int height)
     {
         boardWidth = width;
@@ -106,6 +127,11 @@ public struct NativeGenerationState
         int maxLen = width * height;
         scratchCellsX = new int[maxLen];
         scratchCellsY = new int[maxLen];
+        lastPlacedIndex = -1;
+        lastPlacedPerpDeps = 0;
+
+        freeSlots = new int[maxArrows];
+        freeSlotCount = 0;
     }
 
     public void InitializeCandidates()

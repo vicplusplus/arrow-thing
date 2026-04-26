@@ -377,6 +377,10 @@ public sealed class VictoryController : MonoBehaviour
         // Clear stale resume state so the new game generates a fresh board
         // instead of trying to resume the just-completed save data.
         GameSettings.Apply(_boardWidth, _boardHeight);
+        // Defensive: VictoryController is classic-only, but Mode is a static
+        // singleton — explicitly pin it so a Play Again can never inherit a
+        // stale Endless flag from a previous run in the same process.
+        GameSettings.Mode = GameMode.Classic;
         SceneNav.Replace("Game");
     }
 

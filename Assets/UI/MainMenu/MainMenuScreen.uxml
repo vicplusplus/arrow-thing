@@ -69,6 +69,7 @@
             <ui:VisualElement name="start-row" class="play-choice-row">
                 <ui:Button name="start-btn" class="menu-btn start-btn play-choice-btn" text="Start" />
                 <ui:Button name="continue-btn" class="menu-btn continue-btn play-choice-btn screen--hidden" text="Continue" />
+                <ui:Button name="endless-btn" class="menu-btn play-choice-btn" text="Endless" />
             </ui:VisualElement>
         </ui:VisualElement>
 

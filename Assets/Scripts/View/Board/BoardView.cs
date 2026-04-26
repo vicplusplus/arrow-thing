@@ -54,6 +54,25 @@ public sealed class BoardView : MonoBehaviour
     public event System.Action TrailAutoOff;
 
     /// <summary>
+    /// Hook for routing real-arrow removal through a wrapper. Defaults to a
+    /// direct <see cref="Board.RemoveArrow"/>. Endless mode overrides this with
+    /// <see cref="EndlessBoardSession.ClearRealArrow"/> so the session's
+    /// long-lived <see cref="NativeGenerationState"/> stays in sync (the
+    /// cleared arrow's bitset row is zeroed and its slot is freed for future
+    /// ghost spawns). Set via <see cref="SetArrowRemover"/>.
+    /// </summary>
+    private System.Action<Arrow> _arrowRemover;
+
+    /// <summary>
+    /// Overrides the default arrow-removal behavior. Pass null to restore the
+    /// default (direct <see cref="Board.RemoveArrow"/>).
+    /// </summary>
+    public void SetArrowRemover(System.Action<Arrow> remover)
+    {
+        _arrowRemover = remover;
+    }
+
+    /// <summary>
     /// When true, arrow trail overlay stays visible after an arrow is cleared
     /// instead of auto-hiding. Controlled via Settings > Gameplay.
     /// </summary>
@@ -208,6 +227,38 @@ public sealed class BoardView : MonoBehaviour
     }
 
     /// <summary>
+    /// Picks a deterministic palette color for an arrow not yet in the map-
+    /// coloring graph (e.g. an endless-mode pending arrow) and applies it to
+    /// the arrow's view. The color is chosen by hashing the arrow's head cell
+    /// so a given pending arrow always pulses the same color, even across
+    /// frames. When the pending commits and <see cref="ApplyColoring"/> runs,
+    /// the proper graph-coloring algorithm may reassign a different color —
+    /// the visual change happens at the moment alpha goes opaque, which reads
+    /// as "now solid" rather than as a glitch.
+    /// </summary>
+    public void AssignFallbackColor(Arrow arrow)
+    {
+        if (_settings.arrowPalette == null || _settings.arrowPalette.Count == 0)
+            return;
+        int idx =
+            (Mathf.Abs(arrow.HeadCell.X * 73856093 ^ arrow.HeadCell.Y * 19349663))
+            % _settings.arrowPalette.Count;
+        Color c = _settings.arrowPalette[idx];
+        if (_useCulling)
+        {
+            _arrowColors[arrow] = c;
+            if (_arrowChunks.TryGetValue(arrow, out var keys))
+                foreach (int key in keys)
+                    if (_chunks.TryGetValue(key, out var chunk))
+                        chunk.SetArrowColor(arrow, c);
+        }
+        else if (_arrowViews.TryGetValue(arrow, out ArrowView view))
+        {
+            view.SetBaseColor(c, c);
+        }
+    }
+
+    /// <summary>
     /// Applies map-coloring palette to all current arrow views.
     /// </summary>
     public void ApplyColoring()
@@ -266,7 +317,10 @@ public sealed class BoardView : MonoBehaviour
         }
 
         _arrowViews.Remove(arrow);
-        _board.RemoveArrow(arrow);
+        if (_arrowRemover != null)
+            _arrowRemover(arrow);
+        else
+            _board.RemoveArrow(arrow);
         _clearedCount++;
         bool wasFirst = _clearedCount == 1;
         bool wasLast = _board.Arrows.Count == 0;
@@ -311,7 +365,10 @@ public sealed class BoardView : MonoBehaviour
         // Promote to interaction view for animation, then remove from chunks.
         ArrowView animView = PromoteToInteractionView(arrow);
         RemoveArrowFromChunks(arrow);
-        _board.RemoveArrow(arrow);
+        if (_arrowRemover != null)
+            _arrowRemover(arrow);
+        else
+            _board.RemoveArrow(arrow);
         _clearedCount++;
         bool wasFirst = _clearedCount == 1;
         bool wasLast = _board.Arrows.Count == 0;

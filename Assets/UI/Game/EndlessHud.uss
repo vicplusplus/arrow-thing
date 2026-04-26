@@ -1,0 +1,49 @@
+/* Endless-mode HUD styles. Loaded by EndlessHud.uxml. Owned entirely by
+ * endless mode; no other mode references these classes.
+ */
+
+.endless-meter {
+    position: absolute;
+    left: 16px;
+    top: 80px;
+    bottom: 80px;
+    width: 28px;
+    flex-direction: column-reverse;
+    background-color: rgba(0, 0, 0, 0.35);
+    border-width: 2px;
+    border-color: rgb(50, 50, 50);
+    padding: 2px;
+}
+
+.endless-meter-segment {
+    height: 12px;
+    margin-top: 2px;
+    border-width: 1px;
+    border-color: rgba(0, 0, 0, 0.5);
+}
+
+.endless-meter-segment--shortfall {
+    /* Reserved for future per-state styling — currently the C# layer
+     * just recolors via inline style. Class kept so that USS-only tweaks
+     * remain possible without touching code. */
+}
+
+.endless-meter-divider {
+    height: 4px;
+    margin-top: 2px;
+    background-color: rgba(0, 0, 0, 0);
+    border-top-width: 2px;
+    border-top-color: rgb(0, 0, 0);
+}
+
+/* Cleared-count label. Mirrors the classic timer-label position but lives
+ * in endless's own asset so the two never clash. */
+.endless-clears-label {
+    position: absolute;
+    bottom: 16px;
+    left: 16px;
+    font-size: 32px;
+    color: var(--text-primary);
+    -unity-font-style: bold;
+    letter-spacing: 1px;
+}
