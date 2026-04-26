@@ -5,9 +5,10 @@ using UnityEngine;
 using UnityEngine.UIElements;
 
 /// <summary>
-/// Endless mode: initial fill to ~70% occupancy (centermost-first, short-biased
-/// arrows for visual room), then a continuous push-tick loop that spawns
-/// pending arrows the player must clear before the next push or topout.
+/// Endless mode: initial fill to ~70% occupancy (short-biased arrow lengths
+/// so more arrows fit in tight spaces), then a continuous push-tick loop
+/// that spawns pending arrows the player must clear before the next push
+/// or topout.
 ///
 /// EndlessMode is the <see cref="IGameMode"/> adapter. The heavy lifting
 /// (push-tick scheduling, garbage-meter UI, danger tint, topout detection,
@@ -201,12 +202,12 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
 
     // ---- Initial board generation ------------------------------------------
     //
-    // Mirrors ClassicMode.GenerateBoard but with endless-specific generation
-    // flags: centermost-first head selection (square-ring fill pattern),
-    // ~70% occupancy cap (initial wiggle room), short-biased length sampling
-    // (more arrows fit in tight spaces). Could be unified with classic via a
-    // shared helper in a future pass; kept duplicated for now to keep the
-    // endless reintroduction surgical.
+    // Mirrors ClassicMode.GenerateBoard but with endless-specific flags:
+    // ~70% occupancy cap (initial wiggle room) + short-biased length sampling
+    // (more arrows fit in tight spaces). Centermost-first was tried in the
+    // prototype but dropped — felt unnecessary and biased the start state.
+    // Could be unified with classic via a shared helper in a future pass;
+    // kept duplicated for now to keep the endless reintroduction surgical.
 
     private IEnumerator GenerateBoard(Board board, BoardView boardView)
     {
@@ -215,7 +216,7 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
             board,
             _maxLen,
             _activeSeed,
-            centermostFirst: true,
+            centermostFirst: false,
             targetCellCount: targetCells,
             shortBiased: true
         );
