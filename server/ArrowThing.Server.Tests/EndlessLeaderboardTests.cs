@@ -135,10 +135,7 @@ public class EndlessLeaderboardTests : IClassFixture<TestFactory>, IDisposable
         var planted = new List<(int clears, double duration)>();
         for (int i = 0; i < 60; i++)
         {
-            var (uid, _) = await RegisterAsync(
-                $"end-lb-top-{i}@test.com",
-                $"TopUser{i}"
-            );
+            var (uid, _) = await RegisterAsync($"end-lb-top-{i}@test.com", $"TopUser{i}");
             int clears = rng.Next(0, 30);
             double duration = 5.0 + rng.NextDouble() * 60.0;
             await InsertEndlessScoreAsync(uid, W, H, clears, duration);
@@ -234,7 +231,10 @@ public class EndlessLeaderboardTests : IClassFixture<TestFactory>, IDisposable
         await InsertEndlessScoreAsync(uMe, W, H, clears: 30, durationSeconds: 80.0);
         await InsertEndlessScoreAsync(uC, W, H, clears: 10, durationSeconds: 50.0);
 
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", meToken);
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            meToken
+        );
         var resp = await _client.GetAsync($"/api/endless-leaderboards/{W}x{H}/me");
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
 
@@ -250,7 +250,10 @@ public class EndlessLeaderboardTests : IClassFixture<TestFactory>, IDisposable
     public async Task GetMe_NoEntry_Returns404()
     {
         var (_, token) = await RegisterAsync("end-lb-me-empty@test.com", "MeEmpty");
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
 
         var resp = await _client.GetAsync("/api/endless-leaderboards/16x16/me");
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);

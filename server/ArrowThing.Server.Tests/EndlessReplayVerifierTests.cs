@@ -129,8 +129,7 @@ public class EndlessReplayVerifierTests
         }
         if (run.IsActive)
             throw new InvalidOperationException(
-                "Test setup error: active run did not top out within "
-                    + $"{maxSimSeconds}s."
+                "Test setup error: active run did not top out within " + $"{maxSimSeconds}s."
             );
 
         recorder.RecordTopout(run.RunDurationSeconds);

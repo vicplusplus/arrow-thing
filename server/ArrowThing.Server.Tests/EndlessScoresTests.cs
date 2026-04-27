@@ -55,14 +55,12 @@ public class EndlessScoresTests : IClassFixture<TestFactory>, IDisposable
         return auth!.Token;
     }
 
-    private async Task<(HttpResponseMessage Response, EndlessStatusResult? Status)> SubmitAndWaitAsync(
-        string replayJson
-    )
+    private async Task<(
+        HttpResponseMessage Response,
+        EndlessStatusResult? Status
+    )> SubmitAndWaitAsync(string replayJson)
     {
-        var response = await _client.PostAsJsonAsync(
-            "/api/endless-scores",
-            new { replayJson }
-        );
+        var response = await _client.PostAsJsonAsync("/api/endless-scores", new { replayJson });
         if (response.StatusCode != HttpStatusCode.Accepted)
             return (response, null);
 
@@ -221,7 +219,10 @@ public class EndlessScoresTests : IClassFixture<TestFactory>, IDisposable
     public async Task SubmitValidReplay_LandsInDatabase()
     {
         var token = await RegisterAndGetTokenAsync("end-submit1@test.com");
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
 
         var replayJson = BuildValidEndlessReplayJson(seed: 100, width: 10, height: 10);
         var status = await SubmitAndExpectVerifiedAsync(replayJson);
@@ -243,17 +244,17 @@ public class EndlessScoresTests : IClassFixture<TestFactory>, IDisposable
     public async Task SubmitSameGameId_Idempotent()
     {
         var token = await RegisterAndGetTokenAsync("end-idem@test.com");
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
 
         var replayJson = BuildValidEndlessReplayJson(seed: 200, width: 10, height: 10);
         await SubmitAndExpectVerifiedAsync(replayJson);
 
         // Resubmit identical replay (same gameId) — second submission
         // hits the idempotency path and returns 200 / IsPersonalBest=false.
-        var second = await _client.PostAsJsonAsync(
-            "/api/endless-scores",
-            new { replayJson }
-        );
+        var second = await _client.PostAsJsonAsync("/api/endless-scores", new { replayJson });
         Assert.Equal(HttpStatusCode.OK, second.StatusCode);
         var body = await second.Content.ReadFromJsonAsync<EndlessSubmitResult>();
         Assert.True(body!.Verified);
@@ -264,7 +265,10 @@ public class EndlessScoresTests : IClassFixture<TestFactory>, IDisposable
     public async Task PB_MoreClearsReplacesExisting()
     {
         var token = await RegisterAndGetTokenAsync("end-pb-clears@test.com");
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
 
         // First submission: passive topout (likely 0 clears).
         var first = BuildValidEndlessReplayJson(seed: 301, width: 10, height: 10);
@@ -277,7 +281,12 @@ public class EndlessScoresTests : IClassFixture<TestFactory>, IDisposable
         var firstRow = await db.EndlessScores.AsNoTracking().FirstAsync(s => s.UserId == user.Id);
 
         // Second submission: drive at least 3 clears so VerifiedClears > firstRow.Clears.
-        var second = BuildActiveEndlessReplayJson(seed: 302, width: 10, height: 10, targetClears: 3);
+        var second = BuildActiveEndlessReplayJson(
+            seed: 302,
+            width: 10,
+            height: 10,
+            targetClears: 3
+        );
         var status2 = await SubmitAndExpectVerifiedAsync(second);
         Assert.True(status2.IsPersonalBest == true);
 
@@ -285,7 +294,9 @@ public class EndlessScoresTests : IClassFixture<TestFactory>, IDisposable
         using var scope2 = _factory.Services.CreateScope();
         var db2 = scope2.ServiceProvider.GetRequiredService<AppDbContext>();
         var rows = await db2
-            .EndlessScores.Where(s => s.UserId == user.Id && s.BoardWidth == 10 && s.BoardHeight == 10)
+            .EndlessScores.Where(s =>
+                s.UserId == user.Id && s.BoardWidth == 10 && s.BoardHeight == 10
+            )
             .ToListAsync();
         Assert.Single(rows);
         Assert.True(rows[0].Clears > firstRow.Clears);
@@ -295,7 +306,10 @@ public class EndlessScoresTests : IClassFixture<TestFactory>, IDisposable
     public async Task PB_RejectsLowerClears()
     {
         var token = await RegisterAndGetTokenAsync("end-pb-worse@test.com");
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
 
         // First: a richer run with multiple clears.
         var first = BuildActiveEndlessReplayJson(seed: 401, width: 10, height: 10, targetClears: 4);
@@ -333,7 +347,10 @@ public class EndlessScoresTests : IClassFixture<TestFactory>, IDisposable
         // into the DB with a deliberately long duration, then submit the
         // newly-built replay (which will have duration < the inserted one).
         var token = await RegisterAndGetTokenAsync("end-pb-tie@test.com");
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
 
         var first = BuildValidEndlessReplayJson(seed: 501, width: 10, height: 10);
         var firstStatus = await SubmitAndExpectVerifiedAsync(first);
@@ -364,7 +381,10 @@ public class EndlessScoresTests : IClassFixture<TestFactory>, IDisposable
     public async Task SubmitClassicMode_Returns400()
     {
         var token = await RegisterAndGetTokenAsync("end-mode@test.com");
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
 
         var replay = new ReplayData
         {
@@ -397,10 +417,7 @@ public class EndlessScoresTests : IClassFixture<TestFactory>, IDisposable
     public async Task SubmitWithoutAuth_Returns401()
     {
         var replayJson = BuildValidEndlessReplayJson(seed: 600);
-        var resp = await _client.PostAsJsonAsync(
-            "/api/endless-scores",
-            new { replayJson }
-        );
+        var resp = await _client.PostAsJsonAsync("/api/endless-scores", new { replayJson });
         Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
     }
 
@@ -408,7 +425,10 @@ public class EndlessScoresTests : IClassFixture<TestFactory>, IDisposable
     public async Task SubmitMalformedJson_Returns400()
     {
         var token = await RegisterAndGetTokenAsync("end-malformed@test.com");
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
 
         var resp = await _client.PostAsJsonAsync(
             "/api/endless-scores",
@@ -421,7 +441,10 @@ public class EndlessScoresTests : IClassFixture<TestFactory>, IDisposable
     public async Task FlaggedAccount_RejectsSubmission()
     {
         var token = await RegisterAndGetTokenAsync("end-flagged@test.com");
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
 
         // Flag the account directly so we can isolate the 403 path from
         // the pre-verify-flagging path.
@@ -436,10 +459,7 @@ public class EndlessScoresTests : IClassFixture<TestFactory>, IDisposable
         }
 
         var replayJson = BuildValidEndlessReplayJson(seed: 700);
-        var resp = await _client.PostAsJsonAsync(
-            "/api/endless-scores",
-            new { replayJson }
-        );
+        var resp = await _client.PostAsJsonAsync("/api/endless-scores", new { replayJson });
         Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
     }
 
@@ -447,7 +467,10 @@ public class EndlessScoresTests : IClassFixture<TestFactory>, IDisposable
     public async Task PreVerifyFailure_FlagsUser()
     {
         var token = await RegisterAndGetTokenAsync("end-preverify@test.com");
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            token
+        );
 
         // Negative claimed clears trips the PreVerify gate, which sets
         // user.Flagged and returns 403.
