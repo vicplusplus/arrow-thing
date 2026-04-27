@@ -41,6 +41,14 @@ public static class GameSettings
     public const string KeepTrailPrefKey = "KeepTrailAfterClear";
 
     /// <summary>
+    /// Player preference for the leaderboard screen's local/global toggle.
+    /// Persisted across sessions so a player who lives on the global view
+    /// doesn't have to re-toggle every time they open the screen. Stored
+    /// as 0 = local, 1 = global. Defaults to local.
+    /// </summary>
+    public const string LeaderboardGlobalViewPrefKey = "LeaderboardGlobalView";
+
+    /// <summary>
     /// Local display name. Loaded from PlayerPrefs by the View layer on startup;
     /// updated in memory here. Works fully offline.
     /// </summary>

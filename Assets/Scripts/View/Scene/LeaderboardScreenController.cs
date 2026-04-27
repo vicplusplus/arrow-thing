@@ -129,6 +129,13 @@ public sealed class LeaderboardScreenController : NavigableScene
         localBtn.clicked += () => SetScope(false, localBtn, globalBtn);
         globalBtn.clicked += () => SetScope(true, localBtn, globalBtn);
 
+        // Load the persisted local/global preference (defaults to local on
+        // first run). The full visibility state for it is applied in
+        // BuildNavGraph after _list and friends are populated, so SetScope
+        // can safely fire its refresh.
+        _isGlobalView =
+            PlayerPrefs.GetInt(GameSettings.LeaderboardGlobalViewPrefKey, defaultValue: 0) == 1;
+
         // Size tabs
         _tabBar = root.Q(className: "tab-bar");
         _tabButtons = new Button[Tabs.Length];
@@ -202,6 +209,14 @@ public sealed class LeaderboardScreenController : NavigableScene
 
     protected override void BuildNavGraph(FocusNavigator nav)
     {
+        // Apply the persisted local/global toggle now that the full visual
+        // tree (including _list, _refreshBtn, _playerPanel, _sortButtons) is
+        // populated. SetScope handles button-active classes, visibility, and
+        // the initial fetch on the global path.
+        var localBtn = Root.Q<Button>("lb-local-btn");
+        var globalBtn = Root.Q<Button>("lb-global-btn");
+        SetScope(_isGlobalView, localBtn, globalBtn);
+
         // Handle auto-scroll from victory.
         _focusGameId = GameSettings.LeaderboardFocusGameId;
         GameSettings.LeaderboardFocusGameId = null;
@@ -402,6 +417,9 @@ public sealed class LeaderboardScreenController : NavigableScene
     private void SetScope(bool isGlobal, Button localBtn, Button globalBtn)
     {
         _isGlobalView = isGlobal;
+        // Persist for next session — the toggle outlives this scene.
+        PlayerPrefs.SetInt(GameSettings.LeaderboardGlobalViewPrefKey, isGlobal ? 1 : 0);
+        PlayerPrefs.Save();
         if (isGlobal)
         {
             globalBtn.AddToClassList("toggle-group__btn--active");
