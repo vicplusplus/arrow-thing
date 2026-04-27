@@ -29,4 +29,23 @@ public static class ReplayStorage
             return GzipUtil.Decompress(score.ReplayJsonGz);
         return score.ReplayJson ?? "";
     }
+
+    // ---- Endless variants -------------------------------------------------
+    //
+    // Endless replays don't carry a boardSnapshot (board grows from empty
+    // during the run), so there's no top-50 stripping like classic does.
+    // Otherwise the gzipped-bytea storage shape is identical.
+
+    public static void SetEndless(EndlessScore score, string replayJson)
+    {
+        score.ReplayJsonGz = GzipUtil.Compress(replayJson);
+        score.ReplayJson = "";
+    }
+
+    public static string Get(EndlessScore score)
+    {
+        if (score.ReplayJsonGz != null && score.ReplayJsonGz.Length > 0)
+            return GzipUtil.Decompress(score.ReplayJsonGz);
+        return score.ReplayJson ?? "";
+    }
 }

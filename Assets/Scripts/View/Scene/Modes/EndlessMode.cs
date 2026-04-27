@@ -242,24 +242,15 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
                 + $"duration={_endless.RunDurationSeconds:F1}s"
         );
 
-        // Capture the topout in the replay log + log the full payload so we
-        // can inspect it during Phase 2a manual testing. Phase 2c will swap
-        // the Debug.Log for an actual server submission.
+        // Capture the topout in the replay log, then submit to the server
+        // for verification. EndlessScoreSubmitter is fire-and-forget — toast
+        // notifications announce success / failure / pending verification
+        // asynchronously so the result screen can come up immediately.
         if (_recorder != null && _endless != null)
         {
             _recorder.RecordTopout(_endless.SimTime);
-            var payload = BuildReplayPayload();
-            try
-            {
-                var json = payload.ToJson();
-                Debug.Log(
-                    $"[EndlessMode] Replay payload ({json.Length} chars, {payload.events.Count} events): {json}"
-                );
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"[EndlessMode] Failed to serialize replay payload: {e}");
-            }
+            ReplayData payload = BuildReplayPayload();
+            EndlessScoreSubmitter.Submit(payload);
         }
 
         // Freeze gameplay: input off, shared HUD chrome hidden. Player sees
