@@ -158,14 +158,18 @@ New shape:
 
 ## Open questions
 
-- **Float determinism between Mono (Unity) and .NET (server)**:
-  classic verifier already uses identical `Math.*` primitives in both
-  places. `EndlessRun` uses `Math.Cos` / `Math.Pow` / `Math.Round`.
-  Add a parity test in `ArrowThing.Server.Tests` that hashes the
-  meter trajectory of a fixed-seed run server-side and compares to a
-  client-side hash captured during a controlled test run. If they
-  drift on any platform, switch to a fixed-point implementation
-  before shipping.
+- ~~**Float determinism between Mono (Unity) and .NET (server)**~~ —
+  resolved by `EndlessRunParityScenario` + matching xUnit / NUnit
+  parity tests. Server-side test in `ArrowThing.Server.Tests`
+  drives a fixed-seed run, hashes every observable (FNV-1a 64), and
+  compares to `EndlessRunParityScenario.ExpectedHashV1`. The mirror
+  EditMode test runs the same scenario under Mono and asserts the
+  same constant. If they ever drift, the EditMode test fails loudly
+  and we switch to a fixed-point implementation before shipping.
+  Procedure on tuning bumps: bump `EndlessTuning.CurrentVersion`,
+  rerun the server test (it'll fail and print the new hash), paste
+  the value into `ExpectedHashV1`, then run the EditMode test in
+  Unity to confirm Mono agrees.
 - **Endless leaderboard "all" sort**: classic ranks by largest board
   area then fastest. For endless, "best" across configs is ambiguous
   (10×10 with 50 clears vs 40×40 with 30 clears). Proposal: rank by
