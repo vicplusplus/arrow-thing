@@ -30,8 +30,10 @@ using Newtonsoft.Json.Linq;
 ///   v7 — universal-format unification: added <see cref="mode"/>, optional
 ///        endless fields (<see cref="tuningsVersion"/>, <see cref="clears"/>,
 ///        <see cref="longestCombo"/>, <see cref="durationSeconds"/>) and
-///        per-event optional <see cref="ReplayEvent.simTime"/> /
-///        <see cref="ReplayEvent.cellX"/> / <see cref="ReplayEvent.cellY"/>.
+///        per-event optional <see cref="ReplayEvent.simTime"/> for the
+///        endless time-driven loop. Tap events keep the existing
+///        <see cref="ReplayEvent.posX"/>/<see cref="ReplayEvent.posY"/>
+///        float fields for cross-mode tap position (1 unit per cell).
 ///        Old-version (v6 and below) classic replays read fine: missing
 ///        <see cref="mode"/> defaults to Classic, missing endless fields
 ///        stay null.

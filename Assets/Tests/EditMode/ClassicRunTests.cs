@@ -50,8 +50,8 @@ public class ClassicRunTests
         var (board, _, _) = MakeTwoArrowBoard();
         var recorder = new ReplayRecorder();
         var run = new ClassicRun(board, recorder);
-        Assert.That(run.HandleTap(-1, 0, 0.0, -1f, 0f), Is.EqualTo(ClassicTapKind.Missed));
-        Assert.That(run.HandleTap(0, 999, 0.0, 0f, 999f), Is.EqualTo(ClassicTapKind.Missed));
+        Assert.That(run.HandleTap(-1f, 0f, 0.0), Is.EqualTo(TapResult.Missed));
+        Assert.That(run.HandleTap(0f, 999f, 0.0), Is.EqualTo(TapResult.Missed));
         // Out-of-bounds is a defensive no-op: nothing recorded, no timer
         // transition. (Live path InputHandler filters these out before
         // they ever reach HandleTap.)
@@ -68,7 +68,7 @@ public class ClassicRunTests
         var run = new ClassicRun(board, recorder, timer);
 
         // (4,4) is empty (only row 0 has arrows on this board).
-        Assert.That(run.HandleTap(4, 4, 0.5, 4f, 4f), Is.EqualTo(ClassicTapKind.Missed));
+        Assert.That(run.HandleTap(4f, 4f, 0.5), Is.EqualTo(TapResult.Missed));
 
         var miss = FindOne(recorder, ReplayEventType.Miss);
         Assert.That(miss.posX, Is.EqualTo(4f));
@@ -91,10 +91,7 @@ public class ClassicRunTests
         var run = new ClassicRun(board, recorder, timer);
 
         // Tap arrow A (head (2,0)) — blocked because B's body sits in A's ray.
-        Assert.That(
-            run.HandleTap(a.HeadCell.X, a.HeadCell.Y, 1.0, 2f, 0f),
-            Is.EqualTo(ClassicTapKind.Blocked)
-        );
+        Assert.That(run.HandleTap(a.HeadCell.X, a.HeadCell.Y, 1.0), Is.EqualTo(TapResult.Blocked));
 
         var reject = FindOne(recorder, ReplayEventType.Reject);
         Assert.That(reject.posX, Is.EqualTo(2f));
@@ -108,7 +105,7 @@ public class ClassicRunTests
     }
 
     [Test]
-    public void HandleTap_ClearableArrow_FirstClear_ReturnsClearedFirst_AndMutatesBoard()
+    public void HandleTap_ClearableArrow_FirstClear_MutatesBoardAndStartsSolve()
     {
         var (board, _, b) = MakeTwoArrowBoard();
         var recorder = new ReplayRecorder();
@@ -116,9 +113,12 @@ public class ClassicRunTests
         timer.Start(0.0);
         var run = new ClassicRun(board, recorder, timer);
 
-        ClassicTapKind kind = run.HandleTap(b.HeadCell.X, b.HeadCell.Y, 0.75, 4f, 0f);
-        Assert.That(kind, Is.EqualTo(ClassicTapKind.ClearedFirst));
+        // The first cleared tap is just TapResult.Cleared — "first" is
+        // derivable from run.ClearedCount == 1, not part of the result vocabulary.
+        TapResult result = run.HandleTap(b.HeadCell.X, b.HeadCell.Y, 0.75);
+        Assert.That(result, Is.EqualTo(TapResult.Cleared));
         Assert.That(run.ClearedCount, Is.EqualTo(1));
+        Assert.That(run.IsCompleted, Is.False, "more arrows remain");
         Assert.That(run.Board.Arrows.Count, Is.EqualTo(1));
         Assert.That(run.Board.GetArrowAt(new Cell(4, 0)), Is.Null);
         Assert.That(timer.IsSolving, Is.True);
@@ -139,13 +139,14 @@ public class ClassicRunTests
         run.BoardCleared += () => boardClearedFired = true;
 
         // Clear B first to unblock A.
-        run.HandleTap(b.HeadCell.X, b.HeadCell.Y, 0.5, 4f, 0f);
+        run.HandleTap(b.HeadCell.X, b.HeadCell.Y, 0.5);
         Assert.That(boardClearedFired, Is.False, "BoardCleared must not fire mid-run");
+        Assert.That(run.IsCompleted, Is.False);
 
-        // Clear A: now the last arrow → ClearedLast, BoardCleared fires,
-        // timer transitions to Finished with the wall time we passed.
-        ClassicTapKind kind = run.HandleTap(a.HeadCell.X, a.HeadCell.Y, 2.5, 2f, 0f);
-        Assert.That(kind, Is.EqualTo(ClassicTapKind.ClearedLast));
+        // Clear A: now the last arrow → BoardCleared fires, run.IsCompleted
+        // flips, timer transitions to Finished with the wall time we passed.
+        TapResult result = run.HandleTap(a.HeadCell.X, a.HeadCell.Y, 2.5);
+        Assert.That(result, Is.EqualTo(TapResult.Cleared));
         Assert.That(boardClearedFired, Is.True);
         Assert.That(run.IsCompleted, Is.True);
         Assert.That(run.Board.Arrows.Count, Is.EqualTo(0));
@@ -161,17 +162,26 @@ public class ClassicRunTests
         var (board, a, b) = MakeTwoArrowBoard();
         var recorder = new ReplayRecorder();
         var run = new ClassicRun(board, recorder);
-        run.HandleTap(b.HeadCell.X, b.HeadCell.Y, 0.0, 4f, 0f);
-        run.HandleTap(a.HeadCell.X, a.HeadCell.Y, 1.0, 2f, 0f);
+        run.HandleTap(b.HeadCell.X, b.HeadCell.Y, 0.0);
+        run.HandleTap(a.HeadCell.X, a.HeadCell.Y, 1.0);
         Assume.That(run.IsCompleted, Is.True);
 
         int eventsBefore = recorder.Events.Count;
-        Assert.That(run.HandleTap(0, 0, 5.0, 0f, 0f), Is.EqualTo(ClassicTapKind.Missed));
+        Assert.That(run.HandleTap(0f, 0f, 5.0), Is.EqualTo(TapResult.Missed));
         Assert.That(
             recorder.Events.Count,
             Is.EqualTo(eventsBefore),
             "Post-completion taps must not append events"
         );
+    }
+
+    [Test]
+    public void HandleTap_RoundsFractionalGridPos_ToNearestCell()
+    {
+        var (board, _, b) = MakeTwoArrowBoard();
+        var run = new ClassicRun(board);
+        // (3.6, 0.4) rounds to (4, 0) → arrow B's head, clearable.
+        Assert.That(run.HandleTap(3.6f, 0.4f, 0.0), Is.EqualTo(TapResult.Cleared));
     }
 
     [Test]
@@ -195,26 +205,19 @@ public class ClassicRunTests
         var runB = new ClassicRun(boardB, recB, timerB);
 
         // Run A: HandleTap path.
-        runA.HandleTap(0, 4, 0.25, 0f, 4f); // empty cell → Missed
-        runA.HandleTap(aA.HeadCell.X, aA.HeadCell.Y, 0.5, 2f, 0f); // blocked → Blocked
-        runA.HandleTap(bA.HeadCell.X, bA.HeadCell.Y, 0.75, 4f, 0f); // clear B
-        runA.HandleTap(aA.HeadCell.X, aA.HeadCell.Y, 1.0, 2f, 0f); // clear A (last)
+        runA.HandleTap(0f, 4f, 0.25); // empty cell → Missed
+        runA.HandleTap(aA.HeadCell.X, aA.HeadCell.Y, 0.5); // blocked → Blocked
+        runA.HandleTap(bA.HeadCell.X, bA.HeadCell.Y, 0.75); // clear B
+        runA.HandleTap(aA.HeadCell.X, aA.HeadCell.Y, 1.0); // clear A (last)
 
         // Run B: RegisterViewTap path. Caller mutates board for cleared
-        // kinds (mirroring BoardView.TryClearArrow's role on the live path).
-        runB.RegisterViewTap(ClassicTapKind.Missed, 0, 4, 0.25, 0f, 4f);
-        runB.RegisterViewTap(ClassicTapKind.Blocked, aB.HeadCell.X, aB.HeadCell.Y, 0.5, 2f, 0f);
+        // results (mirroring BoardView.TryClearArrow's role on the live path).
+        runB.RegisterViewTap(TapResult.Missed, 0f, 4f, 0.25);
+        runB.RegisterViewTap(TapResult.Blocked, aB.HeadCell.X, aB.HeadCell.Y, 0.5);
         boardB.RemoveArrow(bB);
-        runB.RegisterViewTap(
-            ClassicTapKind.ClearedFirst,
-            bB.HeadCell.X,
-            bB.HeadCell.Y,
-            0.75,
-            4f,
-            0f
-        );
+        runB.RegisterViewTap(TapResult.Cleared, bB.HeadCell.X, bB.HeadCell.Y, 0.75);
         boardB.RemoveArrow(aB);
-        runB.RegisterViewTap(ClassicTapKind.ClearedLast, aB.HeadCell.X, aB.HeadCell.Y, 1.0, 2f, 0f);
+        runB.RegisterViewTap(TapResult.Cleared, aB.HeadCell.X, aB.HeadCell.Y, 1.0);
 
         Assert.That(runB.ClearedCount, Is.EqualTo(runA.ClearedCount));
         Assert.That(runB.IsCompleted, Is.EqualTo(runA.IsCompleted));
@@ -237,8 +240,8 @@ public class ClassicRunTests
         Assert.That(run.ClearedCount, Is.EqualTo(1));
 
         // Tap the remaining arrow A — its ray to the boundary is now empty.
-        ClassicTapKind kind = run.HandleTap(2, 0, 1.0, 2f, 0f);
-        Assert.That(kind, Is.EqualTo(ClassicTapKind.ClearedLast));
+        TapResult result = run.HandleTap(2f, 0f, 1.0);
+        Assert.That(result, Is.EqualTo(TapResult.Cleared));
         Assert.That(run.ClearedCount, Is.EqualTo(2));
         Assert.That(run.IsCompleted, Is.True);
     }
@@ -248,10 +251,7 @@ public class ClassicRunTests
     {
         var (board, _, b) = MakeTwoArrowBoard();
         var run = new ClassicRun(board, recorder: null, timer: null);
-        Assert.That(
-            run.HandleTap(b.HeadCell.X, b.HeadCell.Y, 0.0, 4f, 0f),
-            Is.EqualTo(ClassicTapKind.ClearedFirst)
-        );
+        Assert.That(run.HandleTap(b.HeadCell.X, b.HeadCell.Y, 0.0), Is.EqualTo(TapResult.Cleared));
         Assert.That(run.ClearedCount, Is.EqualTo(1));
     }
 

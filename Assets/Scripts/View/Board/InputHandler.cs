@@ -18,7 +18,7 @@ public sealed class InputHandler : MonoBehaviour
     private BoardView _boardView = null!;
     private CameraController _camCtrl = null!;
     private UIDocument _hudUIDocument;
-    private Action<TapResult> _onTapResult;
+    private Action<Tap> _onTap;
     private Action _onQuickReset;
     private Action _onQuickSave;
     private Action _onToggleTrail;
@@ -56,7 +56,7 @@ public sealed class InputHandler : MonoBehaviour
         BoardView boardView,
         CameraController camCtrl,
         float dragThresholdPixels = 15f,
-        Action<TapResult> onTapResult = null,
+        Action<Tap> onTap = null,
         Action onQuickReset = null,
         Action onQuickSave = null,
         Action onToggleTrail = null,
@@ -68,7 +68,7 @@ public sealed class InputHandler : MonoBehaviour
         _boardView = boardView;
         _camCtrl = camCtrl;
         _dragThresholdPixels = dragThresholdPixels;
-        _onTapResult = onTapResult;
+        _onTap = onTap;
         _onQuickReset = onQuickReset;
         _onQuickSave = onQuickSave;
         _onToggleTrail = onToggleTrail;
@@ -239,28 +239,27 @@ public sealed class InputHandler : MonoBehaviour
 
         if (arrow == null)
         {
-            _onTapResult?.Invoke(
-                new TapResult(TapResultKind.Missed, cell, worldPos, arrow: null, wallTime)
-            );
+            _onTap?.Invoke(new Tap(TapResult.Missed, cell, worldPos, arrow: null, wallTime));
             return;
         }
 
         ClearResult clear = _boardView.TryClearArrow(arrow);
-        TapResultKind kind = clear switch
-        {
-            ClearResult.Blocked => TapResultKind.Blocked,
-            ClearResult.ClearedFirst => TapResultKind.ClearedFirst,
-            ClearResult.ClearedLast => TapResultKind.ClearedLast,
-            _ => TapResultKind.Cleared,
-        };
+        // ClearResult retains First/Last for the view's own animation timing
+        // (the BoardView fires its post-pull-out BoardCleared callback off the
+        // ClearedLast branch). The Run-facing TapResult vocabulary is the
+        // smaller Missed/Blocked/Cleared trio — first/last are derivable
+        // from the run's own counters and announced via its BoardCleared
+        // event, so they don't belong on the per-tap result.
+        TapResult result = clear == ClearResult.Blocked ? TapResult.Blocked : TapResult.Cleared;
+        bool wasLast = clear == ClearResult.ClearedLast;
 
-        _onTapResult?.Invoke(new TapResult(kind, cell, worldPos, arrow, wallTime));
+        _onTap?.Invoke(new Tap(result, cell, worldPos, arrow, wallTime));
 
         // Win-condition signal stays a render-side event so the victory
         // animation framework keeps its existing subscriber (mode wires it
-        // in WireRunFlow). Fire AFTER the mode's OnTapResult so timer.Finish
-        // / RecordEndSolve order is preserved.
-        if (kind == TapResultKind.ClearedLast)
+        // in WireRunFlow). Fire AFTER the mode's OnTap so timer.Finish /
+        // RecordEndSolve order is preserved.
+        if (wasLast)
             _boardView.NotifyLastArrowClearing();
     }
 

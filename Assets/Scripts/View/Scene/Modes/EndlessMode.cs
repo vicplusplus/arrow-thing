@@ -80,7 +80,7 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
 
     public Func<Cell, Vector3, bool> TapAttemptHandler => null;
 
-    public void OnTapResult(TapResult result)
+    public void OnTap(Tap tap)
     {
         // Endless routes real-arrow clears through EndlessBoardSession via
         // BoardView.SetArrowRemover (wired in Setup). Stats + immediate-mode
@@ -88,22 +88,22 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
         //
         // We DO record every tap (including misses + blocked) for replay
         // verification: blocked/missed taps affect _lastClearTime / combo-
-        // streak state, so a faithful replay needs them too.
+        // streak state, so a faithful replay needs them too. Endless passes
+        // its sim-time on the recorder call so the verifier can reproduce
+        // the time-driven loop deterministically.
         if (_endless == null || _recorder == null)
             return;
         float simTime = _endless.SimTime;
-        switch (result.Kind)
+        switch (tap.Result)
         {
-            case TapResultKind.Cleared:
-            case TapResultKind.ClearedFirst:
-            case TapResultKind.ClearedLast:
-                _recorder.RecordClearAtCell(simTime, result.Cell.X, result.Cell.Y);
+            case TapResult.Cleared:
+                _recorder.RecordClear(tap.GridPos.x, tap.GridPos.y, simTime);
                 break;
-            case TapResultKind.Blocked:
-                _recorder.RecordRejectAtCell(simTime, result.Cell.X, result.Cell.Y);
+            case TapResult.Blocked:
+                _recorder.RecordReject(tap.GridPos.x, tap.GridPos.y, simTime);
                 break;
-            case TapResultKind.Missed:
-                _recorder.RecordMissAtCell(simTime, result.Cell.X, result.Cell.Y);
+            case TapResult.Missed:
+                _recorder.RecordMiss(tap.GridPos.x, tap.GridPos.y, simTime);
                 break;
         }
     }

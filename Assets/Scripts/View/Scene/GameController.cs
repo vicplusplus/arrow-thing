@@ -542,7 +542,7 @@ public sealed class GameController : MonoBehaviour
             _boardView,
             _camCtrl,
             dragThreshold,
-            onTapResult: _mode != null ? _mode.OnTapResult : (Action<TapResult>)null,
+            onTap: _mode != null ? _mode.OnTap : (Action<Tap>)null,
             onQuickReset: OnQuickReset,
             onQuickSave: _mode?.OnQuickSaveHandler,
             onToggleTrail: ToggleTrail,

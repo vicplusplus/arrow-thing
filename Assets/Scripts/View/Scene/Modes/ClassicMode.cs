@@ -83,7 +83,7 @@ public sealed class ClassicMode : MonoBehaviour, IGameMode
 
     public Func<Cell, Vector3, bool> TapAttemptHandler => null;
 
-    public void OnTapResult(TapResult result)
+    public void OnTap(Tap tap)
     {
         if (_run == null)
             return;
@@ -92,37 +92,20 @@ public sealed class ClassicMode : MonoBehaviour, IGameMode
         // has already done classification + board mutation, so the run does
         // not re-mutate. RegisterViewTap drives the timer phase transition,
         // recorder events, and InspectionEnded / BoardCleared signals.
-        _run.RegisterViewTap(
-            ToClassicTapKind(result.Kind),
-            result.Cell.X,
-            result.Cell.Y,
-            result.WallTimeSeconds,
-            result.WorldPos.x,
-            result.WorldPos.y
-        );
+        _run.RegisterViewTap(tap.Result, tap.GridPos.x, tap.GridPos.y, tap.WallTimeSeconds);
 
-        // Autosave triggers off cleared kinds. Last-arrow doesn't autosave
-        // because the save will be deleted on victory anyway (handled by
-        // the BoardView.LastArrowClearing subscriber in WireVictory).
-        if (result.Kind == TapResultKind.Cleared || result.Kind == TapResultKind.ClearedFirst)
+        // Autosave triggers off cleared taps; the run's IsCompleted flag
+        // gates out the last-arrow case so we don't autosave a state that's
+        // about to have its save deleted by the victory pipeline (handled
+        // by the BoardView.LastArrowClearing subscriber in WireVictory).
+        if (tap.Result == TapResult.Cleared && !_run.IsCompleted)
             MaybeAutosave();
 
-        if (result.Kind == TapResultKind.ClearedLast)
+        if (tap.Result == TapResult.Cleared && _run.IsCompleted)
             Debug.Log(
                 $"[ClassicMode] Last arrow cleared — timer finished, solveElapsed={(_timer != null ? _timer.SolveElapsed.ToString("F3") : "N/A")}s"
             );
     }
-
-    private static ClassicTapKind ToClassicTapKind(TapResultKind k) =>
-        k switch
-        {
-            TapResultKind.Missed => ClassicTapKind.Missed,
-            TapResultKind.Blocked => ClassicTapKind.Blocked,
-            TapResultKind.Cleared => ClassicTapKind.Cleared,
-            TapResultKind.ClearedFirst => ClassicTapKind.ClearedFirst,
-            TapResultKind.ClearedLast => ClassicTapKind.ClearedLast,
-            _ => ClassicTapKind.Missed,
-        };
 
     private void MaybeAutosave()
     {

@@ -1,30 +1,6 @@
 using System;
 
 /// <summary>
-/// Outcome of a player tap inside a classic run, as resolved by
-/// <see cref="ClassicRun.HandleTap"/>. Stored on replay events so the
-/// server-side verifier can flag a player who claimed a clear on a cell
-/// that simulation says was empty (or blocked) at that wall time.
-/// </summary>
-public enum ClassicTapKind
-{
-    /// <summary>Tap hit an empty cell. No arrow involved.</summary>
-    Missed = 0,
-
-    /// <summary>Arrow was tapped but is currently blocked by dependencies.</summary>
-    Blocked = 1,
-
-    /// <summary>Arrow was cleared. Not the first or last on the board.</summary>
-    Cleared = 2,
-
-    /// <summary>Arrow was cleared. It was the first arrow cleared this run (inspection ends).</summary>
-    ClearedFirst = 3,
-
-    /// <summary>Arrow was cleared. It was the last arrow on the board (win condition).</summary>
-    ClearedLast = 4,
-}
-
-/// <summary>
 /// Pure-C# classic-mode game loop. Owns the fixed-board lifecycle: tap
 /// resolution, board mutation on clear, inspection→solve timer transition,
 /// replay-event recording, board-cleared (victory) detection.
@@ -36,30 +12,30 @@ public enum ClassicTapKind
 /// <para><b>Two driving entry points</b>:</para>
 /// <list type="bullet">
 ///   <item><see cref="HandleTap"/> — full path. Looks up the arrow at the
-///   given cell, classifies (Missed / Blocked / Cleared*), mutates the
-///   board on Cleared, transitions the timer + records the event. Verifier
-///   uses this exclusively: it walks recorded events, calls HandleTap with
-///   the recorded cell + world pos + wall time, and asserts the returned
-///   kind matches the kind on the recorded event.</item>
+///   given grid position (rounded to the nearest cell), classifies (Missed
+///   / Blocked / Cleared), mutates the board on Cleared, transitions the
+///   timer + records the event. Verifier-facing.</item>
 ///   <item><see cref="RegisterViewTap"/> — live-path companion. Called by
 ///   the view adapter AFTER <see cref="BoardView.TryClearArrow"/> has already
-///   classified + mutated the board. Trusts the caller-stated kind; performs
-///   only the state-update side of HandleTap (timer transition + recorder
-///   event). Avoids re-mutating an already-mutated board on the live path
-///   while keeping HandleTap a clean source-of-truth for the verifier.</item>
+///   classified + mutated the board. Trusts the caller-stated result;
+///   performs only the state-update side of HandleTap (timer transition +
+///   recorder event). Avoids re-mutating an already-mutated board on the
+///   live path while keeping HandleTap a clean source-of-truth for the
+///   verifier.</item>
 /// </list>
 ///
 /// <para>Both entry points share a private state-update routine so a
-/// HandleTap call (verifier) and a corresponding RegisterViewTap call
-/// (live) produce identical timer + recorder + event-emission side effects
-/// for the same kind of tap. Determinism contract: identical sequence of
-/// {kind, cell, wallTime} produces identical {ClearedCount, IsCompleted,
-/// timer.SolveElapsed at completion}.</para>
+/// <see cref="HandleTap"/> call (verifier) and a corresponding
+/// <see cref="RegisterViewTap"/> call (live) produce identical timer +
+/// recorder + event-emission side effects for the same kind of tap.
+/// "First-clear" and "last-clear" are not part of the result vocabulary —
+/// they're derivable from <see cref="ClearedCount"/> / <see cref="IsCompleted"/>
+/// and announced via <see cref="BoardCleared"/>.</para>
 ///
 /// <para><b>Optional services</b>: a <see cref="ReplayRecorder"/> and
 /// <see cref="GameTimer"/> are passed into the constructor. Both nullable
 /// — the verifier instantiates ClassicRun without either when it only needs
-/// to assert tap-by-tap kinds against final board state. Live mode passes
+/// to assert tap-by-tap results against final board state. Live mode passes
 /// both so the run drives recorder + timer side effects in lock-step with
 /// state mutation.</para>
 /// </summary>
@@ -109,8 +85,8 @@ public sealed class ClassicRun
     /// <summary>
     /// Resume-aware constructor. Called when restoring from a save: the
     /// supplied <paramref name="alreadyCleared"/> seeds the cleared counter
-    /// so wasFirst/wasLast computation accounts for arrows cleared in the
-    /// prior session.
+    /// so subsequent <see cref="ClearedCount"/> reads reflect total
+    /// progression across sessions.
     /// </summary>
     public ClassicRun(Board board, ReplayRecorder recorder, GameTimer timer, int alreadyCleared)
         : this(board, recorder, timer)
@@ -123,48 +99,48 @@ public sealed class ClassicRun
     // ---- Verifier-facing entry --------------------------------------------
 
     /// <summary>
-    /// Resolves a tap at <paramref name="cellX"/>,<paramref name="cellY"/>
-    /// against the current board state. Mutates the board on Cleared.
-    /// Returns the kind that actually applies — does NOT trust caller-stated
-    /// outcome. Server-side verifier compares the returned kind to the kind
-    /// on the recorded event.
+    /// Resolves a tap at the given float grid position against the current
+    /// board state. Mutates the board on Cleared. Returns the result that
+    /// actually applies — does NOT trust caller-stated outcome.
+    /// Server-side verifier compares the returned result to the result on
+    /// the recorded event.
     /// </summary>
-    public ClassicTapKind HandleTap(
-        int cellX,
-        int cellY,
-        double wallTimeSeconds,
-        float worldX,
-        float worldY
-    )
+    /// <param name="gridX">Float grid X (1 unit per cell). Run rounds to the nearest cell internally.</param>
+    /// <param name="gridY">Float grid Y (1 unit per cell). Run rounds to the nearest cell internally.</param>
+    /// <param name="wallTimeSeconds">Unix wall-clock seconds at the moment of the tap. Used by <see cref="GameTimer"/> for phase timestamps.</param>
+    public TapResult HandleTap(float gridX, float gridY, double wallTimeSeconds)
     {
         if (_completed)
-            return ClassicTapKind.Missed;
+            return TapResult.Missed;
 
-        var cell = new Cell(cellX, cellY);
+        var cell = new Cell(
+            (int)Math.Round(gridX, MidpointRounding.AwayFromZero),
+            (int)Math.Round(gridY, MidpointRounding.AwayFromZero)
+        );
         if (!_board.Contains(cell))
-            return ClassicTapKind.Missed;
+            return TapResult.Missed;
 
         Arrow arrow = _board.GetArrowAt(cell);
         if (arrow == null)
         {
-            ApplyState(ClassicTapKind.Missed, worldX, worldY, wallTimeSeconds);
-            return ClassicTapKind.Missed;
+            ApplyState(TapResult.Missed, gridX, gridY, wallTimeSeconds);
+            return TapResult.Missed;
         }
 
         if (!_board.IsClearable(arrow))
         {
-            ApplyState(ClassicTapKind.Blocked, worldX, worldY, wallTimeSeconds);
-            return ClassicTapKind.Blocked;
+            ApplyState(TapResult.Blocked, gridX, gridY, wallTimeSeconds);
+            return TapResult.Blocked;
         }
 
-        // Cleared — mutate board, then classify + apply state. Classifying
-        // after mutation lets ApplyState read the post-removal Arrows.Count
-        // for wasLast detection without an extra parameter.
+        // Cleared — mutate board, then apply state. Reading
+        // _board.Arrows.Count after RemoveArrow lets ApplyState detect the
+        // last-arrow case for BoardCleared / timer.Finish without an extra
+        // parameter.
         _board.RemoveArrow(arrow);
         _clearedCount++;
-        ClassicTapKind kind = ClassifyClearedPostMutation();
-        ApplyState(kind, worldX, worldY, wallTimeSeconds);
-        return kind;
+        ApplyState(TapResult.Cleared, gridX, gridY, wallTimeSeconds);
+        return TapResult.Cleared;
     }
 
     // ---- Live-path entry --------------------------------------------------
@@ -172,92 +148,62 @@ public sealed class ClassicRun
     /// <summary>
     /// Live-path companion to <see cref="HandleTap"/>. Called by the view
     /// adapter after <see cref="BoardView.TryClearArrow"/> has already done
-    /// its own classification + board mutation. Trusts <paramref name="kind"/>,
-    /// applies only the state-update side (timer + recorder + events) so the
-    /// run-internal cleared counter, timer phase, and recorded events stay in
-    /// sync with view-side mutation without double-mutating the board.
+    /// its own classification + board mutation. Trusts <paramref name="result"/>
+    /// and applies only the state-update side (timer + recorder + events) so
+    /// the run-internal cleared counter, timer phase, and recorded events
+    /// stay in sync with view-side mutation without double-mutating the
+    /// board.
     /// </summary>
     /// <remarks>
-    /// For Cleared variants the caller is responsible for having already
-    /// mutated the board (the view did this). The run reads the kind verbatim
-    /// and increments its own <see cref="ClearedCount"/>; do not call this for
-    /// a kind that the view didn't actually realize.
+    /// For <see cref="TapResult.Cleared"/> the caller is responsible for
+    /// having already mutated the board (the view did this). The run reads
+    /// the result verbatim and increments its own <see cref="ClearedCount"/>;
+    /// do not call this for a result that the view didn't actually realize.
     /// </remarks>
-    public void RegisterViewTap(
-        ClassicTapKind kind,
-        int cellX,
-        int cellY,
-        double wallTimeSeconds,
-        float worldX,
-        float worldY
-    )
+    public void RegisterViewTap(TapResult result, float gridX, float gridY, double wallTimeSeconds)
     {
         if (_completed)
             return;
-
-        switch (kind)
-        {
-            case ClassicTapKind.Cleared:
-            case ClassicTapKind.ClearedFirst:
-            case ClassicTapKind.ClearedLast:
-                _clearedCount++;
-                break;
-        }
-
-        ApplyState(kind, worldX, worldY, wallTimeSeconds);
+        if (result == TapResult.Cleared)
+            _clearedCount++;
+        ApplyState(result, gridX, gridY, wallTimeSeconds);
     }
 
-    // ---- Internal: classification + state update --------------------------
-
-    /// <summary>
-    /// Determines whether the just-mutated cleared tap was first / last /
-    /// neither, based on the run's own counter and the post-mutation board
-    /// occupancy. Called from <see cref="HandleTap"/> after RemoveArrow.
-    /// </summary>
-    private ClassicTapKind ClassifyClearedPostMutation()
-    {
-        bool wasFirst = _clearedCount == 1;
-        bool wasLast = _board.Arrows.Count == 0;
-        return wasLast ? ClassicTapKind.ClearedLast
-            : wasFirst ? ClassicTapKind.ClearedFirst
-            : ClassicTapKind.Cleared;
-    }
+    // ---- Internal: state update ------------------------------------------
 
     /// <summary>
     /// Shared timer + recorder + event-emission code path. Both
     /// <see cref="HandleTap"/> (verifier) and <see cref="RegisterViewTap"/>
-    /// (live) funnel here so identical kinds produce identical state
+    /// (live) funnel here so identical results produce identical state
     /// transitions regardless of entry point.
     /// </summary>
-    private void ApplyState(ClassicTapKind kind, float worldX, float worldY, double wallTime)
+    private void ApplyState(TapResult result, float gridX, float gridY, double wallTime)
     {
         // Inspection ends on the first non-missed tap (Blocked counts —
         // engaging with the puzzle, even unsuccessfully, is enough). Missed
         // taps don't count: they're noise that shouldn't penalize someone
         // still scanning the board.
-        if (kind != ClassicTapKind.Missed)
+        if (result != TapResult.Missed)
             TryEndInspection(wallTime);
 
-        switch (kind)
+        switch (result)
         {
-            case ClassicTapKind.Missed:
-                _recorder?.RecordMiss(worldX, worldY);
+            case TapResult.Missed:
+                _recorder?.RecordMiss(gridX, gridY);
                 break;
 
-            case ClassicTapKind.Blocked:
-                _recorder?.RecordReject(worldX, worldY);
+            case TapResult.Blocked:
+                _recorder?.RecordReject(gridX, gridY);
                 break;
 
-            case ClassicTapKind.Cleared:
-            case ClassicTapKind.ClearedFirst:
-                _recorder?.RecordClear(worldX, worldY);
-                break;
-
-            case ClassicTapKind.ClearedLast:
-                _recorder?.RecordClear(worldX, worldY);
-                _timer?.Finish(wallTime);
-                _completed = true;
-                BoardCleared?.Invoke();
+            case TapResult.Cleared:
+                _recorder?.RecordClear(gridX, gridY);
+                if (_board.Arrows.Count == 0)
+                {
+                    _timer?.Finish(wallTime);
+                    _completed = true;
+                    BoardCleared?.Invoke();
+                }
                 break;
         }
     }

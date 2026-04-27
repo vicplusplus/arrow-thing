@@ -92,7 +92,13 @@ public sealed class ReplayRecorder
         );
     }
 
-    public void RecordClear(float posX, float posY)
+    /// <summary>
+    /// Records a clear at the given grid position. <paramref name="simTime"/> is
+    /// optional: classic / coop pass null (wall-clock timestamp is sufficient
+    /// for those modes); endless passes the sim-clock seconds since run start
+    /// so the replay verifier can reproduce its time-driven loop deterministically.
+    /// </summary>
+    public void RecordClear(float posX, float posY, float? simTime = null)
     {
         _events.Add(
             new ReplayEvent
@@ -101,6 +107,7 @@ public sealed class ReplayRecorder
                 type = ReplayEventType.Clear,
                 posX = posX,
                 posY = posY,
+                simTime = simTime,
                 timestamp = DateTime.UtcNow.ToString("O"),
             }
         );
@@ -119,7 +126,11 @@ public sealed class ReplayRecorder
         );
     }
 
-    public void RecordReject(float posX, float posY)
+    /// <summary>
+    /// Records a tap on a present-but-unclearable arrow at the given grid
+    /// position. <paramref name="simTime"/> optional — see <see cref="RecordClear"/>.
+    /// </summary>
+    public void RecordReject(float posX, float posY, float? simTime = null)
     {
         _events.Add(
             new ReplayEvent
@@ -128,12 +139,17 @@ public sealed class ReplayRecorder
                 type = ReplayEventType.Reject,
                 posX = posX,
                 posY = posY,
+                simTime = simTime,
                 timestamp = DateTime.UtcNow.ToString("O"),
             }
         );
     }
 
-    public void RecordMiss(float posX, float posY)
+    /// <summary>
+    /// Records a tap on an empty cell at the given grid position.
+    /// <paramref name="simTime"/> optional — see <see cref="RecordClear"/>.
+    /// </summary>
+    public void RecordMiss(float posX, float posY, float? simTime = null)
     {
         _events.Add(
             new ReplayEvent
@@ -142,60 +158,7 @@ public sealed class ReplayRecorder
                 type = ReplayEventType.Miss,
                 posX = posX,
                 posY = posY,
-                timestamp = DateTime.UtcNow.ToString("O"),
-            }
-        );
-    }
-
-    // ---- Cell + sim-time variants (endless / future deterministic modes) ----
-    //
-    // These mirror RecordClear/Reject/Miss/Topout but record cell coords
-    // (instead of world pos) and a sim-clock seconds value (instead of
-    // wall-clock ISO). Verifier reads simTime + cellX/cellY directly so the
-    // entire replay reproduces deterministically without world↔cell
-    // conversion or wall-clock involvement. Wall-clock timestamp is still
-    // populated as a debug aid.
-
-    public void RecordClearAtCell(float simTime, int cellX, int cellY)
-    {
-        _events.Add(
-            new ReplayEvent
-            {
-                seq = _nextSeq++,
-                type = ReplayEventType.Clear,
                 simTime = simTime,
-                cellX = cellX,
-                cellY = cellY,
-                timestamp = DateTime.UtcNow.ToString("O"),
-            }
-        );
-    }
-
-    public void RecordRejectAtCell(float simTime, int cellX, int cellY)
-    {
-        _events.Add(
-            new ReplayEvent
-            {
-                seq = _nextSeq++,
-                type = ReplayEventType.Reject,
-                simTime = simTime,
-                cellX = cellX,
-                cellY = cellY,
-                timestamp = DateTime.UtcNow.ToString("O"),
-            }
-        );
-    }
-
-    public void RecordMissAtCell(float simTime, int cellX, int cellY)
-    {
-        _events.Add(
-            new ReplayEvent
-            {
-                seq = _nextSeq++,
-                type = ReplayEventType.Miss,
-                simTime = simTime,
-                cellX = cellX,
-                cellY = cellY,
                 timestamp = DateTime.UtcNow.ToString("O"),
             }
         );

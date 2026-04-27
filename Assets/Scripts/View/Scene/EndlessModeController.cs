@@ -144,6 +144,7 @@ public sealed class EndlessModeController : MonoBehaviour
     {
         if (_run == null || arrow == null)
             return;
+        // Cell→grid conversion is identity (each cell is 1×1 grid unit).
         _run.HandleTap(arrow.HeadCell.X, arrow.HeadCell.Y);
     }
 

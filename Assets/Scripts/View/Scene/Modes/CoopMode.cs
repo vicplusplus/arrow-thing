@@ -129,11 +129,11 @@ public sealed class CoopMode : MonoBehaviour, IGameMode
 
     public Func<Cell, Vector3, bool> TapAttemptHandler => OnCoopTap;
 
-    public void OnTapResult(TapResult result)
+    public void OnTap(Tap tap)
     {
         // Coop short-circuits via TapAttemptHandler before InputHandler reaches
-        // the OnTapResult pipeline, so this never fires. Server is authoritative
-        // on clears anyway — no client-side autosave or local replay recording.
+        // the OnTap pipeline, so this never fires. Server is authoritative on
+        // clears anyway — no client-side autosave or local replay recording.
     }
 
     public void WireRunFlow()

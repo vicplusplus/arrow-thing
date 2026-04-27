@@ -2,19 +2,6 @@ using System;
 using System.Collections.Generic;
 
 /// <summary>
-/// Outcome of a player tap inside an endless run, as resolved by
-/// <see cref="EndlessRun.HandleTap"/>. Stored on replay events so the
-/// server-side verifier can flag a player who claimed a clear on a cell
-/// that simulation says was empty (or blocked) at that sim time.
-/// </summary>
-public enum EndlessTapKind
-{
-    Missed = 0,
-    Blocked = 1,
-    Cleared = 2,
-}
-
-/// <summary>
 /// One pending combo waiting in the meter. Sized in garbage points (roughly
 /// arrow cell count). Color index points into the active palette and is
 /// reproduced deterministically on replay (see <see cref="EndlessRun"/>'s
@@ -186,27 +173,32 @@ public sealed class EndlessRun
     }
 
     /// <summary>
-    /// Resolves a player tap at <paramref name="cellX"/>,<paramref name="cellY"/>
-    /// against the current board. Returns the kind that actually applies
-    /// — does NOT trust caller-stated outcome. Server-side verifier compares
-    /// the returned kind to the kind stored on the replay event; mismatch
-    /// flags the user.
+    /// Resolves a player tap at the given grid position against the current
+    /// board. Returns the result that actually applies — does NOT trust
+    /// caller-stated outcome. Server-side verifier compares the returned
+    /// result to the result stored on the replay event; mismatch flags the
+    /// user.
     /// </summary>
-    public EndlessTapKind HandleTap(int cellX, int cellY)
+    /// <param name="gridX">Float grid X (1 unit per cell). Run rounds to the nearest cell internally.</param>
+    /// <param name="gridY">Float grid Y (1 unit per cell). Run rounds to the nearest cell internally.</param>
+    public TapResult HandleTap(float gridX, float gridY)
     {
         if (!_active)
-            return EndlessTapKind.Missed;
+            return TapResult.Missed;
 
-        var cell = new Cell(cellX, cellY);
+        var cell = new Cell(
+            (int)Math.Round(gridX, MidpointRounding.AwayFromZero),
+            (int)Math.Round(gridY, MidpointRounding.AwayFromZero)
+        );
         if (!Board.Contains(cell))
-            return EndlessTapKind.Missed;
+            return TapResult.Missed;
 
         var arrow = Board.GetArrowAt(cell);
         if (arrow == null)
-            return EndlessTapKind.Missed;
+            return TapResult.Missed;
 
         if (!Board.IsClearable(arrow))
-            return EndlessTapKind.Blocked;
+            return TapResult.Blocked;
 
         // Cleared — apply state changes.
         _board.ClearRealArrow(arrow);
@@ -239,7 +231,7 @@ public sealed class EndlessRun
             }
         }
 
-        return EndlessTapKind.Cleared;
+        return TapResult.Cleared;
     }
 
     // ---- Internal: scheduler ----------------------------------------------

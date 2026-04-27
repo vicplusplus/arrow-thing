@@ -6,11 +6,15 @@ using Newtonsoft.Json;
 /// and per game mode:
 /// <list type="bullet">
 ///   <item>All events carry seq and type.</item>
-///   <item>Classic / Coop modes: timestamp (wall-clock ISO) + posX/posY (world-space tap pos).</item>
-///   <item>Endless mode: simTime (sim-clock seconds since run start) + cellX/cellY (board ints).
-///         Endless writes timestamp too as a debug aid but the verifier reads simTime.</item>
+///   <item>Tap events (clear / reject / miss) carry posX/posY — float grid coordinates
+///         (1 unit per cell, origin at the board corner; identical to world space because
+///         <see cref="BoardCoords"/> is 1:1). The cell the tap resolved to is derivable
+///         on the verifier via <c>Math.Round(posX)</c>, <c>Math.Round(posY)</c>; recording
+///         the float retains subcell precision for any future tap-forgiveness logic.</item>
+///   <item>Classic / Coop modes: timestamp (wall-clock ISO).</item>
+///   <item>Endless mode: simTime (sim-clock seconds since run start). Endless writes
+///         timestamp too as a debug aid but the verifier reads simTime.</item>
 ///   <item>session_start, session_rejoin, start_solve, end_solve, topout — no spatial fields.</item>
-///   <item>clear, reject, miss — spatial fields populated.</item>
 ///   <item>clear (co-op) — also carries playerId for per-player attribution.</item>
 /// </list>
 ///
@@ -41,11 +45,18 @@ public sealed class ReplayEvent
     /// <summary>Event type — one of the <see cref="ReplayEventType"/> string constants.</summary>
     public string type;
 
-    /// <summary>World-space X of the tap. Used by classic / coop clear and reject.</summary>
+    /// <summary>
+    /// Float grid X of the tap (1 unit per cell, origin at the board corner).
+    /// Identical numerically to the legacy world-space X used by classic / coop
+    /// because <see cref="BoardCoords"/> is 1:1; old replays read straight through.
+    /// </summary>
     [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
     public float? posX;
 
-    /// <summary>World-space Y of the tap. Used by classic / coop clear and reject.</summary>
+    /// <summary>
+    /// Float grid Y of the tap (1 unit per cell, origin at the board corner).
+    /// Identical numerically to the legacy world-space Y; old replays read straight through.
+    /// </summary>
     [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
     public float? posY;
 
@@ -65,14 +76,6 @@ public sealed class ReplayEvent
     /// </summary>
     [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
     public float? simTime;
-
-    /// <summary>Cell X of the tap (v7+, endless). Avoids world↔cell rounding for verifier.</summary>
-    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-    public int? cellX;
-
-    /// <summary>Cell Y of the tap (v7+, endless). Avoids world↔cell rounding for verifier.</summary>
-    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-    public int? cellY;
 
     /// <summary>
     /// Co-op attribution (v6+). Null in solo replays and in co-op events

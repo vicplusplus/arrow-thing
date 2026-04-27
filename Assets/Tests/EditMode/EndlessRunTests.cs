@@ -85,7 +85,7 @@ public class EndlessRunTests
             "expected at least one empty cell on small fresh board"
         );
         var (cx, cy) = emptyCell.Value;
-        Assert.That(run.HandleTap(cx, cy), Is.EqualTo(EndlessTapKind.Missed));
+        Assert.That(run.HandleTap(cx, cy), Is.EqualTo(TapResult.Missed));
         Assert.That(run.ClearCount, Is.EqualTo(0));
     }
 
@@ -93,8 +93,8 @@ public class EndlessRunTests
     public void HandleTap_OutOfBounds_ReturnsMissed()
     {
         var run = MakeRun();
-        Assert.That(run.HandleTap(-1, 0), Is.EqualTo(EndlessTapKind.Missed));
-        Assert.That(run.HandleTap(0, 999), Is.EqualTo(EndlessTapKind.Missed));
+        Assert.That(run.HandleTap(-1, 0), Is.EqualTo(TapResult.Missed));
+        Assert.That(run.HandleTap(0, 999), Is.EqualTo(TapResult.Missed));
     }
 
     [Test]

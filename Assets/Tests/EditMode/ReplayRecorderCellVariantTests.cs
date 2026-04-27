@@ -1,43 +1,44 @@
 using NUnit.Framework;
 
 /// <summary>
-/// Coverage for the cell + sim-time variant recorder methods used by
-/// endless mode. Mirrors the existing world-pos variants but writes to
-/// the simTime / cellX / cellY fields.
+/// Coverage for the optional sim-time parameter on tap-event recorder
+/// methods. Endless mode passes simTime so the verifier can drive its
+/// time-based loop deterministically; classic / coop omit it (wall-clock
+/// timestamp suffices).
 /// </summary>
 [TestFixture]
 public class ReplayRecorderCellVariantTests
 {
     [Test]
-    public void RecordClearAtCell_PopulatesSimTimeAndCellCoords()
+    public void RecordClear_WithSimTime_PopulatesSimTimeAndPos()
     {
         var r = new ReplayRecorder();
-        r.RecordClearAtCell(simTime: 1.5f, cellX: 3, cellY: 7);
+        r.RecordClear(posX: 3f, posY: 7f, simTime: 1.5f);
 
         var e = r.Events[0];
         Assert.That(e.type, Is.EqualTo(ReplayEventType.Clear));
         Assert.That(e.simTime, Is.EqualTo(1.5f));
-        Assert.That(e.cellX, Is.EqualTo(3));
-        Assert.That(e.cellY, Is.EqualTo(7));
-        Assert.That(e.posX, Is.Null, "world-pos fields stay null on cell variant");
-        Assert.That(e.posY, Is.Null);
+        Assert.That(e.posX, Is.EqualTo(3f));
+        Assert.That(e.posY, Is.EqualTo(7f));
         Assert.That(e.timestamp, Is.Not.Null.Or.Empty, "wall-clock kept as debug aid");
     }
 
     [Test]
-    public void RecordRejectAtCell_TypeIsReject()
+    public void RecordReject_WithSimTime_TypeIsReject()
     {
         var r = new ReplayRecorder();
-        r.RecordRejectAtCell(2.0f, 5, 9);
+        r.RecordReject(5f, 9f, simTime: 2.0f);
         Assert.That(r.Events[0].type, Is.EqualTo(ReplayEventType.Reject));
+        Assert.That(r.Events[0].simTime, Is.EqualTo(2.0f));
     }
 
     [Test]
-    public void RecordMissAtCell_TypeIsMiss()
+    public void RecordMiss_WithSimTime_TypeIsMiss()
     {
         var r = new ReplayRecorder();
-        r.RecordMissAtCell(2.5f, 0, 0);
+        r.RecordMiss(0f, 0f, simTime: 2.5f);
         Assert.That(r.Events[0].type, Is.EqualTo(ReplayEventType.Miss));
+        Assert.That(r.Events[0].simTime, Is.EqualTo(2.5f));
     }
 
     [Test]
@@ -48,19 +49,28 @@ public class ReplayRecorderCellVariantTests
         var e = r.Events[0];
         Assert.That(e.type, Is.EqualTo(ReplayEventType.Topout));
         Assert.That(e.simTime, Is.EqualTo(42.0f));
-        Assert.That(e.cellX, Is.Null);
-        Assert.That(e.cellY, Is.Null);
         Assert.That(e.posX, Is.Null);
         Assert.That(e.posY, Is.Null);
     }
 
     [Test]
-    public void Mixed_World_And_Cell_Variants_Coexist_With_Monotonic_Seq()
+    public void RecordClear_WithoutSimTime_LeavesSimTimeNull()
+    {
+        var r = new ReplayRecorder();
+        r.RecordClear(1.5f, 2.5f); // classic-style: no simTime
+        var e = r.Events[0];
+        Assert.That(e.simTime, Is.Null, "classic recordings shouldn't synthesize a simTime");
+        Assert.That(e.posX, Is.EqualTo(1.5f));
+        Assert.That(e.posY, Is.EqualTo(2.5f));
+    }
+
+    [Test]
+    public void Mixed_Recordings_Coexist_With_Monotonic_Seq()
     {
         var r = new ReplayRecorder();
         r.RecordSessionStart(); // seq 0
-        r.RecordClear(1.5f, 2.5f); // seq 1, world-pos
-        r.RecordClearAtCell(1.0f, 3, 4); // seq 2, cell+sim
+        r.RecordClear(1.5f, 2.5f); // seq 1, classic-style
+        r.RecordClear(3f, 4f, simTime: 1.0f); // seq 2, endless-style
         r.RecordTopout(2.0f); // seq 3
 
         Assert.That(r.Events.Count, Is.EqualTo(4));
