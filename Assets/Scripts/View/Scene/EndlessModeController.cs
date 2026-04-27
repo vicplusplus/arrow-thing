@@ -211,7 +211,14 @@ public sealed class EndlessModeController : MonoBehaviour
     private MeterEntry _activeCombo;
     private int _lastColorIndex = -1;
     private int _activeShortfall;
-    private float _pushTimer;
+
+    // Canonical sim-time scheduler for push ticks. _lastPushSimTime is
+    // the sim time of the most recent OnPushTick. Each frame we fire
+    // pushes while _lastPushSimTime + CurrentPushIntervalSeconds() <=
+    // _simTime. This avoids frame-rate-dependent delta accumulation so
+    // a server-side EndlessSimulator can replay the same push sequence
+    // from {seed, tap log, board size} alone.
+    private float _lastPushSimTime;
 
     // HUD-bound elements (resolved during Initialize; null-tolerant).
     private VisualElement _meterContainer;
@@ -240,11 +247,27 @@ public sealed class EndlessModeController : MonoBehaviour
     public int ClearCount { get; private set; }
     public int LongestCombo { get; private set; }
     private int _currentCombo;
-    private float _runStartTime;
+
+    // Sim-time clock. Starts at 0 on Initialize, advances by Time.deltaTime
+    // each Update. ALL endless game-loop time reads use this instead of
+    // Time.time so the run is deterministic-replayable from the input log:
+    // server-side EndlessSimulator advances sim time step-by-step between
+    // events without any wall-clock involvement. Wall-clock-derived values
+    // also break under tab-out / focus loss; sim time follows Update which
+    // pauses naturally with the game.
+    private float _simTime;
     private float _runEndTime;
 
-    // Combo timer: timestamp of the last real-arrow clear.
+    /// <summary>Current sim-time seconds since run start. Read by EndlessMode for replay event timestamps.</summary>
+    public float SimTime => _simTime;
+
+    // Combo timer: sim-time of the last real-arrow clear.
     private float _lastClearTime = -1f;
+
+    // Cosmetic-color RNG. Seeded from the run seed in Initialize so combo
+    // colors are reproducible by the replay viewer / verifier even though
+    // they don't affect game state.
+    private PortableRandom _colorRng;
 
     // ---- Events ------------------------------------------------------------
 
@@ -297,9 +320,16 @@ public sealed class EndlessModeController : MonoBehaviour
         _meter.Clear();
         _lastColorIndex = -1;
         _activeShortfall = 0;
-        _pushTimer = 0f;
-        _runStartTime = Time.time;
+        _lastPushSimTime = 0f;
+        _simTime = 0f;
+        _lastClearTime = -1f;
         _active = true;
+
+        // Color RNG seeded from spawnSeed so combo colors are reproducible
+        // on replay. Independent of the spawn-side RNG (different stream)
+        // so adding/removing color picks never perturbs spawn outcomes.
+        var colorSeedRng = new PortableRandom((uint)spawnSeed ^ 0x9E3779B9u);
+        _colorRng = new PortableRandom((uint)colorSeedRng.NextInt(1, int.MaxValue));
 
         // Seed the meter with one combo so the first push tick has something
         // to send to pending instead of an empty queue.
@@ -327,7 +357,7 @@ public sealed class EndlessModeController : MonoBehaviour
         _currentCombo++;
         if (_currentCombo > LongestCombo)
             LongestCombo = _currentCombo;
-        _lastClearTime = Time.time;
+        _lastClearTime = _simTime;
 
         // Immediate mode: shortfall garbage now has a chance to fit. Try to
         // spawn arrows until we cover the shortfall (in points). Whatever
@@ -335,7 +365,7 @@ public sealed class EndlessModeController : MonoBehaviour
         // (which will topout if it's still not zero).
         if (_activeShortfall > 0)
         {
-            float commitAt = Time.time + CurrentPreviewDurationSeconds();
+            float commitAt = _simTime + CurrentPreviewDurationSeconds();
             while (_activeShortfall > 0)
             {
                 if (!TrySpawnOnePending(commitAt, out int weight))
@@ -392,7 +422,7 @@ public sealed class EndlessModeController : MonoBehaviour
     /// </summary>
     private int SpawnComboPoints(int comboPoints)
     {
-        float commitAt = Time.time + CurrentPreviewDurationSeconds();
+        float commitAt = _simTime + CurrentPreviewDurationSeconds();
         int placed = 0;
         while (placed < comboPoints)
         {
@@ -426,8 +456,8 @@ public sealed class EndlessModeController : MonoBehaviour
         if (palette == null || palette.Count == 0)
             return 0;
         if (palette.Count == 1 || _lastColorIndex < 0)
-            return UnityEngine.Random.Range(0, palette.Count);
-        int idx = UnityEngine.Random.Range(0, palette.Count - 1);
+            return _colorRng.NextInt(palette.Count);
+        int idx = _colorRng.NextInt(palette.Count - 1);
         if (idx >= _lastColorIndex)
             idx++;
         return idx;
@@ -608,20 +638,34 @@ public sealed class EndlessModeController : MonoBehaviour
         if (!_active)
             return;
 
-        float now = Time.time;
+        // Advance the deterministic sim clock first so all subsequent
+        // time reads in this frame see the same value. Server-side
+        // EndlessSimulator advances sim time event-by-event using the
+        // same _simTime field semantics.
+        _simTime += Time.deltaTime;
 
         // Clear-streak combo timer (display-only).
-        if (_currentCombo > 0 && _lastClearTime > 0f && now - _lastClearTime > comboTimerSeconds)
+        if (
+            _currentCombo > 0
+            && _lastClearTime > 0f
+            && _simTime - _lastClearTime > comboTimerSeconds
+        )
             BreakCombo();
 
         // Push tick (drives the garbage meter forward). Interval shrinks
         // with progression (see CurrentPushIntervalSeconds) — difficulty
         // escalates via cadence, not combo size or arrow quality.
-        _pushTimer += Time.deltaTime;
-        float interval = CurrentPushIntervalSeconds();
-        if (_pushTimer >= interval)
+        //
+        // Canonical scheduler (see _lastPushSimTime field doc): we don't
+        // accumulate frame deltas; instead we fire pushes whenever the
+        // sim time has crossed _lastPushSimTime + interval. The while
+        // loop catches up if a long frame straddles multiple intervals.
+        // This keeps push timing replay-deterministic — the server-side
+        // simulator computes the same _lastPushSimTime sequence given
+        // the same sim-time advances.
+        while (_active && _simTime >= _lastPushSimTime + CurrentPushIntervalSeconds())
         {
-            _pushTimer -= interval;
+            _lastPushSimTime += CurrentPushIntervalSeconds();
             OnPushTick();
         }
 
@@ -635,7 +679,7 @@ public sealed class EndlessModeController : MonoBehaviour
         // Commit pipeline: any pending whose commit deadline passed becomes real.
         _commitScratch.Clear();
         foreach (var pending in _session.PendingArrows)
-            if (now >= pending.CommitAt)
+            if (_simTime >= pending.CommitAt)
                 _commitScratch.Add(pending);
 
         foreach (var pending in _commitScratch)
@@ -671,9 +715,10 @@ public sealed class EndlessModeController : MonoBehaviour
         }
 
         // Tint intensity is binary on shortfall presence. Pulses to make it
-        // unmissable while uncommitted arrows are queued.
+        // unmissable while uncommitted arrows are queued. Pulse uses sim
+        // time so a paused tab doesn't drift the phase off the gameplay.
         float t = _activeShortfall > 0 ? 1f : 0f;
-        float pulse = Mathf.Sin(Time.time * 2f * Mathf.PI * DangerPulseHz);
+        float pulse = Mathf.Sin(_simTime * 2f * Mathf.PI * DangerPulseHz);
         float strength = (t * DangerMaxAlpha) + (t * DangerPulseAmp * pulse);
         if (strength < 0f)
             strength = 0f;
@@ -737,7 +782,7 @@ public sealed class EndlessModeController : MonoBehaviour
         if (!_active)
             return;
         _active = false;
-        _runEndTime = Time.time;
+        _runEndTime = _simTime;
         ToppedOut?.Invoke();
         StartCoroutine(ResultDelayCoroutine());
     }
@@ -752,5 +797,10 @@ public sealed class EndlessModeController : MonoBehaviour
         ResultReady?.Invoke();
     }
 
-    public float RunDurationSeconds => (_active ? Time.time : _runEndTime) - _runStartTime;
+    /// <summary>
+    /// Sim-time elapsed since run start. Locks at <see cref="_runEndTime"/>
+    /// once topout fires so the result screen / replay payload all see the
+    /// same value the simulator will compute on the server.
+    /// </summary>
+    public float RunDurationSeconds => _active ? _simTime : _runEndTime;
 }

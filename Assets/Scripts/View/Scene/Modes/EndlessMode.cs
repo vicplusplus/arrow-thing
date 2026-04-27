@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -35,6 +36,15 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
     private int _w;
     private int _h;
     private int _activeSeed;
+    private string _gameId;
+
+    /// <summary>
+    /// Captures every player tap (and the topout) for server-side replay
+    /// verification. Built once in <see cref="RunSetup"/>; payload is
+    /// emitted at topout (Phase 2a: Debug.Log only; Phase 2c: POST to
+    /// the server).
+    /// </summary>
+    private EndlessReplayRecorder _recorder;
 
     public string Name => "Endless";
 
@@ -73,7 +83,21 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
         // Endless routes real-arrow clears through EndlessBoardSession via
         // BoardView.SetArrowRemover (wired in Setup). Stats + immediate-mode
         // shortfall placement happen inside EndlessModeController.HandleRealArrowCleared.
-        // No replay recording, no save autosave, no inspection-phase timer.
+        //
+        // We DO record every tap (including misses + blocked) for replay
+        // verification: blocked/missed taps affect _lastClearTime / combo-
+        // streak state, so a faithful replay needs them too.
+        if (_endless == null || _recorder == null)
+            return;
+        var kind = result.Kind switch
+        {
+            TapResultKind.Cleared => EndlessTapKind.Cleared,
+            TapResultKind.ClearedFirst => EndlessTapKind.Cleared,
+            TapResultKind.ClearedLast => EndlessTapKind.Cleared,
+            TapResultKind.Blocked => EndlessTapKind.Blocked,
+            _ => EndlessTapKind.Missed,
+        };
+        _recorder.RecordTap(_endless.SimTime, result.Cell.X, result.Cell.Y, kind);
     }
 
     public void WireRunFlow()
@@ -163,6 +187,11 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
         // (used for ghost cycle detection) sees the cleared arrow vanish.
         boardView.SetArrowRemover(_endless.HandleRealArrowCleared);
 
+        // Replay capture: a fresh recorder per run, paired with a fresh game
+        // ID so server-side dedup can spot retried submissions.
+        _gameId = Guid.NewGuid().ToString();
+        _recorder = new EndlessReplayRecorder();
+
         // Topout signal: ToppedOut fires immediately to freeze gameplay so
         // the player can't keep tapping during the pause; ResultReady fires
         // after a short delay so the player can see the final saturated
@@ -205,6 +234,26 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
                 + $"duration={_endless.RunDurationSeconds:F1}s"
         );
 
+        // Capture the topout in the replay log + log the full payload so we
+        // can inspect it during Phase 2a manual testing. Phase 2c will swap
+        // the Debug.Log for an actual server submission.
+        if (_recorder != null && _endless != null)
+        {
+            _recorder.RecordTopout(_endless.SimTime);
+            var payload = BuildReplayPayload();
+            try
+            {
+                var json = Newtonsoft.Json.JsonConvert.SerializeObject(payload);
+                Debug.Log(
+                    $"[EndlessMode] Replay payload ({json.Length} chars, {payload.events.Count} events): {json}"
+                );
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[EndlessMode] Failed to serialize replay payload: {e}");
+            }
+        }
+
         // Freeze gameplay: input off, shared HUD chrome hidden. Player sees
         // the saturated board with the danger tint locked at full red until
         // the result screen appears.
@@ -223,6 +272,26 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
             if (clearsLabel != null)
                 clearsLabel.style.display = DisplayStyle.None;
         }
+    }
+
+    /// <summary>
+    /// Builds the <see cref="EndlessReplayData"/> payload from the recorder
+    /// + final stats. Pure construction — does not write to disk or send.
+    /// </summary>
+    private EndlessReplayData BuildReplayPayload()
+    {
+        return new EndlessReplayData
+        {
+            gameId = _gameId,
+            gameVersion = Application.version,
+            seed = _activeSeed,
+            boardSize = _w, // square; _w == _h
+            tuningsVersion = 1,
+            events = new List<EndlessReplayEvent>(_recorder.Events),
+            claimedClears = _endless.ClearCount,
+            claimedLongestCombo = _endless.LongestCombo,
+            claimedDurationSeconds = _endless.RunDurationSeconds,
+        };
     }
 
     private void OnResultReady()
