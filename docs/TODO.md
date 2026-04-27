@@ -65,37 +65,46 @@ Becomes a thin adapter:
 - `HandleRealArrowCleared` (called from `BoardView.SetArrowRemover`)
   delegates to `_run.HandleTap(cellX, cellY)`.
 
-### 3. `ClassicRun` (Domain)
+### 3. `ClassicRun` (Domain) ✅
 
-Same pattern, scoped to classic's loop:
-- Constructed with `(Board, ReplayRecorder?, GameTimer?)`.
-- `ClearResult HandleTap(int cellX, int cellY, double wallTime)` —
-  resolves the tap, mutates board, transitions inspection→solve, records
-  events, fires victory event on last clear.
-- Events: `ArrowCleared`, `BoardCleared`, `InspectionEnded`.
-- Optional `_recorder` / `_timer` so verifier can run without recording.
+Done. `Assets/Scripts/Domain/ClassicRun.cs`. Constructed with
+`(Board, ReplayRecorder?, GameTimer?, alreadyCleared)`. Two driving
+entries that share the same private state-update routine:
 
-### 4. Refactor `InputHandler` + `ClassicMode` (View)
+- `ClassicTapKind HandleTap(cellX, cellY, wallTime, worldX, worldY)`
+  — full path: classifies, mutates board on Cleared, transitions
+  timer, records event. Verifier-facing.
+- `void RegisterViewTap(kind, cellX, cellY, wallTime, worldX, worldY)`
+  — live companion: trusts kind from `BoardView.TryClearArrow` (which
+  already mutated the board) and applies only timer + recorder side
+  effects. Avoids double-mutation.
 
-`InputHandler.HandleTap` becomes lighter — converts screen pos → cell,
-delegates to mode's `HandleTap` (a new `ITappable` hook on `IGameMode`?).
+Events: `InspectionEnded`, `BoardCleared`. Recorder + timer are
+optional so the verifier can instantiate ClassicRun headless.
 
-`ClassicMode` constructs `ClassicRun` in setup, subscribes to events,
-delegates `OnTapResult` to `_run.HandleTap`.
+### 4. Refactor `ClassicMode` ✅
 
-The recorder + timer + autosave logic moves into `ClassicRun` events
-that `ClassicMode` listens to.
+Done. `OnTapResult` now forwards every tap to
+`ClassicRun.RegisterViewTap`; the run owns timer transitions, replay
+recording, and `BoardCleared` detection. ClassicMode keeps view-only
+concerns (autosave threshold, victory wiring via the existing
+`BoardView.LastArrowClearing` subscriber, save/leave flow). No
+`InputHandler` changes were needed — the existing `TapResult` callback
+chain plumbs cell + world pos + wall time end-to-end.
 
-### 5. Tests
+### 5. Tests ✅
 
-EditMode tests for both `Run` classes:
-- `EndlessRunTests`: deterministic replay (same seed + same tap log →
-  same final stats), shortfall→topout edge cases, immediate-mode placement.
-- `ClassicRunTests`: replay produces same time, victory fires on last
-  arrow, autosave-counter equivalent.
+- `EndlessRunTests` ✅ — determinism (same seed + tap script → same
+  final stats), shortfall→topout, no-op deltas, post-topout duration
+  lock.
+- `ClassicRunTests` ✅ — out-of-bounds is a no-op, missed taps don't
+  end inspection, blocked taps do, first/last clear classification,
+  `BoardCleared` event + timer.Finish on the last arrow,
+  `RegisterViewTap` parity with `HandleTap`, post-completion no-op,
+  null-recorder/timer construction.
 
-These unblock the future verifier — which is just "instantiate Run +
-walk events" — without needing dedicated simulator code.
+These unblock the future verifier — "instantiate Run, walk events,
+assert state" — without needing dedicated simulator code.
 
 ## Out of scope (next PR)
 
@@ -115,8 +124,11 @@ walk events" — without needing dedicated simulator code.
 - **Coop**: not extracted. Server-authoritative; client doesn't own a
   game loop. `CoopSession` already covers most of what would be a
   `CoopRun`. Skip.
-- **Adapter boundary for classic input**: `InputHandler` currently
-  reaches all the way through `BoardView.TryClearArrow` to play the
-  clear animation BEFORE calling the mode's tap handler. With
-  `ClassicRun` owning the board mutation, the animation timing might
-  need to invert (run first, animation triggered by event). Investigate.
+- **Adapter boundary for classic input** ✅ Resolved by the dual-API
+  split on `ClassicRun`: `BoardView.TryClearArrow` keeps owning view
+  mutation + animation on the live path, and `RegisterViewTap` lets
+  the mode notify the run after the fact (no double-mutation).
+  Verifier uses `HandleTap` which mutates the board itself. Both
+  entries funnel into the same private state-update routine so the
+  same kind of tap produces identical timer + recorder side effects
+  regardless of entry point.

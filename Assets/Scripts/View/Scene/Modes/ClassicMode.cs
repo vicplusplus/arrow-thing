@@ -38,6 +38,7 @@ public sealed class ClassicMode : MonoBehaviour, IGameMode
     // Classic-owned run state (formerly on GameController).
     private GameTimer _timer;
     private ReplayRecorder _recorder;
+    private ClassicRun _run;
     private string _gameId;
     private int _activeSeed;
     private int _w;
@@ -84,43 +85,44 @@ public sealed class ClassicMode : MonoBehaviour, IGameMode
 
     public void OnTapResult(TapResult result)
     {
-        if (_recorder == null)
+        if (_run == null)
             return;
 
-        // Any arrow tap (even Blocked) ends the inspection phase. Missed
-        // (empty cell) doesn't — it's not engagement with the puzzle.
-        if (result.Kind != TapResultKind.Missed && _timer != null && !_timer.IsSolving)
-        {
-            _timer.StartSolve(result.WallTimeSeconds);
-            Debug.Log("[ClassicMode] Inspection ended — solve timer started");
-            _recorder.RecordStartSolve();
-        }
+        // Forward every tap to the run as a view-side notification: BoardView
+        // has already done classification + board mutation, so the run does
+        // not re-mutate. RegisterViewTap drives the timer phase transition,
+        // recorder events, and InspectionEnded / BoardCleared signals.
+        _run.RegisterViewTap(
+            ToClassicTapKind(result.Kind),
+            result.Cell.X,
+            result.Cell.Y,
+            result.WallTimeSeconds,
+            result.WorldPos.x,
+            result.WorldPos.y
+        );
 
-        switch (result.Kind)
-        {
-            case TapResultKind.Missed:
-                _recorder.RecordMiss(result.WorldPos.x, result.WorldPos.y);
-                break;
-            case TapResultKind.Blocked:
-                _recorder.RecordReject(result.WorldPos.x, result.WorldPos.y);
-                break;
-            case TapResultKind.Cleared:
-            case TapResultKind.ClearedFirst:
-                _recorder.RecordClear(result.WorldPos.x, result.WorldPos.y);
-                MaybeAutosave();
-                break;
-            case TapResultKind.ClearedLast:
-                _recorder.RecordClear(result.WorldPos.x, result.WorldPos.y);
-                if (_timer != null)
-                    _timer.Finish(result.WallTimeSeconds);
-                Debug.Log(
-                    $"[ClassicMode] Last arrow cleared — timer finished, solveElapsed={(_timer != null ? _timer.SolveElapsed.ToString("F3") : "N/A")}s"
-                );
-                // Save deletion + RecordEndSolve still fire from
-                // BoardView.LastArrowClearing -> WireVictory's subscriber.
-                break;
-        }
+        // Autosave triggers off cleared kinds. Last-arrow doesn't autosave
+        // because the save will be deleted on victory anyway (handled by
+        // the BoardView.LastArrowClearing subscriber in WireVictory).
+        if (result.Kind == TapResultKind.Cleared || result.Kind == TapResultKind.ClearedFirst)
+            MaybeAutosave();
+
+        if (result.Kind == TapResultKind.ClearedLast)
+            Debug.Log(
+                $"[ClassicMode] Last arrow cleared — timer finished, solveElapsed={(_timer != null ? _timer.SolveElapsed.ToString("F3") : "N/A")}s"
+            );
     }
+
+    private static ClassicTapKind ToClassicTapKind(TapResultKind k) =>
+        k switch
+        {
+            TapResultKind.Missed => ClassicTapKind.Missed,
+            TapResultKind.Blocked => ClassicTapKind.Blocked,
+            TapResultKind.Cleared => ClassicTapKind.Cleared,
+            TapResultKind.ClearedFirst => ClassicTapKind.ClearedFirst,
+            TapResultKind.ClearedLast => ClassicTapKind.ClearedLast,
+            _ => ClassicTapKind.Missed,
+        };
 
     private void MaybeAutosave()
     {
@@ -265,6 +267,7 @@ public sealed class ClassicMode : MonoBehaviour, IGameMode
             boardView.ApplyColoring();
             _controller.HideLoadingInternal();
             SetupTimer(resumeSolving, resumeSolveElapsed);
+            SetupRun(board, alreadyCleared: _initialArrowCount - board.Arrows.Count);
         }
         else
         {
@@ -273,7 +276,21 @@ public sealed class ClassicMode : MonoBehaviour, IGameMode
             boardView.ApplyColoring();
             _controller.HideLoadingInternal();
             SetupTimer(false, 0.0);
+            SetupRun(board, alreadyCleared: 0);
         }
+    }
+
+    /// <summary>
+    /// Constructs the <see cref="ClassicRun"/> domain object once recorder
+    /// + timer + initial board state are settled. The run is the canonical
+    /// owner of timer transitions + replay-event recording + board-cleared
+    /// detection from this point on; <see cref="OnTapResult"/> forwards every
+    /// tap into <see cref="ClassicRun.RegisterViewTap"/> so live + verifier
+    /// paths share a single state-update routine.
+    /// </summary>
+    private void SetupRun(Board board, int alreadyCleared)
+    {
+        _run = new ClassicRun(board, _recorder, _timer, alreadyCleared);
     }
 
     // ---- Parameter resolution ----------------------------------------------
