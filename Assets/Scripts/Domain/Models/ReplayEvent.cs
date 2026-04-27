@@ -13,8 +13,25 @@ using Newtonsoft.Json;
 ///   <item>clear, reject, miss — spatial fields populated.</item>
 ///   <item>clear (co-op) — also carries playerId for per-player attribution.</item>
 /// </list>
-/// Classic solve-relative timing is derived from timestamps: subtract start_solve timestamp,
-/// excluding any session_leave→session_rejoin gaps. Endless reads simTime directly.
+///
+/// <para><b>Why two clocks (timestamp vs simTime)?</b> They measure different
+/// things; one is not derivable from the other.</para>
+/// <list type="bullet">
+///   <item><c>timestamp</c> is wall-clock UTC. Continues advancing during
+///   pauses, focus loss, alt-tab, framerate hitches.</item>
+///   <item><c>simTime</c> is the game's deterministic clock — accumulated
+///   <c>Time.deltaTime</c> on the client. Stops during pause / focus
+///   loss because Unity stops calling Update.</item>
+/// </list>
+/// <para>Classic solve-relative timing comes from wall-clock timestamps
+/// (subtract <c>start_solve</c>, exclude session_leave→session_rejoin gaps);
+/// game state in classic only advances on player taps so wall-clock deltas
+/// faithfully represent in-game time.</para>
+/// <para>Endless's game loop is time-driven (push schedule, commit deadlines,
+/// danger pulse, run duration). A wall-clock-replay would fire push ticks
+/// during pauses and produce different clears/combo/duration than the
+/// client recorded — verification would fail. Sim-time strips out pauses,
+/// so the server-side simulator reproduces the run exactly.</para>
 /// </summary>
 public sealed class ReplayEvent
 {
@@ -36,9 +53,15 @@ public sealed class ReplayEvent
     public string timestamp;
 
     /// <summary>
-    /// Sim-time seconds since run start (v7+, endless). Server replay
-    /// simulator uses this to reproduce push schedule + commit pipeline
-    /// deterministically without wall-clock involvement.
+    /// Sim-time seconds since run start (v7+, endless). Distinct from
+    /// <see cref="timestamp"/>: sim time stops advancing during pause /
+    /// alt-tab / focus loss because Unity stops calling Update, while
+    /// wall-clock keeps ticking. Endless's game loop (push schedule,
+    /// commit deadlines, run duration) is sim-time-driven, so the server
+    /// replay simulator reads simTime directly to reproduce the same
+    /// outcomes — a wall-clock-driven replay would fire phantom pushes
+    /// during a player's pause and mismatch the recorded stats. Null on
+    /// classic / coop events where wall-clock is sufficient.
     /// </summary>
     [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
     public float? simTime;
