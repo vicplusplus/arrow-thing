@@ -625,6 +625,174 @@ public class ApiClient
         }
     }
 
+    // ---- Endless mode ------------------------------------------------------
+    //
+    // Parallels the classic endpoints (SubmitScore / GetScoreStatus /
+    // GetLeaderboard / GetPlayerEntry / "all" variants). Status polling
+    // shares the classic /api/scores/{gameId}/status route — the server's
+    // verify:result Redis keyspace is shared between modes.
+
+    public async Task<ApiResult<SubmitResultResponse>> SubmitEndlessScoreAsync(string replayJson)
+    {
+        var body = JsonUtility.ToJson(new SubmitScoreRequestDto { replayJson = replayJson });
+        try
+        {
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = new UnityWebRequest($"{_baseUrl}/api/endless-scores", "POST");
+                r.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+                r.downloadHandler = new DownloadHandlerBuffer();
+                r.SetRequestHeader("Content-Type", "application/json");
+                r.timeout = 120;
+                return r;
+            });
+
+            if (request.responseCode == 202)
+            {
+                var accepted = JsonUtility.FromJson<SubmitAcceptedResponse>(
+                    request.downloadHandler.text
+                );
+                return ApiResult<SubmitResultResponse>.Accepted(accepted.gameId);
+            }
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var response = JsonUtility.FromJson<SubmitResultResponse>(
+                    request.downloadHandler.text
+                );
+                return ApiResult<SubmitResultResponse>.Ok(response);
+            }
+            var error = TryParseError(request.downloadHandler.text);
+            return ApiResult<SubmitResultResponse>.Fail(request.responseCode, error);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] SubmitEndlessScore failed: {e.Message}");
+            return ApiResult<SubmitResultResponse>.Fail(0, "Network error");
+        }
+    }
+
+    public async Task<ApiResult<EndlessGlobalLeaderboardResponse>> GetEndlessLeaderboardAsync(
+        int width,
+        int height
+    )
+    {
+        try
+        {
+            using var request = UnityWebRequest.Get(
+                $"{_baseUrl}/api/endless-leaderboards/{width}x{height}"
+            );
+            request.timeout = 10;
+            var op = request.SendWebRequest();
+            while (!op.isDone)
+                await Task.Yield();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var response = JsonUtility.FromJson<EndlessGlobalLeaderboardResponse>(
+                    request.downloadHandler.text
+                );
+                return ApiResult<EndlessGlobalLeaderboardResponse>.Ok(response);
+            }
+            var error = TryParseError(request.downloadHandler.text);
+            return ApiResult<EndlessGlobalLeaderboardResponse>.Fail(request.responseCode, error);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] GetEndlessLeaderboard failed: {e.Message}");
+            return ApiResult<EndlessGlobalLeaderboardResponse>.Fail(0, "Network error");
+        }
+    }
+
+    public async Task<ApiResult<EndlessGlobalLeaderboardResponse>> GetEndlessLeaderboardAllAsync()
+    {
+        try
+        {
+            using var request = UnityWebRequest.Get($"{_baseUrl}/api/endless-leaderboards/all");
+            request.timeout = 10;
+            var op = request.SendWebRequest();
+            while (!op.isDone)
+                await Task.Yield();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var response = JsonUtility.FromJson<EndlessGlobalLeaderboardResponse>(
+                    request.downloadHandler.text
+                );
+                return ApiResult<EndlessGlobalLeaderboardResponse>.Ok(response);
+            }
+            var error = TryParseError(request.downloadHandler.text);
+            return ApiResult<EndlessGlobalLeaderboardResponse>.Fail(request.responseCode, error);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] GetEndlessLeaderboardAll failed: {e.Message}");
+            return ApiResult<EndlessGlobalLeaderboardResponse>.Fail(0, "Network error");
+        }
+    }
+
+    public async Task<ApiResult<EndlessPlayerEntryResponse>> GetEndlessPlayerEntryAsync(
+        int width,
+        int height
+    )
+    {
+        try
+        {
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = UnityWebRequest.Get(
+                    $"{_baseUrl}/api/endless-leaderboards/{width}x{height}/me"
+                );
+                r.timeout = 10;
+                return r;
+            });
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var response = JsonUtility.FromJson<EndlessPlayerEntryResponse>(
+                    request.downloadHandler.text
+                );
+                return ApiResult<EndlessPlayerEntryResponse>.Ok(response);
+            }
+            if (request.responseCode == 404)
+                return ApiResult<EndlessPlayerEntryResponse>.Fail(404, null);
+            var error = TryParseError(request.downloadHandler.text);
+            return ApiResult<EndlessPlayerEntryResponse>.Fail(request.responseCode, error);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] GetEndlessPlayerEntry failed: {e.Message}");
+            return ApiResult<EndlessPlayerEntryResponse>.Fail(0, "Network error");
+        }
+    }
+
+    public async Task<ApiResult<EndlessPlayerEntryResponse>> GetEndlessPlayerEntryAllAsync()
+    {
+        try
+        {
+            using var request = await SendAuthenticatedAsync(() =>
+            {
+                var r = UnityWebRequest.Get($"{_baseUrl}/api/endless-leaderboards/all/me");
+                r.timeout = 10;
+                return r;
+            });
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                var response = JsonUtility.FromJson<EndlessPlayerEntryResponse>(
+                    request.downloadHandler.text
+                );
+                return ApiResult<EndlessPlayerEntryResponse>.Ok(response);
+            }
+            if (request.responseCode == 404)
+                return ApiResult<EndlessPlayerEntryResponse>.Fail(404, null);
+            var error = TryParseError(request.downloadHandler.text);
+            return ApiResult<EndlessPlayerEntryResponse>.Fail(request.responseCode, error);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ApiClient] GetEndlessPlayerEntryAll failed: {e.Message}");
+            return ApiResult<EndlessPlayerEntryResponse>.Fail(0, "Network error");
+        }
+    }
+
     public async Task<ApiResult<ReplayFetchResponse>> GetReplayAsync(string gameId)
     {
         try
@@ -1428,6 +1596,40 @@ public class PlayerEntryResponse
     public int rank;
     public int totalEntries;
     public double time;
+    public string gameId;
+    public int boardWidth;
+    public int boardHeight;
+    public bool flagged;
+}
+
+[Serializable]
+public class EndlessGlobalLeaderboardResponse
+{
+    public int totalEntries;
+    public EndlessGlobalLeaderboardEntry[] entries;
+}
+
+[Serializable]
+public class EndlessGlobalLeaderboardEntry
+{
+    public int rank;
+    public string displayName;
+    public int clears;
+    public int longestCombo;
+    public double durationSeconds;
+    public string gameId;
+    public int boardWidth;
+    public int boardHeight;
+}
+
+[Serializable]
+public class EndlessPlayerEntryResponse
+{
+    public int rank;
+    public int totalEntries;
+    public int clears;
+    public int longestCombo;
+    public double durationSeconds;
     public string gameId;
     public int boardWidth;
     public int boardHeight;
