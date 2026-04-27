@@ -242,14 +242,19 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
                 + $"duration={_endless.RunDurationSeconds:F1}s"
         );
 
-        // Capture the topout in the replay log, then submit to the server
-        // for verification. EndlessScoreSubmitter is fire-and-forget — toast
-        // notifications announce success / failure / pending verification
-        // asynchronously so the result screen can come up immediately.
+        // Capture the topout in the replay log, then both:
+        //   1. Persist to the local endless leaderboard so the player's PB +
+        //      history are visible immediately (and stay around when the
+        //      server is offline / pending / rejects the submission).
+        //   2. Submit to the server for verification. EndlessScoreSubmitter
+        //      is fire-and-forget — toast notifications announce success /
+        //      failure / pending verification asynchronously so the result
+        //      screen can come up immediately.
         if (_recorder != null && _endless != null)
         {
             _recorder.RecordTopout(_endless.SimTime);
             ReplayData payload = BuildReplayPayload();
+            EndlessLeaderboardManager.Instance?.RecordEndlessResult(payload);
             EndlessScoreSubmitter.Submit(payload);
         }
 

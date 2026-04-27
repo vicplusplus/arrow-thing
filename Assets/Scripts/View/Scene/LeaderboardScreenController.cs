@@ -531,17 +531,108 @@ public sealed class LeaderboardScreenController : NavigableScene
         }
         else
         {
-            // Local endless leaderboard isn't tracked yet — show the empty
-            // state with a hint that runs are server-tracked.
             ShowElement(_endlessRefreshBtn, false);
-            _list.Clear();
-            ShowElement(_scroll, false);
-            _emptyLabel.text =
-                "Local endless leaderboards aren't tracked yet.\n"
-                + "Switch to Global to view your submitted runs.";
-            ShowElement(_emptyLabel, true);
             ShowElement(_playerPanel, false);
+            PopulateEndlessLocalList();
         }
+    }
+
+    /// <summary>
+    /// Renders the local endless leaderboard for the active endless size tab.
+    /// Reads from <see cref="EndlessLeaderboardManager"/>, sorts by clears desc
+    /// with duration asc as the tiebreak (board-area desc as a final tiebreak
+    /// when aggregating across configs on the All tab), and populates rows
+    /// matching the global view's shape.
+    /// </summary>
+    private void PopulateEndlessLocalList()
+    {
+        _list.Clear();
+
+        var manager = EndlessLeaderboardManager.Instance;
+        if (manager == null)
+        {
+            ShowElement(_scroll, false);
+            _emptyLabel.text = "No endless runs yet — top out a game to see it here.";
+            ShowElement(_emptyLabel, true);
+            return;
+        }
+
+        var (w, h) = (
+            EndlessTabs[_activeEndlessTabIndex].w,
+            EndlessTabs[_activeEndlessTabIndex].h
+        );
+        bool isAllTab = w == 0 && h == 0;
+
+        var entries = isAllTab ? manager.Store.GetAllEntries() : manager.Store.GetEntries(w, h);
+
+        if (entries.Count == 0)
+        {
+            ShowElement(_scroll, false);
+            _emptyLabel.text = "No endless runs yet — top out a game to see it here.";
+            ShowElement(_emptyLabel, true);
+            return;
+        }
+
+        // Fixed sort: clears desc, duration asc tiebreak. On the All tab we
+        // also push bigger-board runs above smaller-board ties so a 20×20
+        // run with the same (clears, duration) outranks a 5×5 — the larger
+        // board is the harder accomplishment.
+        entries.Sort(
+            (a, b) =>
+            {
+                int byScore = EndlessLeaderboardStore.CompareScore(a, b);
+                if (byScore != 0)
+                    return byScore;
+                if (isAllTab)
+                {
+                    int areaA = a.boardWidth * a.boardHeight;
+                    int areaB = b.boardWidth * b.boardHeight;
+                    int byArea = areaB.CompareTo(areaA);
+                    if (byArea != 0)
+                        return byArea;
+                }
+                return string.Compare(a.completedAt, b.completedAt, StringComparison.Ordinal);
+            }
+        );
+
+        ShowElement(_scroll, true);
+        ShowElement(_emptyLabel, false);
+
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            int rank = i + 1;
+
+            var row = new VisualElement();
+            row.AddToClassList("lb-entry");
+            row.userData = entry.gameId;
+
+            var rankLabel = new Label($"#{rank}");
+            rankLabel.AddToClassList("lb-entry__rank");
+            row.Add(rankLabel);
+
+            // Local entries have no display name (no server submission needed
+            // to record locally). Surface a constant marker so the row layout
+            // stays consistent with global rows.
+            var nameLabel = new Label("You");
+            nameLabel.AddToClassList("lb-entry__name");
+            row.Add(nameLabel);
+
+            var statsLabel = new Label(FormatEndlessLocalStats(entry, isAllTab));
+            statsLabel.AddToClassList("lb-entry__time");
+            row.Add(statsLabel);
+
+            _list.Add(row);
+        }
+    }
+
+    private static string FormatEndlessLocalStats(EndlessLeaderboardEntry e, bool includeBoardSize)
+    {
+        string boardSuffix =
+            includeBoardSize && e.boardWidth > 0 && e.boardHeight > 0
+                ? $" · {e.boardWidth}×{e.boardHeight}"
+                : "";
+        return $"{e.clears} clears · {FormatDuration(e.durationSeconds)}{boardSuffix}";
     }
 
     private void RefreshEndlessGlobalList()
