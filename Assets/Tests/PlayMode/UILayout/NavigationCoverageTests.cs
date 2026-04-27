@@ -455,6 +455,8 @@ public class NavigationCoverageTests : UILayoutTestBase
         "lb-back-btn",
         "lb-local-btn",
         "lb-global-btn",
+        "lb-mode-classic",
+        "lb-mode-endless",
         "tab-small",
         "tab-medium",
         "tab-large",
@@ -463,6 +465,26 @@ public class NavigationCoverageTests : UILayoutTestBase
         "sort-fastest",
         "sort-biggest",
         "sort-favorites",
+    };
+
+    /// <summary>
+    /// Endless variant of the leaderboard local view: classic size + sort
+    /// rows are hidden (replaced by endless size tabs), refresh/player
+    /// panel stays the same. Endless local view shows an empty-state
+    /// message — there's no local store yet — but the navigable buttons
+    /// are still the mode tabs + size tabs + back/global toggle.
+    /// </summary>
+    private static readonly string[] LeaderboardEndlessButtons =
+    {
+        "lb-back-btn",
+        "lb-local-btn",
+        "lb-global-btn",
+        "lb-mode-classic",
+        "lb-mode-endless",
+        "lb-endless-tab-small",
+        "lb-endless-tab-medium",
+        "lb-endless-tab-large",
+        "lb-endless-tab-all",
     };
 
     private static readonly UIState Leaderboard_LocalView = new UIState(

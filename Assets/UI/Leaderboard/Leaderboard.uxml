@@ -17,14 +17,33 @@
             </ui:VisualElement>
         </ui:VisualElement>
 
-        <!-- Size tabs + refresh -->
-        <ui:VisualElement class="tab-bar">
+        <!-- Mode tabs: Classic vs Endless. Each tab swaps the size-tab row
+             below + the data fetched / rendered. Mirrors the singleplayer
+             selection screen's mode tabs. -->
+        <ui:VisualElement class="tab-bar lb-mode-tabs">
+            <ui:Button name="lb-mode-classic" class="tab-bar__tab tab-bar__tab--active" text="Classic" />
+            <ui:Button name="lb-mode-endless" class="tab-bar__tab" text="Endless" />
+        </ui:VisualElement>
+
+        <!-- Classic size tabs + refresh -->
+        <ui:VisualElement name="lb-classic-size-tabs" class="tab-bar">
             <ui:Button name="tab-small" class="tab-bar__tab tab-bar__tab--active" text="Small" />
             <ui:Button name="tab-medium" class="tab-bar__tab" text="Medium" />
             <ui:Button name="tab-large" class="tab-bar__tab" text="Large" />
             <ui:Button name="tab-xlarge" class="tab-bar__tab" text="XLarge" />
             <ui:Button name="tab-all" class="tab-bar__tab" text="All" />
             <ui:Button name="lb-refresh-btn" class="list-refresh-btn lb--hidden">
+                <ui:VisualElement class="list-refresh-icon" />
+            </ui:Button>
+        </ui:VisualElement>
+
+        <!-- Endless size tabs (mirror endless preset row: 5×5 / 10×10 / 20×20 / All) -->
+        <ui:VisualElement name="lb-endless-size-tabs" class="tab-bar lb--hidden">
+            <ui:Button name="lb-endless-tab-small" class="tab-bar__tab tab-bar__tab--active" text="Small" />
+            <ui:Button name="lb-endless-tab-medium" class="tab-bar__tab" text="Medium" />
+            <ui:Button name="lb-endless-tab-large" class="tab-bar__tab" text="Large" />
+            <ui:Button name="lb-endless-tab-all" class="tab-bar__tab" text="All" />
+            <ui:Button name="lb-endless-refresh-btn" class="list-refresh-btn lb--hidden">
                 <ui:VisualElement class="list-refresh-icon" />
             </ui:Button>
         </ui:VisualElement>
