@@ -180,7 +180,9 @@ public class EndlessLeaderboardStoreTests
                 // Make config 0's entries the globally worst (lowest clears),
                 // but stay below the per-config cap so nothing prunes yet.
                 int clears = c * 100 + i + 1;
-                store.AddEntry(MakeEntry($"c{c}-g{i}", w, w, clears: clears, durationSeconds: 60.0));
+                store.AddEntry(
+                    MakeEntry($"c{c}-g{i}", w, w, clears: clears, durationSeconds: 60.0)
+                );
             }
         }
 

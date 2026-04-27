@@ -557,10 +557,7 @@ public sealed class LeaderboardScreenController : NavigableScene
             return;
         }
 
-        var (w, h) = (
-            EndlessTabs[_activeEndlessTabIndex].w,
-            EndlessTabs[_activeEndlessTabIndex].h
-        );
+        var (w, h) = (EndlessTabs[_activeEndlessTabIndex].w, EndlessTabs[_activeEndlessTabIndex].h);
         bool isAllTab = w == 0 && h == 0;
 
         var entries = isAllTab ? manager.Store.GetAllEntries() : manager.Store.GetEntries(w, h);
