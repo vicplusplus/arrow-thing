@@ -22,6 +22,7 @@ public class GameService
     private const int MaxHeavyQueueDepth = 20;
     public const string StandardQueueKey = "verify:queue:standard";
     public const string HeavyQueueKey = "verify:queue:heavy";
+    public const string EndlessQueueKey = "verify:queue:endless";
     public const string LockKeyPrefix = "verify:lock:";
 
     // Covers worst-case heavy-board verification with headroom.
@@ -233,6 +234,174 @@ public class GameService
     {
         var betterCount = await _db.Scores.CountAsync(s =>
             s.BoardWidth == width && s.BoardHeight == height && !s.User.Flagged && s.Time < time
+        );
+        return betterCount + 1;
+    }
+
+    // ---- Endless mode -----------------------------------------------------
+
+    /// <summary>
+    /// Submit an endless-mode replay for verification. Mirrors
+    /// <see cref="SubmitReplayAsync"/> for classic — same auth + flagged
+    /// + rate-limit + Redis-queue dispatch shape — but stores into
+    /// <see cref="AppDbContext.EndlessScores"/> with a different PB rule
+    /// (more clears wins; tiebreak on shorter duration).
+    /// </summary>
+    public async Task<(object? data, int status, string? error)> SubmitEndlessReplayAsync(
+        Guid userId,
+        string replayJson
+    )
+    {
+        ReplayData replay;
+        try
+        {
+            replay = JsonConvert.DeserializeObject<ReplayData>(replayJson)!;
+        }
+        catch
+        {
+            return (null, 400, "Malformed replay JSON.");
+        }
+        if (replay == null)
+            return (null, 400, "Malformed replay JSON.");
+        if (replay.mode != GameMode.Endless)
+            return (null, 400, "Replay mode is not endless.");
+        if (!Guid.TryParse(replay.gameId, out var gameId))
+            return (null, 400, "Invalid gameId.");
+
+        // Replay version gate (shared with classic).
+        if (!ReplayVersionPolicy.IsAllowed(replay.version))
+            return (null, 426, ReplayVersionPolicy.RejectionMessage(replay.version));
+
+        var user = await _db.Users.FindAsync(userId);
+        if (user == null)
+            return (null, 401, "User not found.");
+        if (user.Flagged)
+            return (null, 403, "Account is flagged. Contact support.");
+
+        // Cheap pre-verification before queuing.
+        var preVerifyReason = EndlessReplayVerifier.PreVerify(replay);
+        if (preVerifyReason != null)
+        {
+            _logger.LogWarning(
+                "Flagging user {UserId} for endless pre-verify failure: {Reason} (seed={Seed}, board={W}x{H}, gameId={GameId})",
+                userId,
+                preVerifyReason,
+                replay.seed,
+                replay.boardWidth,
+                replay.boardHeight,
+                replay.gameId
+            );
+            user.Flagged = true;
+            user.FlagReason = "endless_pre_verify:" + preVerifyReason;
+            user.FlaggedAt = DateTime.UtcNow;
+            user.FlagTriggerSeed = replay.seed;
+            user.FlagTriggerBoardWidth = replay.boardWidth;
+            user.FlagTriggerBoardHeight = replay.boardHeight;
+            user.FlagTriggerGameId = replay.gameId;
+            await _db.SaveChangesAsync();
+            return (null, 403, "Account is flagged. Contact support.");
+        }
+
+        // Idempotency: if the user already has an endless score at this
+        // config and the gameId matches, return the existing rank.
+        var existing = await _db.EndlessScores.FirstOrDefaultAsync(s =>
+            s.UserId == userId
+            && s.BoardWidth == replay.boardWidth
+            && s.BoardHeight == replay.boardHeight
+        );
+        if (existing != null && existing.GameId == gameId)
+        {
+            var existingRank = await ComputeEndlessRank(
+                existing.BoardWidth,
+                existing.BoardHeight,
+                existing.Clears,
+                existing.DurationSeconds
+            );
+            return (
+                new SubmitResultResponse
+                {
+                    Verified = true,
+                    Rank = existingRank,
+                    IsPersonalBest = false,
+                },
+                200,
+                null
+            );
+        }
+
+        // Rate limit shared with classic — submissions are submissions.
+        var oneHourAgo = DateTime.UtcNow.AddHours(-1);
+        var recentClassic = await _db.Scores.CountAsync(s =>
+            s.UserId == userId && s.UpdatedAt >= oneHourAgo
+        );
+        var recentEndless = await _db.EndlessScores.CountAsync(s =>
+            s.UserId == userId && s.UpdatedAt >= oneHourAgo
+        );
+        if (recentClassic + recentEndless >= RateLimitPerHour)
+            return (null, 429, "Rate limit exceeded. Try again later.");
+
+        if (!_redis.IsAvailable())
+            return (null, 503, "Service temporarily unavailable.");
+
+        var redisDb = _redis!.GetDatabase();
+
+        var lockKey = $"{LockKeyPrefix}{gameId}";
+        var lockAcquired = await redisDb.StringSetAsync(
+            lockKey,
+            userId.ToString(),
+            LockTtl,
+            When.NotExists
+        );
+        if (!lockAcquired)
+            return (
+                new SubmitAcceptedResponse { GameId = gameId.ToString(), Status = "pending" },
+                202,
+                null
+            );
+
+        var queueLength = await redisDb.ListLengthAsync(EndlessQueueKey);
+        if (queueLength >= MaxStandardQueueDepth)
+        {
+            await redisDb.KeyDeleteAsync(lockKey);
+            return (null, 503, "Server busy, try again later.");
+        }
+
+        var job = new
+        {
+            UserId = userId.ToString(),
+            GameId = gameId.ToString(),
+            ReplayJson = replayJson,
+            EnqueuedAt = DateTime.UtcNow.ToString("O"),
+        };
+        await redisDb.ListLeftPushAsync(
+            EndlessQueueKey,
+            System.Text.Json.JsonSerializer.Serialize(job)
+        );
+
+        return (
+            new SubmitAcceptedResponse { GameId = gameId.ToString(), Status = "pending" },
+            202,
+            null
+        );
+    }
+
+    /// <summary>
+    /// Rank for an endless score: count of better scores at the same board
+    /// config, plus one. "Better" = strictly more clears, OR equal clears
+    /// with strictly shorter duration. Flagged users excluded.
+    /// </summary>
+    public async Task<int> ComputeEndlessRank(
+        int width,
+        int height,
+        int clears,
+        double durationSeconds
+    )
+    {
+        var betterCount = await _db.EndlessScores.CountAsync(s =>
+            s.BoardWidth == width
+            && s.BoardHeight == height
+            && !s.User.Flagged
+            && (s.Clears > clears || (s.Clears == clears && s.DurationSeconds < durationSeconds))
         );
         return betterCount + 1;
     }
