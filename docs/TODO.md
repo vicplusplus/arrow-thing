@@ -57,21 +57,25 @@ Changes:
     - (b) `EndlessModeController` exposes `SimTime` and any caller reads
       it to pass back into the same Handle method.
   - Going with (a) — keeps the controller's API tighter.
-- **New `EndlessReplayRecorder` (Domain layer)** in
-  `Assets/Scripts/Domain/EndlessReplayRecorder.cs`:
-  - Records: `tap(simTime, cellX, cellY, kind)` where kind ∈
-    {Cleared, Blocked, Missed} and `topout(simTime)`.
+- **Universal `ReplayData` v7 + extended `ReplayRecorder`** rather than
+  per-mode replay types. Adding a new event type (`Topout`) is non-
+  breaking — Newtonsoft skips unknown fields. New optional fields on
+  `ReplayData`: `mode` (GameMode enum, defaults Classic for back-compat),
+  `tuningsVersion`, `clears`, `longestCombo`, `durationSeconds`. New
+  optional fields on `ReplayEvent`: `simTime`, `cellX`, `cellY`. Endless
+  uses these alongside the existing `seq`/`type`/`timestamp` shape;
+  classic and coop continue writing `posX`/`posY`/`timestamp` only.
+  - `ReplayRecorder` gets `RecordClearAtCell(simTime, cellX, cellY)`,
+    `RecordRejectAtCell`, `RecordMissAtCell`, `RecordTopout(simTime)`
+    variants. Cell+sim-time recording avoids world↔cell rounding and
+    wall-clock involvement on the verifier.
+  - Why include Blocked/Missed taps? They affect `_lastClearTime` →
+    combo timer reset semantics. Plus future ruleset variants might care.
   - Push tick / commit / clear are derivable from seed + tap log + size
     on the verifier; not recorded to keep payload small.
-  - Why include Blocked/Missed taps? They affect `_lastClearTime` →
-    combo timer reset semantics. Plus future ruleset variants might
-    care.
-- **New `EndlessReplayData` (Domain)**: seed, boardSize (single int —
-  endless is square), tuningsVersion (int — bump on tuning changes),
-  events list, claimed final stats {clears, longestCombo, duration}.
-  Format version field (`version = 1`).
-- **`EndlessMode` constructs the recorder**, hands it to the controller
-  during Initialize, builds the payload at topout. For Phase 2a no
+- **`EndlessMode` constructs a `ReplayRecorder`**, hands it to the
+  controller during Initialize, builds a `ReplayData` payload (mode =
+  Endless) at topout. For Phase 2a no
   network call — just `Debug.Log` the JSON so we can inspect it.
 
 Test:

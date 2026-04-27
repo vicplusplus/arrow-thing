@@ -40,11 +40,13 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
 
     /// <summary>
     /// Captures every player tap (and the topout) for server-side replay
-    /// verification. Built once in <see cref="RunSetup"/>; payload is
-    /// emitted at topout (Phase 2a: Debug.Log only; Phase 2c: POST to
-    /// the server).
+    /// verification. Built once in <see cref="RunSetup"/>; payload emitted
+    /// at topout (Phase 2a: Debug.Log only; Phase 2c: POST to the server).
+    /// Shared <see cref="ReplayRecorder"/> type — endless writes via the
+    /// cell+simTime variant methods so verification doesn't need world↔cell
+    /// conversion or wall-clock involvement.
     /// </summary>
-    private EndlessReplayRecorder _recorder;
+    private ReplayRecorder _recorder;
 
     public string Name => "Endless";
 
@@ -89,15 +91,21 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
         // streak state, so a faithful replay needs them too.
         if (_endless == null || _recorder == null)
             return;
-        var kind = result.Kind switch
+        float simTime = _endless.SimTime;
+        switch (result.Kind)
         {
-            TapResultKind.Cleared => EndlessTapKind.Cleared,
-            TapResultKind.ClearedFirst => EndlessTapKind.Cleared,
-            TapResultKind.ClearedLast => EndlessTapKind.Cleared,
-            TapResultKind.Blocked => EndlessTapKind.Blocked,
-            _ => EndlessTapKind.Missed,
-        };
-        _recorder.RecordTap(_endless.SimTime, result.Cell.X, result.Cell.Y, kind);
+            case TapResultKind.Cleared:
+            case TapResultKind.ClearedFirst:
+            case TapResultKind.ClearedLast:
+                _recorder.RecordClearAtCell(simTime, result.Cell.X, result.Cell.Y);
+                break;
+            case TapResultKind.Blocked:
+                _recorder.RecordRejectAtCell(simTime, result.Cell.X, result.Cell.Y);
+                break;
+            case TapResultKind.Missed:
+                _recorder.RecordMissAtCell(simTime, result.Cell.X, result.Cell.Y);
+                break;
+        }
     }
 
     public void WireRunFlow()
@@ -190,7 +198,7 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
         // Replay capture: a fresh recorder per run, paired with a fresh game
         // ID so server-side dedup can spot retried submissions.
         _gameId = Guid.NewGuid().ToString();
-        _recorder = new EndlessReplayRecorder();
+        _recorder = new ReplayRecorder();
 
         // Topout signal: ToppedOut fires immediately to freeze gameplay so
         // the player can't keep tapping during the pause; ResultReady fires
@@ -243,7 +251,7 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
             var payload = BuildReplayPayload();
             try
             {
-                var json = Newtonsoft.Json.JsonConvert.SerializeObject(payload);
+                var json = payload.ToJson();
                 Debug.Log(
                     $"[EndlessMode] Replay payload ({json.Length} chars, {payload.events.Count} events): {json}"
                 );
@@ -275,22 +283,27 @@ public sealed class EndlessMode : MonoBehaviour, IGameMode
     }
 
     /// <summary>
-    /// Builds the <see cref="EndlessReplayData"/> payload from the recorder
+    /// Builds the unified <see cref="ReplayData"/> payload from the recorder
     /// + final stats. Pure construction — does not write to disk or send.
     /// </summary>
-    private EndlessReplayData BuildReplayPayload()
+    private ReplayData BuildReplayPayload()
     {
-        return new EndlessReplayData
+        return new ReplayData
         {
             gameId = _gameId,
+            mode = GameMode.Endless,
             gameVersion = Application.version,
             seed = _activeSeed,
-            boardSize = _w, // square; _w == _h
+            boardWidth = _w,
+            boardHeight = _h,
+            // maxArrowLength + inspectionDuration left at default (0 / 0)
+            // — endless doesn't have a player-set max length and there's
+            // no inspection phase. Verifier dispatches on `mode`.
             tuningsVersion = 1,
-            events = new List<EndlessReplayEvent>(_recorder.Events),
-            claimedClears = _endless.ClearCount,
-            claimedLongestCombo = _endless.LongestCombo,
-            claimedDurationSeconds = _endless.RunDurationSeconds,
+            events = new List<ReplayEvent>(_recorder.Events),
+            clears = _endless.ClearCount,
+            longestCombo = _endless.LongestCombo,
+            durationSeconds = _endless.RunDurationSeconds,
         };
     }
 

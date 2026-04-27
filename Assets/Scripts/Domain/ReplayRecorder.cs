@@ -147,6 +147,73 @@ public sealed class ReplayRecorder
         );
     }
 
+    // ---- Cell + sim-time variants (endless / future deterministic modes) ----
+    //
+    // These mirror RecordClear/Reject/Miss/Topout but record cell coords
+    // (instead of world pos) and a sim-clock seconds value (instead of
+    // wall-clock ISO). Verifier reads simTime + cellX/cellY directly so the
+    // entire replay reproduces deterministically without world↔cell
+    // conversion or wall-clock involvement. Wall-clock timestamp is still
+    // populated as a debug aid.
+
+    public void RecordClearAtCell(float simTime, int cellX, int cellY)
+    {
+        _events.Add(
+            new ReplayEvent
+            {
+                seq = _nextSeq++,
+                type = ReplayEventType.Clear,
+                simTime = simTime,
+                cellX = cellX,
+                cellY = cellY,
+                timestamp = DateTime.UtcNow.ToString("O"),
+            }
+        );
+    }
+
+    public void RecordRejectAtCell(float simTime, int cellX, int cellY)
+    {
+        _events.Add(
+            new ReplayEvent
+            {
+                seq = _nextSeq++,
+                type = ReplayEventType.Reject,
+                simTime = simTime,
+                cellX = cellX,
+                cellY = cellY,
+                timestamp = DateTime.UtcNow.ToString("O"),
+            }
+        );
+    }
+
+    public void RecordMissAtCell(float simTime, int cellX, int cellY)
+    {
+        _events.Add(
+            new ReplayEvent
+            {
+                seq = _nextSeq++,
+                type = ReplayEventType.Miss,
+                simTime = simTime,
+                cellX = cellX,
+                cellY = cellY,
+                timestamp = DateTime.UtcNow.ToString("O"),
+            }
+        );
+    }
+
+    public void RecordTopout(float simTime)
+    {
+        _events.Add(
+            new ReplayEvent
+            {
+                seq = _nextSeq++,
+                type = ReplayEventType.Topout,
+                simTime = simTime,
+                timestamp = DateTime.UtcNow.ToString("O"),
+            }
+        );
+    }
+
     /// <summary>
     /// Produces a <see cref="ReplayData"/> snapshot of all accumulated events.
     /// </summary>

@@ -27,4 +27,7 @@ public static class ReplayEventType
 
     /// <summary>Player cleared the last arrow on the board, ending the solve.</summary>
     public const string EndSolve = "end_solve";
+
+    /// <summary>Endless: garbage queue couldn't fit on the board, ending the run.</summary>
+    public const string Topout = "topout";
 }
