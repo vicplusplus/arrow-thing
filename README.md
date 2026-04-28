@@ -13,10 +13,9 @@ Free to play at **https://arrow-thing.com/**
 - Design docs:
   - [`docs/GDD.md`](docs/GDD.md) (game design)
   - [`docs/TechnicalDesign.md`](docs/TechnicalDesign.md) (technical architecture and class structure)
-  - [`docs/OnlineRoadmap.md`](docs/OnlineRoadmap.md) (online features plan)
   - [`docs/BoardGeneration.md`](docs/BoardGeneration.md) (board generation algorithm)
-  - [`docs/LocalServerSetup.md`](docs/LocalServerSetup.md) (local server dev setup)
   - [`docs/AndroidTesting.md`](docs/AndroidTesting.md) (Android testing guide)
+  - [`server/docs/`](server/docs/) (server setup, rotation, and operations)
 
 ## Tech Stack
 
@@ -73,9 +72,8 @@ Git configuration (`.gitattributes`, `.gitignore`, git hooks) is based on [NYU G
 - `Assets/Tests/EditMode` - Unit tests (Unity Test Framework)
 - `Assets/Tests/PlayMode` - PlayMode tests (UI layout, API client)
 - `server/` - ASP.NET Core server (auth, shared domain code)
+- `server/docs/` - Server setup, rotation, and operations docs
 - `docs/GDD.md` - Game design direction and scope
 - `docs/TechnicalDesign.md` - Architecture and class-structure decisions
-- `docs/OnlineRoadmap.md` - Online features plan
 - `docs/BoardGeneration.md` - Board generation algorithm
-- `docs/LocalServerSetup.md` - Local server development setup
 - `docs/AndroidTesting.md` - Android testing guide

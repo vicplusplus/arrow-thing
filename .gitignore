@@ -93,6 +93,9 @@ Assets/Resources/PerformanceTestRunSettings.json.meta
 !server/**/*.csproj
 !server/**/*.sln
 
+# Standalone domain library project (override Unity *.csproj ignore)
+!Domain/**/*.csproj
+
 # SQLite dev database
 server/ArrowThing.Server/arrowthing.db
 server/ArrowThing.Server/arrowthing.db-shm

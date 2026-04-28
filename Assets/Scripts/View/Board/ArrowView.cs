@@ -232,8 +232,7 @@ public sealed class ArrowView : MonoBehaviour
     // as "about to commit" without being unreadable. The existing ArrowBody
     // shader (Assets/Art/Shaders/ArrowBody.shader) already supports alpha
     // (Transparent queue + SrcAlpha blend), so no material reconfiguration is
-    // needed — just write _Color.a per frame. See docs/TODO.md
-    // (Endless Mode → Pending arrow visuals) for spec.
+    // needed — just write _Color.a per frame.
     private bool _isPending;
     private const float PendingAlphaBase = 0.12f;
     private const float PendingAlphaAmplitude = 0.08f;
