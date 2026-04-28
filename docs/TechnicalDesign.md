@@ -76,27 +76,30 @@ This document is the implementation-facing counterpart to [`GDD.md`](GDD.md).
 
 - One entry in the save/replay event log. Fields vary by event type; unused fields are omitted from JSON.
 - `seq` — monotonically increasing, defines event order (timestamps can tie at e.g. `start_solve + clear`).
-- `type` — string constant from `ReplayEventType` (e.g. `"clear"`, `"session_leave"`).
-- `posX`, `posY` — nullable world-space tap position (for `clear`, `reject`; omitted from JSON for other event types via Newtonsoft `NullValueHandling.Ignore`). Cell derived via `BoardCoords.WorldToCell`.
-- `timestamp` — ISO 8601 UTC string. Present on all events. Solve-relative timing is derived by subtracting the `start_solve` timestamp, excluding `session_leave`→`session_rejoin` gaps.
+- `type` — string constant from `ReplayEventType` (e.g. `"clear"`, `"session_leave"`, `"topout"`).
+- `posX`, `posY` — float grid coordinates of the tap (1 unit per cell, origin at the board corner). Identical numerically to the legacy world-space coords because `BoardCoords` is 1:1, so older replays read straight through. Recorded for `clear`, `reject`, `miss`. Cell derived inside the run via `Math.Round`.
+- `timestamp` — ISO 8601 UTC string. Present on all events. Classic / coop solve-relative timing is derived by subtracting the `start_solve` timestamp, excluding `session_leave`→`session_rejoin` gaps.
+- `simTime` — float seconds on the run's deterministic clock (v7+). Endless writes this so the replay verifier can reproduce the time-driven loop without wall-clock noise from pauses / focus loss; null on classic / coop events.
+- `playerId` — co-op attribution (v6+). Null on solo replays.
 
 ### `ReplayEventType` (`static class`)
 
-- String constants for all event types: `session_start`, `session_leave`, `session_rejoin`, `start_solve`, `clear`, `reject`, `end_solve`.
+- String constants for all event types: `session_start`, `session_leave`, `session_rejoin`, `start_solve`, `clear`, `reject`, `miss`, `end_solve`, `topout`.
 - Uses strings (not enum) for human-readable JSON serialization.
 
 ### `ReplayData` (`sealed class`)
 
-- Full save/replay record for one game session.
-- Contains: `version` (replay schema version — field defaults to 1; `ReplayRecorder.ToReplayData()` sets it to the current schema version for new replays, currently `4`), `gameId` (UUID), `seed`, board dimensions, `inspectionDuration`, `gameVersion` (application version at recording time, v3+), `boardSnapshot` (initial arrow configuration — all arrows before any clears), `List<ReplayEvent> events`, `finalTime` (-1 = in-progress).
-- `version` history: v1 = initial; v2 = added `boardSnapshot`; v3 = added `gameVersion`; v4 = post-RNG rewrite (replays from <v4 clients cannot be regenerated deterministically on the current server and are rejected up-front by `ReplayVersionPolicy`). Bump this whenever a change to board generation, RNG, or verification semantics makes older clients' replays unverifiable — never reuse an old value.
-- `boardSnapshot` — each inner list is one arrow's cells in head-to-tail order. On resume, the board is restored from this snapshot and clear events are replayed. Null for v1 legacy saves (falls back to seed-based regeneration).
-- `ComputedSolveElapsed` — derived property that sums active solve intervals from event timestamps, excluding `session_leave`→`session_rejoin` gaps. Used by `GameTimer.Resume` to restore the timer.
-- Serializes to JSON via `Newtonsoft.Json`. Stored at `Application.persistentDataPath/savegame.json`.
+- Full save/replay record for one game session, regardless of mode (classic, coop, endless).
+- Contains: `version` (replay schema version), `gameId` (UUID), `mode` (`GameMode` discriminator — Classic / Coop / Endless, defaults to Classic for pre-v7 readers), `seed`, board dimensions, `inspectionDuration` (classic), `gameVersion`, `boardSnapshot` (initial arrow configuration; null for endless), `List<ReplayEvent> events`, `finalTime` (-1 = in-progress), endless-only `tuningsVersion` / `clears` / `longestCombo` / `durationSeconds`, co-op `roster`.
+- `version` history: v1 = initial; v2 = `boardSnapshot`; v3 = `gameVersion`; v4 = post-RNG rewrite (replays from <v4 cannot be regenerated deterministically and are rejected by `ReplayVersionPolicy`); v6 = co-op `roster` + `playerId`; v7 = universal-format unification (added `mode`, endless stat fields, per-event `simTime`). Bump on any change to generation, RNG, or verification semantics — never reuse an old value.
+- `boardSnapshot` — each inner list is one arrow's cells in head-to-tail order. Null for endless (board grows from empty during the run, reproduced via `EndlessRun`'s deterministic spawn loop).
+- `ComputedSolveElapsed` — derived property that sums active solve intervals from event timestamps, excluding `session_leave`→`session_rejoin` gaps. Used by classic `GameTimer.Resume`.
+- Serializes to JSON via `Newtonsoft.Json`. Classic saves stored at `Application.persistentDataPath/savegame.json`; endless replays held in memory until topout submission (no resume).
 
 ### `ReplayRecorder` (`sealed class`)
 
 - Accumulates `ReplayEvent`s during play, auto-increments `seq`.
+- Single set of tap-recording methods: `RecordClear(posX, posY, simTime?)`, `RecordReject(...)`, `RecordMiss(...)`. Endless passes `simTime`; classic / coop omit it (wall-clock timestamp is sufficient).
 - Constructor overload accepts prior events + `nextSeq` for resuming a saved game.
 - `ToReplayData(...)` returns a snapshot (copy) of all accumulated events as a `ReplayData`.
 - Pure C# — no Unity dependency.
@@ -117,7 +120,43 @@ This document is the implementation-facing counterpart to [`GDD.md`](GDD.md).
 
 - Return type of `BoardView.TryClearArrow`. Values: `Blocked = 0`, `Cleared`, `ClearedFirst`, `ClearedLast`.
 - `Blocked = 0` so all success values are nonzero for easy truthiness-style checks.
-- `ClearedFirst`/`ClearedLast` drive timer phase transitions in `InputHandler`.
+- `ClearedFirst` / `ClearedLast` are view-internal animation flags (drive `BoardView`'s post-pull-out `BoardCleared` callback timing). `InputHandler` collapses them to the smaller `TapResult` vocabulary before passing into the mode.
+
+### `TapResult` (`enum`)
+
+- Domain-level outcome of a single tap on the board, shared across all modes. Values: `Missed`, `Blocked`, `Cleared`.
+- "First-clear" and "last-clear" are deliberately not part of this vocabulary — they're derivable from the run's own counters (`ClassicRun.ClearedCount` / `IsCompleted`, `EndlessRun.ClearCount`) and announced via `BoardCleared` events. Keeping the result enum small avoids duplicate truth between view-side and run-side bookkeeping.
+
+### `Tap` (`readonly struct`, View)
+
+- Bundles input + outcome of a single tap, surfaced by `InputHandler` to the active game mode via the `OnTap` callback. Fields: `Result` (`TapResult`), `Cell`, `GridPos` (Vector3, identical numerically to world pos because `BoardCoords` is 1:1), `Arrow` (null for `Missed`), `WallTimeSeconds`.
+- The mode generally forwards the tap into its `Run` domain object; `InputHandler` itself does not touch `GameTimer` or `ReplayRecorder`.
+
+### `ClassicRun` (`sealed class`)
+
+- Pure-C# classic-mode game loop. Owns the fixed-board lifecycle: tap resolution, board mutation on clear, inspection→solve timer transition, replay-event recording, board-cleared (victory) detection. Same class drives both the live game (via the `ClassicMode` view adapter) and the future server-side replay verifier.
+- Constructed with `(Board, ReplayRecorder?, GameTimer?, alreadyCleared?)`. Recorder + timer are nullable so the verifier can run headless.
+- Two driving entries that share a private state-update routine:
+  - `HandleTap(float gridX, float gridY, double wallTime) → TapResult` — verifier-facing. Looks up the arrow at the rounded cell, classifies, mutates board on Cleared, transitions timer, records event.
+  - `RegisterViewTap(TapResult, gridX, gridY, wallTime)` — live-path companion. Trusts the view-already-mutated outcome and applies only the state-update side. Avoids re-mutating an already-mutated board.
+- Events: `InspectionEnded`, `BoardCleared`. Read state: `ClearedCount`, `IsCompleted`, `Board`, `Recorder`, `Timer`.
+
+### `EndlessRun` (`sealed class`)
+
+- Pure-C# endless-mode game loop. Owns the entire run lifecycle: sim-time clock, push schedule, garbage meter, commit pipeline, clear handling, score accumulation. Same class drives the live `EndlessModeController` and the future replay verifier — no parallel simulator.
+- Constructed with `(Board, spawnSeed, paletteCount, EndlessTuning)`.
+- Driving APIs:
+  - `Advance(float deltaTime)` — caller pushes time; the run fires any push ticks + commits whose sim-time threshold has been crossed.
+  - `HandleTap(float gridX, float gridY) → TapResult` — caller passes a grid position; the run rounds to the nearest cell, resolves it against current board state, and returns the result. Verifier compares this to the result on the recorded event.
+- Events: `PendingSpawned`, `PendingCommitted`, `MeterChanged`, `ShortfallChanged`, `ToppedOut`. View subscribes for HUD/render reactions; verifier ignores them.
+- Read state: `ClearCount`, `LongestCombo`, `RunDurationSeconds`, `Board`, `PendingArrows`, `Meter`, `ActiveShortfall`.
+- Determinism contract: identical {board, spawnSeed, paletteCount, tuning} + identical {Advance(dt), HandleTap(grid)} sequence produces identical {ClearCount, LongestCombo, RunDurationSeconds, meter trajectory}. Push-tick scheduler uses canonical `_lastPushSimTime + interval` thresholds (not delta-accumulation) so frame jitter on the client doesn't desync the verifier.
+
+### `EndlessTuning` (`readonly struct`)
+
+- Versioned bag of every endless game-loop constant in one place: push interval, combo size, board-area scaling, occupancy targets, etc.
+- `EndlessTuning.V1` is the current shipped tuning. `ForVersion(int)` looks up a historical version. `CurrentVersion` is what new replays record.
+- Bump the version (and add a new static field) when changing tuning in a way that affects replay verification — old replays then verify under their recorded tuning instead of breaking.
 
 ### `LeaderboardEntry` (`sealed class`)
 

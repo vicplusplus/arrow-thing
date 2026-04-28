@@ -13,6 +13,7 @@ public class AppDbContext : DbContext
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Score> Scores => Set<Score>();
+    public DbSet<EndlessScore> EndlessScores => Set<EndlessScore>();
     public DbSet<Lobby> Lobbies => Set<Lobby>();
     public DbSet<LobbyRegistration> LobbyRegistrations => Set<LobbyRegistration>();
     public DbSet<LobbyEvent> LobbyEvents => Set<LobbyEvent>();
@@ -104,6 +105,47 @@ public class AppDbContext : DbContext
                 s.BoardWidth,
                 s.BoardHeight,
                 s.Time,
+            });
+        });
+
+        modelBuilder.Entity<EndlessScore>(entity =>
+        {
+            entity.HasKey(s => s.Id);
+            entity.Property(s => s.Clears).IsRequired();
+            entity.Property(s => s.DurationSeconds).IsRequired();
+            entity.Property(s => s.ReplayJson).IsRequired();
+            entity.Property(s => s.ReplayJsonGz).HasColumnType("bytea");
+            entity.Property(s => s.CreatedAt).IsRequired();
+            entity.Property(s => s.UpdatedAt).IsRequired();
+
+            entity
+                .HasOne(s => s.User)
+                .WithMany()
+                .HasForeignKey(s => s.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // One PB per user per board config (endless presets are square,
+            // but the DB doesn't enforce that — different non-square configs
+            // would each get their own PB row, same as classic).
+            entity
+                .HasIndex(s => new
+                {
+                    s.UserId,
+                    s.BoardWidth,
+                    s.BoardHeight,
+                })
+                .IsUnique();
+
+            // Top-N leaderboard query: sort by Clears desc, DurationSeconds
+            // asc as the tiebreak. Postgres can use this composite index for
+            // an ORDER BY scan as long as we declare the sort directions on
+            // the columns.
+            entity.HasIndex(s => new
+            {
+                s.BoardWidth,
+                s.BoardHeight,
+                s.Clears,
+                s.DurationSeconds,
             });
         });
 

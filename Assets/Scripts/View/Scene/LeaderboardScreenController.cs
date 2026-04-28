@@ -51,6 +51,37 @@ public sealed class LeaderboardScreenController : NavigableScene
     private Button[] _tabButtons;
     private Button[] _sortButtons;
 
+    // Mode-tab state (Classic vs Endless). Mirrors the singleplayer screen.
+    private Button _modeClassicTab;
+    private Button _modeEndlessTab;
+    private VisualElement _classicSizeTabs;
+    private VisualElement _endlessSizeTabs;
+    private Button[] _endlessTabButtons;
+    private Button _endlessRefreshBtn;
+    private LeaderboardMode _activeMode = LeaderboardMode.Classic;
+    private int _activeEndlessTabIndex;
+
+    /// <summary>
+    /// Endless leaderboard size presets. Mirrors the singleplayer endless
+    /// preset row (5×5 / 10×10 / 20×20) plus an "All" tab for the global
+    /// cross-config ranking.
+    /// </summary>
+    private static readonly (string name, int w, int h)[] EndlessTabs =
+    {
+        ("lb-endless-tab-small", 5, 5),
+        ("lb-endless-tab-medium", 10, 10),
+        ("lb-endless-tab-large", 20, 20),
+        ("lb-endless-tab-all", 0, 0),
+    };
+
+    // Cache of fetched endless leaderboards, indexed by EndlessTabs position.
+    private readonly (
+        EndlessGlobalLeaderboardResponse lb,
+        EndlessPlayerEntryResponse me
+    )?[] _endlessCache = new (EndlessGlobalLeaderboardResponse, EndlessPlayerEntryResponse)?[
+        EndlessTabs.Length
+    ];
+
     // Nullable so BuildUI can reset it on scene re-enable, forcing
     // OnTabBarGeometryChanged to re-apply labels to the freshly-recreated
     // tab buttons (which always carry the full labels from UXML).
@@ -129,8 +160,29 @@ public sealed class LeaderboardScreenController : NavigableScene
         localBtn.clicked += () => SetScope(false, localBtn, globalBtn);
         globalBtn.clicked += () => SetScope(true, localBtn, globalBtn);
 
-        // Size tabs
-        _tabBar = root.Q(className: "tab-bar");
+        // Load the persisted local/global preference (defaults to local on
+        // first run). The full visibility state for it is applied in
+        // BuildNavGraph after _list and friends are populated, so SetScope
+        // can safely fire its refresh.
+        _isGlobalView =
+            PlayerPrefs.GetInt(GameSettings.LeaderboardGlobalViewPrefKey, defaultValue: 0) == 1;
+
+        // Mode tabs (Classic vs Endless). Each swaps the size-tab row +
+        // the data fetched / rendered. Classic stays the source-of-truth
+        // path with full sort + favorites + context-menu support; endless
+        // is a simpler global-only view (rank by clears desc, duration
+        // asc tiebreak — no sort options, no local store yet).
+        _modeClassicTab = root.Q<Button>("lb-mode-classic");
+        _modeEndlessTab = root.Q<Button>("lb-mode-endless");
+        _classicSizeTabs = root.Q("lb-classic-size-tabs");
+        _endlessSizeTabs = root.Q("lb-endless-size-tabs");
+        if (_modeClassicTab != null)
+            _modeClassicTab.clicked += () => SelectMode(LeaderboardMode.Classic);
+        if (_modeEndlessTab != null)
+            _modeEndlessTab.clicked += () => SelectMode(LeaderboardMode.Endless);
+
+        // Classic size tabs
+        _tabBar = _classicSizeTabs ?? root.Q(className: "tab-bar");
         _tabButtons = new Button[Tabs.Length];
         for (int i = 0; i < Tabs.Length; i++)
         {
@@ -139,6 +191,19 @@ public sealed class LeaderboardScreenController : NavigableScene
             _tabButtons[i].clicked += () => SelectTab(idx);
         }
         _tabBar.RegisterCallback<GeometryChangedEvent>(OnTabBarGeometryChanged);
+
+        // Endless size tabs
+        _endlessTabButtons = new Button[EndlessTabs.Length];
+        for (int i = 0; i < EndlessTabs.Length; i++)
+        {
+            int idx = i;
+            _endlessTabButtons[i] = root.Q<Button>(EndlessTabs[i].name);
+            if (_endlessTabButtons[i] != null)
+                _endlessTabButtons[i].clicked += () => SelectEndlessTab(idx);
+        }
+        _endlessRefreshBtn = root.Q<Button>("lb-endless-refresh-btn");
+        if (_endlessRefreshBtn != null)
+            _endlessRefreshBtn.clicked += () => FetchEndlessGlobalList();
 
         _sortButtons = new Button[3];
         _sortButtons[0] = root.Q<Button>("sort-fastest");
@@ -202,6 +267,14 @@ public sealed class LeaderboardScreenController : NavigableScene
 
     protected override void BuildNavGraph(FocusNavigator nav)
     {
+        // Apply the persisted local/global toggle now that the full visual
+        // tree (including _list, _refreshBtn, _playerPanel, _sortButtons) is
+        // populated. SetScope handles button-active classes, visibility, and
+        // the initial fetch on the global path.
+        var localBtn = Root.Q<Button>("lb-local-btn");
+        var globalBtn = Root.Q<Button>("lb-global-btn");
+        SetScope(_isGlobalView, localBtn, globalBtn);
+
         // Handle auto-scroll from victory.
         _focusGameId = GameSettings.LeaderboardFocusGameId;
         GameSettings.LeaderboardFocusGameId = null;
@@ -399,22 +472,234 @@ public sealed class LeaderboardScreenController : NavigableScene
         _scroll.verticalScroller.value = 0;
     }
 
+    /// <summary>
+    /// Switches between Classic and Endless leaderboard modes. Toggles
+    /// visibility of the two size-tab rows + the (currently classic-only)
+    /// sort row + (currently classic-only) local context menu, and routes
+    /// the active fetch path through the appropriate controller methods.
+    /// </summary>
+    private void SelectMode(LeaderboardMode mode)
+    {
+        _activeMode = mode;
+        DismissContextMenu();
+
+        bool isClassic = mode == LeaderboardMode.Classic;
+        if (_modeClassicTab != null)
+        {
+            if (isClassic)
+                _modeClassicTab.AddToClassList("tab-bar__tab--active");
+            else
+                _modeClassicTab.RemoveFromClassList("tab-bar__tab--active");
+        }
+        if (_modeEndlessTab != null)
+        {
+            if (!isClassic)
+                _modeEndlessTab.AddToClassList("tab-bar__tab--active");
+            else
+                _modeEndlessTab.RemoveFromClassList("tab-bar__tab--active");
+        }
+
+        ShowElement(_classicSizeTabs, isClassic);
+        ShowElement(_endlessSizeTabs, !isClassic);
+
+        // Sort + favorites + context menu are classic-only for now.
+        var sortRow = Root?.Q(className: "filter-row");
+        ShowElement(sortRow, isClassic);
+
+        if (isClassic)
+            RefreshList();
+        else
+            SelectEndlessTab(_activeEndlessTabIndex);
+    }
+
+    private void SelectEndlessTab(int index)
+    {
+        _activeEndlessTabIndex = index;
+        for (int i = 0; i < _endlessTabButtons.Length; i++)
+        {
+            if (_endlessTabButtons[i] == null)
+                continue;
+            if (i == index)
+                _endlessTabButtons[i].AddToClassList("tab-bar__tab--active");
+            else
+                _endlessTabButtons[i].RemoveFromClassList("tab-bar__tab--active");
+        }
+        if (_isGlobalView)
+        {
+            ShowElement(_endlessRefreshBtn, true);
+            RefreshEndlessGlobalList();
+        }
+        else
+        {
+            // Local endless leaderboard isn't tracked yet — show the empty
+            // state with a hint that runs are server-tracked.
+            ShowElement(_endlessRefreshBtn, false);
+            _list.Clear();
+            ShowElement(_scroll, false);
+            _emptyLabel.text =
+                "Local endless leaderboards aren't tracked yet.\n"
+                + "Switch to Global to view your submitted runs.";
+            ShowElement(_emptyLabel, true);
+            ShowElement(_playerPanel, false);
+        }
+    }
+
+    private void RefreshEndlessGlobalList()
+    {
+        var cached = _endlessCache[_activeEndlessTabIndex];
+        if (cached.HasValue)
+        {
+            PopulateEndlessGlobalList(cached.Value.lb, cached.Value.me);
+            return;
+        }
+        FetchEndlessGlobalList();
+    }
+
+    private async void FetchEndlessGlobalList()
+    {
+        _list.Clear();
+        ShowEmpty(false);
+        ShowElement(_scroll, true);
+        _emptyLabel.text = "Loading...";
+        ShowElement(_emptyLabel, true);
+
+        var api = new ApiClient();
+        var (w, h) = (EndlessTabs[_activeEndlessTabIndex].w, EndlessTabs[_activeEndlessTabIndex].h);
+        bool isAllTab = w == 0 && h == 0;
+        int tabAtFetch = _activeEndlessTabIndex;
+
+        var lbTask = isAllTab
+            ? api.GetEndlessLeaderboardAllAsync()
+            : api.GetEndlessLeaderboardAsync(w, h);
+        System.Threading.Tasks.Task<ApiResult<EndlessPlayerEntryResponse>> meTask = null;
+        if (api.IsLoggedIn)
+            meTask = isAllTab
+                ? api.GetEndlessPlayerEntryAllAsync()
+                : api.GetEndlessPlayerEntryAsync(w, h);
+
+        var lbResult = await lbTask;
+        if (_activeMode != LeaderboardMode.Endless || !_isGlobalView)
+            return;
+        if (!lbResult.Success)
+        {
+            ShowElement(_scroll, false);
+            _emptyLabel.text = DescribeApiError(lbResult.StatusCode, lbResult.Error);
+            ShowElement(_emptyLabel, true);
+            ShowElement(_playerPanel, false);
+            return;
+        }
+
+        EndlessPlayerEntryResponse meResult = null;
+        if (meTask != null)
+        {
+            var meApiResult = await meTask;
+            if (_activeMode != LeaderboardMode.Endless || !_isGlobalView)
+                return;
+            if (meApiResult.Success)
+                meResult = meApiResult.Data;
+        }
+
+        _endlessCache[tabAtFetch] = (lbResult.Data, meResult);
+        PopulateEndlessGlobalList(lbResult.Data, meResult);
+    }
+
+    private void PopulateEndlessGlobalList(
+        EndlessGlobalLeaderboardResponse lb,
+        EndlessPlayerEntryResponse me
+    )
+    {
+        _list.Clear();
+        if (lb == null || lb.entries == null || lb.entries.Length == 0)
+        {
+            ShowElement(_scroll, false);
+            _emptyLabel.text = "No endless runs submitted yet.";
+            ShowElement(_emptyLabel, true);
+            ShowElement(_playerPanel, false);
+            return;
+        }
+
+        ShowElement(_scroll, true);
+        ShowElement(_emptyLabel, false);
+
+        bool isAllTab = EndlessTabs[_activeEndlessTabIndex].w == 0;
+        foreach (var e in lb.entries)
+        {
+            var row = new VisualElement();
+            row.AddToClassList("lb-entry");
+            var rankLabel = new Label($"#{e.rank}");
+            rankLabel.AddToClassList("lb-entry__rank");
+            row.Add(rankLabel);
+
+            var nameLabel = new Label(e.displayName ?? "");
+            nameLabel.AddToClassList("lb-entry__name");
+            row.Add(nameLabel);
+
+            var statsLabel = new Label(FormatEndlessStats(e, isAllTab));
+            statsLabel.AddToClassList("lb-entry__time");
+            row.Add(statsLabel);
+
+            _list.Add(row);
+        }
+
+        // Player panel: show the viewer's rank if logged in + present in the
+        // table. Reuses the classic player-panel slot for visual consistency.
+        if (me != null && _playerPanel != null)
+        {
+            ShowElement(_playerPanel, true);
+            if (_playerPanelLabel != null)
+                _playerPanelLabel.text =
+                    $"You: #{me.rank} of {me.totalEntries} — {me.clears} clears in {FormatDuration(me.durationSeconds)}";
+        }
+        else
+        {
+            ShowElement(_playerPanel, false);
+        }
+    }
+
+    private static string FormatEndlessStats(EndlessGlobalLeaderboardEntry e, bool includeBoardSize)
+    {
+        string boardSuffix =
+            includeBoardSize && e.boardWidth > 0 && e.boardHeight > 0
+                ? $" · {e.boardWidth}×{e.boardHeight}"
+                : "";
+        return $"{e.clears} clears · {FormatDuration(e.durationSeconds)}{boardSuffix}";
+    }
+
+    private static string FormatDuration(double seconds)
+    {
+        var ts = TimeSpan.FromSeconds(seconds);
+        return ts.TotalMinutes >= 1 ? $"{(int)ts.TotalMinutes}m {ts.Seconds}s" : $"{seconds:F1}s";
+    }
+
     private void SetScope(bool isGlobal, Button localBtn, Button globalBtn)
     {
         _isGlobalView = isGlobal;
+        // Persist for next session — the toggle outlives this scene.
+        PlayerPrefs.SetInt(GameSettings.LeaderboardGlobalViewPrefKey, isGlobal ? 1 : 0);
+        PlayerPrefs.Save();
         if (isGlobal)
         {
             globalBtn.AddToClassList("toggle-group__btn--active");
             localBtn.RemoveFromClassList("toggle-group__btn--active");
             ShowElement(_comingSoon, false);
-            ShowElement(_refreshBtn, true);
             ShowElement(_playerPanel, true);
 
-            // Hide sort buttons and favorites in global view
-            foreach (var btn in _sortButtons)
-                ShowElement(btn, false);
-
-            RefreshGlobalList();
+            if (_activeMode == LeaderboardMode.Classic)
+            {
+                ShowElement(_refreshBtn, true);
+                ShowElement(_endlessRefreshBtn, false);
+                foreach (var btn in _sortButtons)
+                    ShowElement(btn, false);
+                RefreshGlobalList();
+            }
+            else
+            {
+                ShowElement(_refreshBtn, false);
+                ShowElement(_endlessRefreshBtn, true);
+                foreach (var btn in _sortButtons)
+                    ShowElement(btn, false);
+                RefreshEndlessGlobalList();
+            }
         }
         else
         {
@@ -422,15 +707,23 @@ public sealed class LeaderboardScreenController : NavigableScene
             globalBtn.RemoveFromClassList("toggle-group__btn--active");
             ShowElement(_comingSoon, false);
             ShowElement(_refreshBtn, false);
+            ShowElement(_endlessRefreshBtn, false);
             ShowElement(_playerPanel, false);
 
-            // Restore sort buttons
-            bool isAllTab = Tabs[_activeTabIndex].w == 0 && Tabs[_activeTabIndex].h == 0;
-            ShowElement(_sortButtons[0], !isAllTab);
-            ShowElement(_sortButtons[1], isAllTab);
-            ShowElement(_sortButtons[2], true);
-
-            RefreshList();
+            if (_activeMode == LeaderboardMode.Classic)
+            {
+                bool isAllTab = Tabs[_activeTabIndex].w == 0 && Tabs[_activeTabIndex].h == 0;
+                ShowElement(_sortButtons[0], !isAllTab);
+                ShowElement(_sortButtons[1], isAllTab);
+                ShowElement(_sortButtons[2], true);
+                RefreshList();
+            }
+            else
+            {
+                foreach (var btn in _sortButtons)
+                    ShowElement(btn, false);
+                SelectEndlessTab(_activeEndlessTabIndex);
+            }
         }
     }
 
@@ -1879,4 +2172,14 @@ public sealed class LeaderboardScreenController : NavigableScene
         else
             el.AddToClassList("lb--hidden");
     }
+}
+
+/// <summary>
+/// Top-level mode discriminator for the leaderboard screen. Mirrors the
+/// singleplayer selection screen's Classic/Endless tab structure.
+/// </summary>
+public enum LeaderboardMode
+{
+    Classic,
+    Endless,
 }

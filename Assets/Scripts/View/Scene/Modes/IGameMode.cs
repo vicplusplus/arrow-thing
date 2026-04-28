@@ -57,13 +57,14 @@ public interface IGameMode
 
     /// <summary>
     /// Called for every tap that reaches the board's bounds, with the
-    /// outcome (Missed / Blocked / Cleared* ). Classic uses this to drive
-    /// timer phase transitions, replay-event recording, and autosave.
-    /// Hardcore (planned) flips to a death screen on
-    /// <see cref="TapResultKind.Blocked"/>. Coop ignores it (the
+    /// outcome (Missed / Blocked / Cleared). Classic uses this to drive
+    /// timer phase transitions, replay-event recording, and autosave —
+    /// generally by forwarding the tap into the mode's <c>Run</c> domain
+    /// object. Hardcore (planned) flips to a death screen on
+    /// <see cref="TapResult.Blocked"/>. Coop ignores it (the
     /// <see cref="TapAttemptHandler"/> short-circuits before this fires).
     /// </summary>
-    void OnTapResult(TapResult result);
+    void OnTap(Tap tap);
 
     /// <summary>
     /// Wires the end-of-run flow. Classic instantiates <see cref="VictoryController"/>

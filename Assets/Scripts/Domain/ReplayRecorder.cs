@@ -92,7 +92,13 @@ public sealed class ReplayRecorder
         );
     }
 
-    public void RecordClear(float posX, float posY)
+    /// <summary>
+    /// Records a clear at the given grid position. <paramref name="simTime"/> is
+    /// optional: classic / coop pass null (wall-clock timestamp is sufficient
+    /// for those modes); endless passes the sim-clock seconds since run start
+    /// so the replay verifier can reproduce its time-driven loop deterministically.
+    /// </summary>
+    public void RecordClear(float posX, float posY, float? simTime = null)
     {
         _events.Add(
             new ReplayEvent
@@ -101,6 +107,7 @@ public sealed class ReplayRecorder
                 type = ReplayEventType.Clear,
                 posX = posX,
                 posY = posY,
+                simTime = simTime,
                 timestamp = DateTime.UtcNow.ToString("O"),
             }
         );
@@ -119,7 +126,11 @@ public sealed class ReplayRecorder
         );
     }
 
-    public void RecordReject(float posX, float posY)
+    /// <summary>
+    /// Records a tap on a present-but-unclearable arrow at the given grid
+    /// position. <paramref name="simTime"/> optional — see <see cref="RecordClear"/>.
+    /// </summary>
+    public void RecordReject(float posX, float posY, float? simTime = null)
     {
         _events.Add(
             new ReplayEvent
@@ -128,12 +139,17 @@ public sealed class ReplayRecorder
                 type = ReplayEventType.Reject,
                 posX = posX,
                 posY = posY,
+                simTime = simTime,
                 timestamp = DateTime.UtcNow.ToString("O"),
             }
         );
     }
 
-    public void RecordMiss(float posX, float posY)
+    /// <summary>
+    /// Records a tap on an empty cell at the given grid position.
+    /// <paramref name="simTime"/> optional — see <see cref="RecordClear"/>.
+    /// </summary>
+    public void RecordMiss(float posX, float posY, float? simTime = null)
     {
         _events.Add(
             new ReplayEvent
@@ -142,6 +158,20 @@ public sealed class ReplayRecorder
                 type = ReplayEventType.Miss,
                 posX = posX,
                 posY = posY,
+                simTime = simTime,
+                timestamp = DateTime.UtcNow.ToString("O"),
+            }
+        );
+    }
+
+    public void RecordTopout(float simTime)
+    {
+        _events.Add(
+            new ReplayEvent
+            {
+                seq = _nextSeq++,
+                type = ReplayEventType.Topout,
+                simTime = simTime,
                 timestamp = DateTime.UtcNow.ToString("O"),
             }
         );

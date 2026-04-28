@@ -191,6 +191,7 @@ builder.Services.AddScoped<RefreshTokenService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<GameService>();
 builder.Services.AddScoped<LeaderboardService>();
+builder.Services.AddScoped<EndlessLeaderboardService>();
 builder.Services.AddScoped<LobbyService>();
 builder.Services.AddScoped<LobbySnapshotRepository>();
 builder.Services.AddScoped<LobbyReplayService>();
@@ -200,6 +201,9 @@ builder.Services.AddSingleton<CoopMetrics>();
 builder.Services.AddSingleton<CoopHub>();
 builder.Services.Configure<LobbyOptions>(builder.Configuration.GetSection("Lobby"));
 builder.Services.AddSingleton<LeaderboardCache>(sp => new LeaderboardCache(
+    sp.GetService<IConnectionMultiplexer>()
+));
+builder.Services.AddSingleton<EndlessLeaderboardCache>(sp => new EndlessLeaderboardCache(
     sp.GetService<IConnectionMultiplexer>()
 ));
 
@@ -871,6 +875,70 @@ app.MapGet(
         return replayJson != null ? Results.Ok(new { replayJson }) : Results.NotFound();
     }
 );
+
+// -- Endless mode -----------------------------------------------------------
+
+app.MapPost(
+        "/api/endless-scores",
+        async (SubmitReplayRequest request, GameService games, ClaimsPrincipal user) =>
+        {
+            var userId = Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var (response, status, error) = await games.SubmitEndlessReplayAsync(
+                userId,
+                request.ReplayJson
+            );
+            if (response == null)
+                return Results.Json(new { error }, statusCode: status);
+            return status == 202 ? Results.Json(response, statusCode: 202) : Results.Ok(response);
+        }
+    )
+    .RequireAuthorization();
+
+// Endless verification status — Redis result polling shares the
+// classic `verify:result:` keyspace; one status endpoint serves both
+// modes.
+
+app.MapGet(
+    "/api/endless-leaderboards/{w:int}x{h:int}",
+    async (int w, int h, EndlessLeaderboardService leaderboards) =>
+    {
+        if (w < 5 || h < 5 || w > 80 || h > 80)
+            return Results.Ok(new EndlessLeaderboardResponse());
+        var result = await leaderboards.GetTopEntriesAsync(w, h);
+        return Results.Ok(result);
+    }
+);
+
+app.MapGet(
+    "/api/endless-leaderboards/all",
+    async (EndlessLeaderboardService leaderboards) =>
+    {
+        var result = await leaderboards.GetTopEntriesAllAsync();
+        return Results.Ok(result);
+    }
+);
+
+app.MapGet(
+        "/api/endless-leaderboards/{w:int}x{h:int}/me",
+        async (int w, int h, EndlessLeaderboardService leaderboards, ClaimsPrincipal user) =>
+        {
+            var userId = Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var entry = await leaderboards.GetPlayerEntryAsync(userId, w, h);
+            return entry != null ? Results.Ok(entry) : Results.NotFound();
+        }
+    )
+    .RequireAuthorization();
+
+app.MapGet(
+        "/api/endless-leaderboards/all/me",
+        async (EndlessLeaderboardService leaderboards, ClaimsPrincipal user) =>
+        {
+            var userId = Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var entry = await leaderboards.GetPlayerEntryAllAsync(userId);
+            return entry != null ? Results.Ok(entry) : Results.NotFound();
+        }
+    )
+    .RequireAuthorization();
 
 // -- Co-op lobbies (Phase 3) -------------------------------------------------
 

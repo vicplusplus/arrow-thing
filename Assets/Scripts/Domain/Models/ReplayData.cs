@@ -4,9 +4,16 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 /// <summary>
-/// Full save / replay record for a single game session.
-/// Serializes to JSON via Newtonsoft.Json.
-/// A <see cref="finalTime"/> of -1 indicates an in-progress (incomplete) game.
+/// Universal save / replay record. One schema covers every game mode
+/// (Classic, Endless, Coop, future PvP) — mode-specific data lives in
+/// optional fields that the unused modes leave null. Adding a new mode
+/// or new event type is non-breaking: Newtonsoft skips unknown fields,
+/// readers with no handler for a new <see cref="ReplayEventType"/>
+/// constant ignore those events. Server-side verification dispatches on
+/// <see cref="mode"/> to pick the right simulator.
+///
+/// A <see cref="finalTime"/> of -1 indicates an in-progress (incomplete)
+/// classic game. Endless uses <see cref="durationSeconds"/> instead.
 ///
 /// Schema version history:
 ///   v1 — initial.
@@ -20,14 +27,30 @@ using Newtonsoft.Json.Linq;
 ///   v6 — added optional <see cref="roster"/> + per-event <see cref="ReplayEvent.playerId"/>
 ///        for co-op attribution. Solo replays leave these null and remain
 ///        wire-compatible with v5 readers (unknown fields are ignored).
+///   v7 — universal-format unification: added <see cref="mode"/>, optional
+///        endless fields (<see cref="tuningsVersion"/>, <see cref="clears"/>,
+///        <see cref="longestCombo"/>, <see cref="durationSeconds"/>) and
+///        per-event optional <see cref="ReplayEvent.simTime"/> for the
+///        endless time-driven loop. Tap events keep the existing
+///        <see cref="ReplayEvent.posX"/>/<see cref="ReplayEvent.posY"/>
+///        float fields for cross-mode tap position (1 unit per cell).
+///        Old-version (v6 and below) classic replays read fine: missing
+///        <see cref="mode"/> defaults to Classic, missing endless fields
+///        stay null.
 /// </summary>
 public sealed class ReplayData
 {
     /// <summary>Format version — increment if the schema changes incompatibly.</summary>
-    public int version = 6;
+    public int version = 7;
 
     /// <summary>UUID string. Uniquely identifies this game session.</summary>
     public string gameId;
+
+    /// <summary>
+    /// Game mode. Defaults to Classic so v6-and-below replays (which
+    /// don't write the field) deserialize correctly.
+    /// </summary>
+    public GameMode mode = GameMode.Classic;
 
     public int seed;
     public int boardWidth;
@@ -36,6 +59,27 @@ public sealed class ReplayData
 
     /// <summary>Inspection phase duration in seconds, as configured when the board was created.</summary>
     public float inspectionDuration;
+
+    /// <summary>
+    /// Endless tuning bucket — bumped when tuning constants change in a
+    /// way that affects replay outcome. Verifier picks the matching tuning
+    /// table; mismatches reject up-front via <see cref="ReplayVersionPolicy"/>.
+    /// Null for non-endless modes.
+    /// </summary>
+    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+    public int? tuningsVersion;
+
+    /// <summary>Endless: total real-arrow clears achieved before topout. Null for other modes.</summary>
+    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+    public int? clears;
+
+    /// <summary>Endless: longest streak of consecutive clears before a combo timeout. Null for other modes.</summary>
+    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+    public int? longestCombo;
+
+    /// <summary>Endless: sim-time duration of the run in seconds. Null for other modes.</summary>
+    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+    public float? durationSeconds;
 
     /// <summary>Application version at the time of recording (version 3+). Null for older replays.</summary>
     [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]

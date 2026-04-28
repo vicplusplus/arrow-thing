@@ -455,6 +455,8 @@ public class NavigationCoverageTests : UILayoutTestBase
         "lb-back-btn",
         "lb-local-btn",
         "lb-global-btn",
+        "lb-mode-classic",
+        "lb-mode-endless",
         "tab-small",
         "tab-medium",
         "tab-large",
@@ -463,6 +465,26 @@ public class NavigationCoverageTests : UILayoutTestBase
         "sort-fastest",
         "sort-biggest",
         "sort-favorites",
+    };
+
+    /// <summary>
+    /// Endless variant of the leaderboard local view: classic size + sort
+    /// rows are hidden (replaced by endless size tabs), refresh/player
+    /// panel stays the same. Endless local view shows an empty-state
+    /// message — there's no local store yet — but the navigable buttons
+    /// are still the mode tabs + size tabs + back/global toggle.
+    /// </summary>
+    private static readonly string[] LeaderboardEndlessButtons =
+    {
+        "lb-back-btn",
+        "lb-local-btn",
+        "lb-global-btn",
+        "lb-mode-classic",
+        "lb-mode-endless",
+        "lb-endless-tab-small",
+        "lb-endless-tab-medium",
+        "lb-endless-tab-large",
+        "lb-endless-tab-all",
     };
 
     private static readonly UIState Leaderboard_LocalView = new UIState(
@@ -508,12 +530,55 @@ public class NavigationCoverageTests : UILayoutTestBase
         background: LeaderboardLocalButtons
     );
 
+    /// <summary>
+    /// Endless tab active, local view. Classic size tabs + sort row are
+    /// hidden (replaced by endless size tabs); local-endless shows a
+    /// placeholder empty-state pointing at Global. Navigable: back, scope
+    /// toggle, mode tabs, endless size tabs.
+    /// </summary>
+    private static readonly UIState Leaderboard_EndlessLocalView = new UIState(
+        "Leaderboard/EndlessLocalView",
+        setup: root =>
+        {
+            // Mirror what SelectMode(Endless) does to the visual tree.
+            root.Q("lb-classic-size-tabs").AddToClassList("lb--hidden");
+            root.Q("lb-endless-size-tabs").RemoveFromClassList("lb--hidden");
+            root.Q(className: "filter-row").AddToClassList("lb--hidden");
+            // Endless local doesn't show the refresh / player-panel widgets.
+        },
+        navigable: LeaderboardEndlessButtons
+    );
+
+    /// <summary>
+    /// Endless tab active, global view. Same visibility flip as the local
+    /// state, plus the endless refresh button + player panel become
+    /// reachable. Sort row stays hidden — endless server-rank is fixed
+    /// (clears desc, duration asc) so there's nothing to sort.
+    /// </summary>
+    private static readonly UIState Leaderboard_EndlessGlobalView = new UIState(
+        "Leaderboard/EndlessGlobalView",
+        setup: root =>
+        {
+            root.Q("lb-classic-size-tabs").AddToClassList("lb--hidden");
+            root.Q("lb-endless-size-tabs").RemoveFromClassList("lb--hidden");
+            root.Q(className: "filter-row").AddToClassList("lb--hidden");
+            root.Q<Button>("lb-endless-refresh-btn").RemoveFromClassList("lb--hidden");
+            root.Q("lb-player-panel").RemoveFromClassList("lb--hidden");
+            root.Q<Button>("lb-player-play-btn").RemoveFromClassList("lb--hidden");
+        },
+        navigable: LeaderboardEndlessButtons
+            .Concat(new[] { "lb-endless-refresh-btn", "lb-player-play-btn" })
+            .ToArray()
+    );
+
     private static IEnumerable<UIState> LeaderboardStates()
     {
         yield return Leaderboard_LocalView;
         yield return Leaderboard_GlobalView;
         yield return Leaderboard_ContextMenu;
         yield return Leaderboard_DeleteModal;
+        yield return Leaderboard_EndlessLocalView;
+        yield return Leaderboard_EndlessGlobalView;
     }
 
     [UnityTest]
