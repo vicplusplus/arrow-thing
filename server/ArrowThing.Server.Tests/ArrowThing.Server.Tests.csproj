@@ -22,6 +22,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ArrowThing.Server\ArrowThing.Server.csproj" />
-    <ProjectReference Include="..\ArrowThing.Domain\ArrowThing.Domain.csproj" />
+    <ProjectReference Include="..\..\Domain\ArrowThing.Domain.csproj" />
   </ItemGroup>
 </Project>

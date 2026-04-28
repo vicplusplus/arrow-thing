@@ -1,0 +1,18 @@
+{
+  "name": "com.arrowthing.domain",
+  "version": "1.0.0",
+  "displayName": "Arrow Thing Domain",
+  "description": "Unity-independent domain layer for Arrow Thing. Pure C# (netstandard2.1) game logic shared between the Unity client and the .NET server. Has no UnityEngine references.",
+  "unity": "2021.3",
+  "author": {
+    "name": "Arrow Thing"
+  },
+  "license": "MIT",
+  "keywords": [
+    "arrow-thing",
+    "domain"
+  ],
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  }
+}

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>9</LangVersion>
+    <RootNamespace>ArrowThing.Domain</RootNamespace>
+    <AssemblyName>ArrowThing.Domain</AssemblyName>
+  </PropertyGroup>
+
+  <!--
+    Single source of truth: domain .cs files live in the Unity package at
+    Packages/com.arrowthing.domain/Runtime/. Unity discovers them via the
+    package's asmdef; the server discovers them by globbing into the package.
+    Unity asmdefs cannot reach files outside their own folder, so the sources
+    must physically sit next to the asmdef. This csproj reaches in instead.
+  -->
+  <ItemGroup>
+    <Compile Remove="**/*.cs" />
+    <Compile Include="../Packages/com.arrowthing.domain/Runtime/**/*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+  </ItemGroup>
+</Project>

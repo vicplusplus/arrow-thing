@@ -3,6 +3,7 @@
     "rootNamespace": "",
     "references": [
         "ArrowThing",
+        "ArrowThing.Domain",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],
