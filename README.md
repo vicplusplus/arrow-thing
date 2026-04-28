@@ -20,8 +20,8 @@ Free to play at **https://arrow-thing.com/**
 ## Tech Stack
 
 - Unity `6000.3.8f1`
-- C# domain logic under `Assets/Scripts/Domain` (cross-platform; deterministic via `PortableRandom`)
-- ASP.NET Core server (`.NET 10`) under `server/` — shared domain code via monorepo, plus a standalone verification worker (`ArrowThing.Worker`) consuming a Redis queue
+- C# domain logic in the local Unity package `Packages/com.arrowthing.domain/Runtime/`, with a standalone .NET project at `Domain/ArrowThing.Domain.csproj` (cross-platform; deterministic via `PortableRandom`; no `UnityEngine` references)
+- ASP.NET Core server (`.NET 10`) under `server/` — references the standalone domain project, plus a standalone verification worker (`ArrowThing.Worker`) consuming a Redis queue
 - PostgreSQL + Redis behind Nginx + Cloudflare; Serilog/OpenTelemetry/Grafana observability stack
 - NUnit tests via Unity Test Framework in `Assets/Tests/EditMode` and `Assets/Tests/PlayMode`
 - xUnit server integration tests in `server/ArrowThing.Server.Tests`
@@ -67,11 +67,12 @@ Git configuration (`.gitattributes`, `.gitignore`, git hooks) is based on [NYU G
 
 ## Repository Layout
 
-- `Assets/Scripts/Domain` - Core board/arrow domain logic
+- `Packages/com.arrowthing.domain/Runtime/` - Core board/arrow domain logic (Unity-independent, single source of truth)
+- `Domain/ArrowThing.Domain.csproj` - Standalone .NET project that wraps the domain sources for the server and CI
 - `Assets/Scripts/View` - Unity rendering, input, UI
 - `Assets/Tests/EditMode` - Unit tests (Unity Test Framework)
 - `Assets/Tests/PlayMode` - PlayMode tests (UI layout, API client)
-- `server/` - ASP.NET Core server (auth, shared domain code)
+- `server/` - ASP.NET Core server (auth, scoring); references the standalone domain project
 - `server/docs/` - Server setup, rotation, and operations docs
 - `docs/GDD.md` - Game design direction and scope
 - `docs/TechnicalDesign.md` - Architecture and class-structure decisions

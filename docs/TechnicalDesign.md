@@ -20,9 +20,10 @@ This document is the implementation-facing counterpart to [`GDD.md`](GDD.md).
 ## Architecture Overview
 
 - Domain layer (Unity-independent):
-  - Location: `Assets/Scripts/Domain/`
-  - Contains board state, arrow data, and generation logic.
-  - Must be testable without Unity runtime dependencies (tests use Unity Test Framework / NUnit in `Assets/Tests/EditMode/`).
+  - Sources live in the Unity local package at `Packages/com.arrowthing.domain/Runtime/`. This is the single source of truth.
+  - Builds standalone via `Domain/ArrowThing.Domain.csproj` (`netstandard2.1`), which the server solution references. Unity sees the same files via the package's `.asmdef` (`noEngineReferences: true`).
+  - Contains board state, arrow data, and generation logic. No `UnityEngine`, no `Unity.*`, no `Microsoft.Extensions.*` — enforced by `.github/workflows/domain-ci.yml`.
+  - Tests use Unity Test Framework / NUnit in `Assets/Tests/EditMode/`.
 - Unity adapter layer (Unity-dependent):
   - Input handling, rendering, animation, scene wiring, and UI.
   - Should translate user actions to domain operations and reflect resulting state.
