@@ -77,6 +77,7 @@ Desktop.ini
 # Claude Code
 .claude/
 .mcp.json
+CLAUDE.md
 
 # CI-injected build artifacts
 Assets/Resources/git-commit.txt
@@ -92,6 +93,9 @@ Assets/Resources/PerformanceTestRunSettings.json.meta
 # Server project files (override Unity *.csproj ignore)
 !server/**/*.csproj
 !server/**/*.sln
+
+# Standalone domain library project (override Unity *.csproj ignore)
+!Domain/**/*.csproj
 
 # SQLite dev database
 server/ArrowThing.Server/arrowthing.db

@@ -88,7 +88,7 @@
 - Replay viewer (seek, speed control 0.5×–10×, play/pause, clearable highlighting with trail lanes)
 - Settings (cross-scene singleton overlay; Account, Gameplay, Keybinds, Data, About sections)
 - Planned later:
-  - Co-op lobbies (see [`docs/CoopRoadmap.md`](CoopRoadmap.md))
+  - Co-op lobbies
   - PvP match countdown / start
   - Match result screen
   - Optional pause
@@ -231,7 +231,7 @@
 
 ### Planned
   - Audio feedback for success / fail / clear / board complete.
-  - Co-op boards: persistent shared puzzles with WebSocket sessions, per-player attribution, results screen. See [`docs/CoopRoadmap.md`](CoopRoadmap.md) (designed; phased implementation not started).
+  - Co-op boards: persistent shared puzzles with WebSocket sessions, per-player attribution, results screen.
   - PvP: real-time garbage mechanics, matchmaking.
   - Mobile menu UI responsive scaling pass.
 
@@ -257,7 +257,7 @@
 - 2026-02-28: Revised to v0.6 with updated generation bounds language (minimum-only rule with mode-specific practical caps).
 - 2026-03-06: Closed open questions on arrow count and length distribution based on generation rewrite experience.
 - 2026-03-16: Updated platform target to WebGL-first for MVP; mobile gameplay works but UI scaling deferred. Updated controls section accordingly.
-- 2026-03-16: MVP declared complete. Online roadmap documented in `OnlineRoadmap.md`.
+- 2026-03-16: MVP declared complete.
 - 2026-03-19: Replaced version-based production scope with implemented/planned lists. Added save/resume, autosave, cancel generation modal, trajectory highlights, incremental board display to implemented list.
 - 2026-04-01: Updated implemented list with account system, server deployment, theme system, shared UI components, settings panel extraction, Discord announcements. Updated game states and scene structure to reflect current 4-scene layout. Updated planned list (accounts moved to implemented).
 - 2026-04-12: Synced GDD to v0.7.4. Added global leaderboards (server-side replay verification), full keyboard navigation with rebindable keybinds, post-generation compaction, cross-platform deterministic generation (`PortableRandom`), score integrity (pre-verification + async worker + account flagging), observability stack, global toast singleton, quick retry button, and replay viewer enhancements (10× speed, trail lanes) to the implemented list. Promoted co-op (designed only) to the planned list and refreshed game states to reflect the current 6-scene layout (Main Menu, Solo Size Select, Game, Leaderboard, Replay, plus Settings overlay).

@@ -1,10 +1,7 @@
 {
-    "name": "ArrowThing",
+    "name": "ArrowThing.Domain",
     "rootNamespace": "",
     "references": [
-        "ArrowThing.Domain",
-        "Unity.RenderPipelines.Universal.Runtime",
-        "Unity.InputSystem",
         "Newtonsoft.Json"
     ],
     "includePlatforms": [],
@@ -15,5 +12,5 @@
     "autoReferenced": true,
     "defineConstraints": [],
     "versionDefines": [],
-    "noEngineReferences": false
+    "noEngineReferences": true
 }

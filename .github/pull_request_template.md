@@ -9,8 +9,10 @@ Describe what changed and why.
 
 ## Design and Docs
 
-- [ ] If architecture or class structure changed, I updated `docs/TechnicalDesign.md`.
+- [ ] I changed a public class, public method, or cross-layer contract — and either updated `docs/TechnicalDesign.md` to match, or this PR does not touch any of those.
 - [ ] If generator behavior changed, I updated `docs/BoardGeneration.md`.
+- [ ] If server-side setup, rotation, or operational behavior changed, I updated the relevant doc under `server/docs/`.
+- [ ] I re-read every doc paragraph that names a file, class, or behavior I touched, and confirmed it still matches the code on this branch.
 - [ ] If I noticed a docs inconsistency I did not fix here, I called it out and opened/linked an issue.
 
 ## Scope

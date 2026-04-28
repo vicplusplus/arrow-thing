@@ -34,11 +34,15 @@ The pre-commit hook enforces:
 - UI changes (UXML/USS) must be reflected in PlayMode layout tests in `Assets/Tests/PlayMode/UILayout/`.
 - New buttons added to UXML must be wired into the scene's `FocusNavigator` for keyboard navigation — `NavigationCoverageTests` will catch missing buttons.
 
+## Feature Workflow
+
+- Larger features are tracked as GitHub issues. Open an issue with the design and scope before opening implementation PRs; keep the issue updated as the work evolves.
+- Implementation PRs link back to the issue and stay focused on a single coherent slice.
+
 ## Docs Consistency
 
 - If you spot a docs inconsistency, either fix it in the same PR or call it out in the PR and open an issue.
 - Keep `docs/TechnicalDesign.md` aligned with architecture/class-structure changes.
-- `docs/TODO.md` is used during feature development (see `CLAUDE.md` Feature Workflow). It must be deleted before a PR is merge-ready.
 
 ## Technical Design Document (TDDoc)
 

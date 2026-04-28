@@ -1,0 +1,93 @@
+name: Domain CI
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build-domain:
+    name: Build standalone domain library
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Domain/ArrowThing.Domain.csproj
+
+      - name: Build
+        run: dotnet build Domain/ArrowThing.Domain.csproj --no-restore --configuration Release
+
+      # No standalone domain unit tests today — Unity tests live under
+      # Assets/Tests/EditMode/ and run via the Unity test runner. If a
+      # standalone test project is ever added at Domain/Tests/ or similar,
+      # wire `dotnet test` in here.
+
+  forbidden-references:
+    name: Forbid Unity / infra usings in domain sources
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Grep for forbidden usings
+        run: |
+          set -euo pipefail
+
+          DOMAIN_DIR="Packages/com.arrowthing.domain/Runtime"
+
+          if [ ! -d "$DOMAIN_DIR" ]; then
+            echo "ERROR: domain source directory '$DOMAIN_DIR' not found." >&2
+            exit 2
+          fi
+
+          # Match `using UnityEngine;`, `using UnityEngine.Foo;`,
+          # `using Unity.Collections;`, `using Microsoft.Extensions.Logging;`,
+          # and the static / aliased forms (`using static UnityEngine.Mathf;`,
+          # `using XYZ = UnityEngine.Foo;`). Whitespace-tolerant.
+          PATTERN='^[[:space:]]*using[[:space:]]+([[:alnum:]_]+[[:space:]]*=[[:space:]]*)?(static[[:space:]]+)?(UnityEngine|Unity\.|Microsoft\.Extensions\.)'
+
+          # Use -E for ERE, -n for line numbers, -H for filename, -r recursive.
+          # `--include='*.cs'` keeps us off .meta files.
+          if grep -rEnH --include='*.cs' "$PATTERN" "$DOMAIN_DIR"; then
+            echo
+            echo "ERROR: domain sources contain forbidden 'using' directives." >&2
+            echo "Domain code must stay free of UnityEngine, Unity.*, and Microsoft.Extensions.* references." >&2
+            exit 1
+          fi
+
+          # Also catch fully-qualified usages that bypass `using` (e.g. UnityEngine.Debug.Log).
+          # Newtonsoft.Json is allowed; everything else from those namespaces is not.
+          # Skip single-line `//` comments and `///` doc comments, where these
+          # names legitimately appear in prose.
+          FQN_PATTERN='\b(UnityEngine|Unity\.[A-Za-z]|Microsoft\.Extensions\.)'
+          fqn_hits=$(
+            find "$DOMAIN_DIR" -type f -name '*.cs' -print0 \
+              | xargs -0 grep -EnH "$FQN_PATTERN" \
+              | grep -Ev ':[[:space:]]*(//|\*)' \
+              || true
+          )
+          if [ -n "$fqn_hits" ]; then
+            echo "$fqn_hits"
+            echo
+            echo "ERROR: domain sources contain forbidden fully-qualified Unity / infra references." >&2
+            exit 1
+          fi
+
+          echo "Forbidden-reference check passed."

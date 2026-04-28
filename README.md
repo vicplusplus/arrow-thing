@@ -13,16 +13,15 @@ Free to play at **https://arrow-thing.com/**
 - Design docs:
   - [`docs/GDD.md`](docs/GDD.md) (game design)
   - [`docs/TechnicalDesign.md`](docs/TechnicalDesign.md) (technical architecture and class structure)
-  - [`docs/OnlineRoadmap.md`](docs/OnlineRoadmap.md) (online features plan)
   - [`docs/BoardGeneration.md`](docs/BoardGeneration.md) (board generation algorithm)
-  - [`docs/LocalServerSetup.md`](docs/LocalServerSetup.md) (local server dev setup)
   - [`docs/AndroidTesting.md`](docs/AndroidTesting.md) (Android testing guide)
+  - [`server/docs/`](server/docs/) (server setup, rotation, and operations)
 
 ## Tech Stack
 
 - Unity `6000.3.8f1`
-- C# domain logic under `Assets/Scripts/Domain` (cross-platform; deterministic via `PortableRandom`)
-- ASP.NET Core server (`.NET 10`) under `server/` — shared domain code via monorepo, plus a standalone verification worker (`ArrowThing.Worker`) consuming a Redis queue
+- C# domain logic in the local Unity package `Packages/com.arrowthing.domain/Runtime/`, with a standalone .NET project at `Domain/ArrowThing.Domain.csproj` (cross-platform; deterministic via `PortableRandom`; no `UnityEngine` references)
+- ASP.NET Core server (`.NET 10`) under `server/` — references the standalone domain project, plus a standalone verification worker (`ArrowThing.Worker`) consuming a Redis queue
 - PostgreSQL + Redis behind Nginx + Cloudflare; Serilog/OpenTelemetry/Grafana observability stack
 - NUnit tests via Unity Test Framework in `Assets/Tests/EditMode` and `Assets/Tests/PlayMode`
 - xUnit server integration tests in `server/ArrowThing.Server.Tests`
@@ -68,14 +67,14 @@ Git configuration (`.gitattributes`, `.gitignore`, git hooks) is based on [NYU G
 
 ## Repository Layout
 
-- `Assets/Scripts/Domain` - Core board/arrow domain logic
+- `Packages/com.arrowthing.domain/Runtime/` - Core board/arrow domain logic (Unity-independent, single source of truth)
+- `Domain/ArrowThing.Domain.csproj` - Standalone .NET project that wraps the domain sources for the server and CI
 - `Assets/Scripts/View` - Unity rendering, input, UI
 - `Assets/Tests/EditMode` - Unit tests (Unity Test Framework)
 - `Assets/Tests/PlayMode` - PlayMode tests (UI layout, API client)
-- `server/` - ASP.NET Core server (auth, shared domain code)
+- `server/` - ASP.NET Core server (auth, scoring); references the standalone domain project
+- `server/docs/` - Server setup, rotation, and operations docs
 - `docs/GDD.md` - Game design direction and scope
 - `docs/TechnicalDesign.md` - Architecture and class-structure decisions
-- `docs/OnlineRoadmap.md` - Online features plan
 - `docs/BoardGeneration.md` - Board generation algorithm
-- `docs/LocalServerSetup.md` - Local server development setup
 - `docs/AndroidTesting.md` - Android testing guide

@@ -14,8 +14,7 @@ namespace ArrowThing.Server.Games;
 ///
 /// <para>Determinism contract: identical {seed, paletteCount, tuningsVersion,
 /// boardWidth, boardHeight} + identical event sequence must produce
-/// identical run state on client and server. See the float-determinism note
-/// in <c>docs/TODO.md</c> — <see cref="EndlessRun"/> uses
+/// identical run state on client and server. <see cref="EndlessRun"/> uses
 /// <see cref="System.Math"/> primitives that match Mono's <c>Mathf.*</c>
 /// at single-precision, but parity tests are recommended before relying on
 /// it for prod submissions.</para>

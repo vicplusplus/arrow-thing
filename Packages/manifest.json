@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "com.arrowthing.domain": "file:com.arrowthing.domain",
     "com.unity.2d.aseprite": "3.0.1",
     "com.unity.2d.psdimporter": "12.0.1",
     "com.unity.2d.sprite": "1.0.0",
