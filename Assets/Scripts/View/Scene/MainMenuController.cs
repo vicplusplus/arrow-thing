@@ -33,6 +33,8 @@ public sealed class MainMenuController : NavigableScene
     private VisualElement _menuMultiplayer;
     private ConfirmModal _quitModal;
 
+    private NavGraph _rootNavGraph;
+
     // -- Size select state -------------------------------------------------------
 
     private const int CustomDimMin = 2;
@@ -204,98 +206,62 @@ public sealed class MainMenuController : NavigableScene
 
     private void BuildRootNavGraph(FocusNavigator nav)
     {
-        var items = new List<FocusNavigator.FocusItem>();
+        if (_rootNavGraph == null)
+            _rootNavGraph = Resources.Load<NavGraph>("NavGraphs/MainMenuRoot");
 
         var quitBtn = Root.Q<Button>("quit-btn");
         bool hasQuit =
             quitBtn != null
             && !Application.isMobilePlatform
             && Application.platform != RuntimePlatform.WebGLPlayer;
-        int quitIdx = -1;
-        if (hasQuit)
-        {
-            quitIdx = items.Count;
-            items.Add(
-                new FocusNavigator.FocusItem
-                {
-                    Element = quitBtn,
-                    OnActivate = () =>
-                    {
-                        OnQuitPressed();
-                        return true;
-                    },
-                }
-            );
-        }
 
-        int playIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = Root.Q<Button>("play-btn"),
-                OnActivate = () =>
+        new NavGraphBuilder(_rootNavGraph)
+            .Bind(
+                "Quit",
+                hasQuit ? quitBtn : null,
+                onActivate: () =>
+                {
+                    OnQuitPressed();
+                    return true;
+                }
+            )
+            .Bind(
+                "Play",
+                Root.Q<Button>("play-btn"),
+                onActivate: () =>
                 {
                     SetState(MenuState.Play);
                     return true;
-                },
-            }
-        );
-
-        int settingsIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = Root.Q<Button>("settings-btn"),
-                OnActivate = () =>
+                }
+            )
+            .Bind(
+                "Settings",
+                Root.Q<Button>("settings-btn"),
+                onActivate: () =>
                 {
                     SettingsController.Instance.Open();
                     return true;
-                },
-            }
-        );
-
-        int githubIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = Root.Q<Button>("link-github-btn"),
-                OnActivate = () =>
+                }
+            )
+            .Bind(
+                "GitHub",
+                Root.Q<Button>("link-github-btn"),
+                onActivate: () =>
                 {
                     ExternalLinks.Open(GitHubUrl);
                     return true;
-                },
-            }
-        );
-
-        int discordIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = Root.Q<Button>("link-discord-btn"),
-                OnActivate = () =>
+                }
+            )
+            .Bind(
+                "Discord",
+                Root.Q<Button>("link-discord-btn"),
+                onActivate: () =>
                 {
                     ExternalLinks.Open(DiscordUrl);
                     return true;
-                },
-            }
-        );
-
-        nav.SetItems(items, playIdx);
-
-        if (hasQuit)
-        {
-            nav.Link(quitIdx, FocusNavigator.NavDir.Down, playIdx);
-            nav.Link(playIdx, FocusNavigator.NavDir.Up, quitIdx);
-            nav.Link(playIdx, FocusNavigator.NavDir.Left, quitIdx);
-        }
-
-        nav.LinkBidi(playIdx, FocusNavigator.NavDir.Down, settingsIdx);
-
-        nav.LinkBidi(settingsIdx, FocusNavigator.NavDir.Down, discordIdx);
-        nav.Link(settingsIdx, FocusNavigator.NavDir.Left, discordIdx);
-
-        nav.LinkBidi(githubIdx, FocusNavigator.NavDir.Right, discordIdx);
-        nav.Link(githubIdx, FocusNavigator.NavDir.Up, settingsIdx);
+                }
+            )
+            .Apply(nav);
     }
 
     private void BuildPlayNavGraph(FocusNavigator nav)
