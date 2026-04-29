@@ -542,11 +542,14 @@ public sealed class FocusNavigator
         }
     }
 
-    /// <summary>Scroll the focused element into view if inside a ScrollView.</summary>
     /// <summary>
-    /// Scroll the focused element into view, biased toward the center of the
-    /// viewport rather than the edge. Provides comfortable spacing around the
-    /// focused item.
+    /// Scroll the focused element into view. Scrolls the minimum distance
+    /// needed to bring the element fully inside the viewport plus a small
+    /// buffer above/below — does NOT center. Centering felt jarring on
+    /// rowed lists (leaderboard) because navigating one row down would
+    /// pull the previously-top entry into a half-hidden state at the top
+    /// edge. With the buffer-based approach, scrolling only happens when
+    /// the focused element is at or beyond the viewport edge.
     /// </summary>
     public void ScrollToFocused()
     {
@@ -565,7 +568,8 @@ public sealed class FocusNavigator
             elTop += parent.layout.y;
             parent = parent.parent;
         }
-        float elBottom = elTop + el.layout.height;
+        float elHeight = el.layout.height;
+        float elBottom = elTop + elHeight;
 
         float viewHeight = scroll.contentViewport.layout.height;
         float scrollPos = scroll.verticalScroller.value;
@@ -577,14 +581,35 @@ public sealed class FocusNavigator
         if (maxScroll <= 0)
             return;
 
-        // Scroll to center the element in the viewport.
-        float elCenter = elTop + el.layout.height * 0.5f;
-        float targetScroll = elCenter - viewHeight * 0.5f;
-        targetScroll = Mathf.Clamp(targetScroll, 0, maxScroll);
+        // Reserve a buffer above and below the focused element so the user
+        // sees one row of context on either side. Buffer is one element
+        // height, capped at 25% of the viewport so a tall entry on a short
+        // viewport doesn't blow the budget.
+        float buffer = Mathf.Min(elHeight, viewHeight * 0.25f);
 
-        // Only scroll if the element is outside the center 40% of the viewport.
-        float margin = viewHeight * 0.3f;
-        if (elTop < viewTop + margin || elBottom > viewBottom - margin)
+        float targetScroll = scrollPos;
+        if (elTop < viewTop + buffer)
+        {
+            // Element is above the viewport (or peeking into the buffer
+            // zone at the top). Scroll up just enough to seat its top edge
+            // one buffer below the viewport top.
+            targetScroll = elTop - buffer;
+        }
+        else if (elBottom > viewBottom - buffer)
+        {
+            // Element is below the viewport (or peeking into the buffer
+            // zone at the bottom). Scroll down just enough to seat its
+            // bottom edge one buffer above the viewport bottom.
+            targetScroll = elBottom - viewHeight + buffer;
+        }
+        else
+        {
+            // Element is fully inside the viewport's middle band. No scroll.
+            return;
+        }
+
+        targetScroll = Mathf.Clamp(targetScroll, 0, maxScroll);
+        if (Mathf.Abs(targetScroll - scrollPos) > 0.5f)
             scroll.verticalScroller.value = targetScroll;
     }
 
