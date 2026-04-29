@@ -136,6 +136,20 @@ jobs:
           name: webgl-build-staging
           path: build
 
+      # Bundle staging-only Pages Functions into the deploy directory.
+      # The same WebGL artifact is promoted to prod by deploy.yml, so we must
+      # not bake the proxy into the artifact itself — copying at deploy time
+      # keeps the prod Pages project free of staging routing.
+      - name: Checkout pages-staging sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: src
+          sparse-checkout: pages-staging
+          sparse-checkout-cone-mode: false
+
+      - name: Bundle staging Pages Functions
+        run: cp -r src/pages-staging/functions build/functions
+
       - name: Deploy to Cloudflare Pages (staging project)
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:

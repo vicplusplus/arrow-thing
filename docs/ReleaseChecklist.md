@@ -9,7 +9,7 @@ Arrow Thing uses a staging-gated release flow. **Every** production release must
 | Staging     | https://staging.arrow-thing.com  | Push to `main` → auto-deploy      |
 | Production  | https://arrow-thing.com          | Published GitHub Release (tagged) |
 
-Staging mirrors production (same Cloudflare edge, same VPS image layout, same nginx config), but uses a separate database, separate cookie domain, and a separate Cloudflare Pages project. Staging is safe to wipe.
+Staging mirrors production (same Cloudflare edge, same VPS image layout, same nginx config), but uses a separate database, host-only cookies fronted by a Pages Function reverse-proxy at `staging.arrow-thing.com/api/*` (see `pages-staging/`), and a separate Cloudflare Pages project. Staging is safe to wipe.
 
 ## Release Flow
 
@@ -38,7 +38,7 @@ Treat every unchecked box as a blocker.
 ### Auth + cookies
 
 - [ ] Register → email verification → login round-trip works end-to-end.
-- [ ] Session cookie is set with `SameSite=None; Secure` and the staging domain.
+- [ ] Session cookie is set with `SameSite=Lax; Secure` and is host-only on `staging.arrow-thing.com` (no `Domain` attribute — the Pages Function proxies `/api/*` so cookies stay first-party).
 - [ ] Refresh after login keeps the session (cookie survives reload).
 - [ ] Logout clears the cookie.
 - [ ] Forgot-password flow sends and the reset link works.
