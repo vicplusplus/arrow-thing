@@ -1,0 +1,91 @@
+name: Doc Gate
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  doc-gate:
+    name: Doc-to-code accuracy gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Need both PR base and head reachable for `git diff`. fetch-depth: 0
+          # is overkill but predictable; the gate runs in seconds either way.
+          fetch-depth: 0
+
+      - name: Detect doc drift
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+
+          # Escape hatch: PR body containing `docs-skip:` opts out of all
+          # rules below. Lets refactors / internal-only changes land without
+          # forcing a doc edit. The `docs-skip:` line should describe why.
+          if printf '%s' "$PR_BODY" | grep -qE '^[[:space:]]*docs-skip:'; then
+            echo "PR description contains 'docs-skip:'. Bypassing doc gate."
+            exit 0
+          fi
+
+          # All files touched in this PR (added / modified / renamed / deleted).
+          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          # Files newly added in this PR (relevant for the new-doc rule).
+          added=$(git diff --name-only --diff-filter=A "$BASE_SHA" "$HEAD_SHA")
+
+          fail=0
+
+          # ── Rule 1: domain change requires TDD update ─────────────────
+          # If a .cs file under the domain package was touched, expect a
+          # corresponding edit to docs/TechnicalDesign.md. The TDD is the
+          # source of truth for public contracts; renaming a class /
+          # changing a public method without the doc going stale is the
+          # exact failure mode this gate exists to catch.
+          touched_domain=$(printf '%s\n' "$changed" \
+            | grep -E '^Packages/com\.arrowthing\.domain/Runtime/.*\.cs$' || true)
+          touched_tdd=$(printf '%s\n' "$changed" \
+            | grep -E '^docs/TechnicalDesign\.md$' || true)
+          if [ -n "$touched_domain" ] && [ -z "$touched_tdd" ]; then
+            echo "::error::Domain source changed but docs/TechnicalDesign.md was not updated."
+            echo "Files:"
+            printf '%s\n' "$touched_domain" | sed 's/^/  - /'
+            echo
+            echo "Either update TechnicalDesign.md or add a 'docs-skip: <reason>'"
+            echo "line to the PR description."
+            fail=1
+          fi
+
+          # ── Rule 2: new doc requires INDEX.md update ──────────────────
+          # New Markdown files under docs/ or server/docs/ must be added
+          # to docs/INDEX.md in the same PR so the index stays exhaustive.
+          # INDEX.md itself is excluded from the trigger set so the very
+          # PR that creates the index doesn't trip its own rule.
+          new_docs=$(printf '%s\n' "$added" \
+            | grep -E '^(docs|server/docs)/.*\.md$' \
+            | grep -vE '^docs/INDEX\.md$' || true)
+          touched_index=$(printf '%s\n' "$changed" \
+            | grep -E '^docs/INDEX\.md$' || true)
+          if [ -n "$new_docs" ] && [ -z "$touched_index" ]; then
+            echo "::error::New doc(s) added without docs/INDEX.md update:"
+            printf '%s\n' "$new_docs" | sed 's/^/  - /'
+            echo
+            echo "Add an entry under the appropriate INDEX.md section, or"
+            echo "add a 'docs-skip: <reason>' line to the PR description."
+            fail=1
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Doc gate passed."
