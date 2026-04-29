@@ -1272,6 +1272,66 @@ public sealed class LeaderboardScreenController : NavigableScene
         SceneNav.Pop();
     }
 
+    /// <summary>
+    /// Append a Button-shaped FocusItem to <paramref name="items"/> with
+    /// the given activate handler, returning its index. Wraps the
+    /// `OnActivate = () => { handler(); return true; }` boilerplate that
+    /// otherwise repeats for every nav target in this scene's graph.
+    /// </summary>
+    private static int AddNavItem(
+        List<FocusNavigator.FocusItem> items,
+        VisualElement element,
+        Action onActivate
+    )
+    {
+        int idx = items.Count;
+        items.Add(
+            new FocusNavigator.FocusItem
+            {
+                Element = element,
+                OnActivate = () =>
+                {
+                    onActivate();
+                    return true;
+                },
+            }
+        );
+        return idx;
+    }
+
+    /// <summary>
+    /// Dispatch for a click on one of an entry row's inline action
+    /// buttons. The same button class encodes which action runs (favorite
+    /// toggle / context menu open / replay launch — local or global).
+    /// Pulled out of the per-row OnActivate lambda so the row-construction
+    /// loop stays readable.
+    /// </summary>
+    private void HandleEntryButtonClick(Button btn, string gameId)
+    {
+        if (btn.ClassListContains("lb-fav-btn"))
+        {
+            _focusGameIdAfterRebuild = gameId;
+            _focusBtnClassAfterRebuild = "lb-fav-btn";
+            OnToggleFavorite(gameId, btn.Q(className: "lb-fav-icon--on") != null);
+        }
+        else if (btn.ClassListContains("lb-ctx-trigger"))
+        {
+            _contextMenu.Show(
+                gameId,
+                btn.parent.Q(className: "lb-fav-icon--on") != null,
+                btn.parent
+            );
+        }
+        else if (_isGlobalView)
+        {
+            OnPlayGlobalReplay(gameId);
+        }
+        else
+        {
+            OnPlayReplay(gameId);
+        }
+    }
+
     private void RebuildEntryNavigator()
     {
         Navigator?.Dispose();
@@ -1281,81 +1341,24 @@ public sealed class LeaderboardScreenController : NavigableScene
 
         // -- Header row: back button + local/global toggle --
         var backBtn = Root.Q<Button>("lb-back-btn");
-        int backIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = backBtn,
-                OnActivate = () =>
-                {
-                    OnBack();
-                    return true;
-                },
-            }
-        );
+        int backIdx = AddNavItem(items, backBtn, OnBack);
 
         var localBtn = Root.Q<Button>("lb-local-btn");
         var globalBtn = Root.Q<Button>("lb-global-btn");
-        int localIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = localBtn,
-                OnActivate = () =>
-                {
-                    SetScope(false, localBtn, globalBtn);
-                    return true;
-                },
-            }
-        );
-        int globalIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = globalBtn,
-                OnActivate = () =>
-                {
-                    SetScope(true, localBtn, globalBtn);
-                    return true;
-                },
-            }
-        );
+        int localIdx = AddNavItem(items, localBtn, () => SetScope(false, localBtn, globalBtn));
+        int globalIdx = AddNavItem(items, globalBtn, () => SetScope(true, localBtn, globalBtn));
 
         // -- Mode tabs (Classic | Endless) --
         // Always present so they can carry keyboard focus regardless of which
         // size-tab row is currently visible.
-        int modeClassicIdx = -1;
-        int modeEndlessIdx = -1;
-        if (_modeClassicTab != null)
-        {
-            modeClassicIdx = items.Count;
-            items.Add(
-                new FocusNavigator.FocusItem
-                {
-                    Element = _modeClassicTab,
-                    OnActivate = () =>
-                    {
-                        SelectMode(LeaderboardMode.Classic);
-                        return true;
-                    },
-                }
-            );
-        }
-        if (_modeEndlessTab != null)
-        {
-            modeEndlessIdx = items.Count;
-            items.Add(
-                new FocusNavigator.FocusItem
-                {
-                    Element = _modeEndlessTab,
-                    OnActivate = () =>
-                    {
-                        SelectMode(LeaderboardMode.Endless);
-                        return true;
-                    },
-                }
-            );
-        }
+        int modeClassicIdx =
+            _modeClassicTab != null
+                ? AddNavItem(items, _modeClassicTab, () => SelectMode(LeaderboardMode.Classic))
+                : -1;
+        int modeEndlessIdx =
+            _modeEndlessTab != null
+                ? AddNavItem(items, _modeEndlessTab, () => SelectMode(LeaderboardMode.Endless))
+                : -1;
 
         // -- Size tabs (varies by active mode) --
         // Endless mode uses a smaller size set (S/M/L/All); classic uses
@@ -1370,18 +1373,15 @@ public sealed class LeaderboardScreenController : NavigableScene
             if (activeSizeButtons[i] == null)
                 continue;
             int idx = i;
-            items.Add(
-                new FocusNavigator.FocusItem
+            AddNavItem(
+                items,
+                activeSizeButtons[i],
+                () =>
                 {
-                    Element = activeSizeButtons[i],
-                    OnActivate = () =>
-                    {
-                        if (isEndlessMode)
-                            SelectEndlessTab(idx);
-                        else
-                            SelectTab(idx);
-                        return true;
-                    },
+                    if (isEndlessMode)
+                        SelectEndlessTab(idx);
+                    else
+                        SelectTab(idx);
                 }
             );
         }
@@ -1391,20 +1391,7 @@ public sealed class LeaderboardScreenController : NavigableScene
         // Refresh button (global view only, sits next to last tab).
         int refreshIdx = -1;
         if (_isGlobalView && _refreshBtn != null && !_refreshBtn.ClassListContains("lb--hidden"))
-        {
-            refreshIdx = items.Count;
-            items.Add(
-                new FocusNavigator.FocusItem
-                {
-                    Element = _refreshBtn,
-                    OnActivate = () =>
-                    {
-                        FetchGlobalList();
-                        return true;
-                    },
-                }
-            );
-        }
+            refreshIdx = AddNavItem(items, _refreshBtn, FetchGlobalList);
 
         // -- Sort buttons (local view only) --
         int sortStart = items.Count;
@@ -1417,17 +1404,13 @@ public sealed class LeaderboardScreenController : NavigableScene
                     continue;
                 var sortBtn = _sortButtons[i];
                 int si = i;
-                var capturedSortBtn = sortBtn;
-                items.Add(
-                    new FocusNavigator.FocusItem
+                AddNavItem(
+                    items,
+                    sortBtn,
+                    () =>
                     {
-                        Element = sortBtn,
-                        OnActivate = () =>
-                        {
-                            _focusAfterRebuild = capturedSortBtn;
-                            SelectSort((SortCriterion)si);
-                            return true;
-                        },
+                        _focusAfterRebuild = sortBtn;
+                        SelectSort((SortCriterion)si);
                     }
                 );
                 sortCount++;
@@ -1442,69 +1425,30 @@ public sealed class LeaderboardScreenController : NavigableScene
             var row = child;
             string gameId = row.userData as string;
 
-            // Row entry — Enter navigates right to favorite (not instant replay).
+            // Row entry — Enter navigates right to first inline button.
             int rowIdx = items.Count;
-            items.Add(
-                new FocusNavigator.FocusItem
+            AddNavItem(
+                items,
+                row,
+                () =>
                 {
-                    Element = row,
-                    OnActivate = () =>
-                    {
-                        // Navigate right to the first inline button.
-                        if (rowIdx + 1 < items.Count)
-                            Navigator.SetFocus(rowIdx + 1);
-                        return true;
-                    },
+                    if (rowIdx + 1 < items.Count)
+                        Navigator.SetFocus(rowIdx + 1);
                 }
             );
 
             // Inline buttons: favorite, play, context menu.
-            var favBtn = row.Q(className: "lb-fav-btn") as Button;
-            var playBtn = row.Q(className: "lb-row-btn");
-            // Find all lb-row-btn children for inline nav.
             var rowBtns = row.Query<Button>(className: "lb-row-btn").ToList();
-            int firstBtnIdx = items.Count;
             foreach (var btn in rowBtns)
             {
                 var capturedBtn = btn;
                 string capturedId = gameId;
-                items.Add(
-                    new FocusNavigator.FocusItem
-                    {
-                        Element = capturedBtn,
-                        OnActivate = () =>
-                        {
-                            if (capturedBtn.ClassListContains("lb-fav-btn"))
-                            {
-                                _focusGameIdAfterRebuild = capturedId;
-                                _focusBtnClassAfterRebuild = "lb-fav-btn";
-                                OnToggleFavorite(
-                                    capturedId,
-                                    capturedBtn.Q(className: "lb-fav-icon--on") != null
-                                );
-                            }
-                            else if (capturedBtn.ClassListContains("lb-ctx-trigger"))
-                            {
-                                _contextMenu.Show(
-                                    capturedId,
-                                    capturedBtn.parent.Q(className: "lb-fav-icon--on") != null,
-                                    capturedBtn.parent
-                                );
-                            }
-                            else
-                            {
-                                // Play button.
-                                if (_isGlobalView)
-                                    OnPlayGlobalReplay(capturedId);
-                                else
-                                    OnPlayReplay(capturedId);
-                            }
-                            return true;
-                        },
-                    }
+                AddNavItem(
+                    items,
+                    capturedBtn,
+                    () => HandleEntryButtonClick(capturedBtn, capturedId)
                 );
             }
-            int lastBtnIdx = items.Count - 1;
 
             entryCount++;
         }
@@ -1516,20 +1460,11 @@ public sealed class LeaderboardScreenController : NavigableScene
             && _playerPlayBtn != null
             && !_playerPlayBtn.ClassListContains("lb--hidden")
         )
-        {
-            playerPlayIdx = items.Count;
-            items.Add(
-                new FocusNavigator.FocusItem
-                {
-                    Element = _playerPlayBtn,
-                    OnActivate = () =>
-                    {
-                        OnPlayGlobalReplay(_playerGameId);
-                        return true;
-                    },
-                }
+            playerPlayIdx = AddNavItem(
+                items,
+                _playerPlayBtn,
+                () => OnPlayGlobalReplay(_playerGameId)
             );
-        }
 
         _navTabsStart = tabsStart;
         _navSortStart = sortStart;
