@@ -192,6 +192,17 @@ public sealed class FocusNavigator
     }
 
     /// <summary>
+    /// Read a directional edge added via <see cref="Link"/> / <see cref="LinkBidi"/> /
+    /// <see cref="LinkBreak"/>. Returns false if no edge exists for (from, dir).
+    /// Read-only; intended for tests and tools, not for runtime traversal.
+    /// </summary>
+    public bool TryGetLink(int from, NavDir dir, out int to) =>
+        _navGraph.TryGetValue((from, dir), out to);
+
+    /// <summary>True iff the edge from <paramref name="from"/> in <paramref name="dir"/> was registered as a DAS-break.</summary>
+    public bool IsLinkBreak(int from, NavDir dir) => _navBreakpoints.Contains((from, dir));
+
+    /// <summary>
     /// Add a navigation edge that suppresses DAS after traversal,
     /// requiring a fresh key press to continue. Use at region boundaries
     /// (e.g. last entry → sort tabs).

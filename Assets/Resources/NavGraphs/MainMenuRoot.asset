@@ -1,0 +1,62 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4e7b30c1f49a4d2e9b1f5a8e3d2c1b40, type: 3}
+  m_Name: MainMenuRoot
+  m_EditorClassIdentifier:
+  slots:
+  - name: Quit
+  - name: Play
+  - name: Settings
+  - name: GitHub
+  - name: Discord
+  links:
+  - from: Quit
+    dir: 1
+    to: Play
+    bidirectional: 0
+    breakDAS: 0
+  - from: Play
+    dir: 0
+    to: Quit
+    bidirectional: 0
+    breakDAS: 0
+  - from: Play
+    dir: 2
+    to: Quit
+    bidirectional: 0
+    breakDAS: 0
+  - from: Play
+    dir: 1
+    to: Settings
+    bidirectional: 1
+    breakDAS: 0
+  - from: Settings
+    dir: 1
+    to: Discord
+    bidirectional: 1
+    breakDAS: 0
+  - from: Settings
+    dir: 2
+    to: Discord
+    bidirectional: 0
+    breakDAS: 0
+  - from: GitHub
+    dir: 3
+    to: Discord
+    bidirectional: 1
+    breakDAS: 0
+  - from: GitHub
+    dir: 0
+    to: Settings
+    bidirectional: 0
+    breakDAS: 0
+  initialFocus: Play
