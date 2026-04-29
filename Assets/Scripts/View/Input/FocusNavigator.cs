@@ -112,6 +112,23 @@ public sealed class FocusNavigator
         WasKeyboardActive = false;
     }
 
+    /// <summary>
+    /// Pixels at the top of the parent ScrollView's viewport that are
+    /// visually obstructed by chrome rendered on top (sticky header,
+    /// overlapping toolbar, etc.). <see cref="ScrollToFocused"/> treats the
+    /// effective viewport top as <c>scrollPos + ScrollTopObstruction</c>
+    /// so a focused element scrolled into view from above lands below the
+    /// chrome rather than behind it. Defaults to 0 (no obstruction).
+    /// </summary>
+    public float ScrollTopObstruction { get; set; }
+
+    /// <summary>
+    /// Pixels at the bottom of the parent ScrollView's viewport that are
+    /// visually obstructed by chrome rendered on top (sticky footer,
+    /// player panel, etc.). Symmetric counterpart to <see cref="ScrollTopObstruction"/>.
+    /// </summary>
+    public float ScrollBottomObstruction { get; set; }
+
     /// <summary>Current focused item index. -1 if nothing is focused.</summary>
     public int CurrentIndex => _currentIndex;
 
@@ -573,8 +590,17 @@ public sealed class FocusNavigator
 
         float viewHeight = scroll.contentViewport.layout.height;
         float scrollPos = scroll.verticalScroller.value;
-        float viewTop = scrollPos;
-        float viewBottom = scrollPos + viewHeight;
+
+        // The "effective" viewport — the part the user can actually see —
+        // shrinks by any chrome that overlays the top/bottom of the layout
+        // viewport. The leaderboard's screen-header etc. live in the same
+        // flex column as the ScrollView and don't overlap geometrically,
+        // but consumers with sticky overlays (panels rendered on top of
+        // the scroll area) report their pixel coverage via
+        // ScrollTop/BottomObstruction so a scrolled-to element lands inside
+        // the visible band, not behind the overlay.
+        float visibleTop = scrollPos + ScrollTopObstruction;
+        float visibleBottom = scrollPos + viewHeight - ScrollBottomObstruction;
 
         // Don't scroll if all content fits in the viewport.
         float maxScroll = scroll.verticalScroller.highValue;
@@ -582,29 +608,33 @@ public sealed class FocusNavigator
             return;
 
         // Reserve a buffer above and below the focused element so the user
-        // sees one row of context on either side. Buffer is one element
-        // height, capped at 25% of the viewport so a tall entry on a short
-        // viewport doesn't blow the budget.
-        float buffer = Mathf.Min(elHeight, viewHeight * 0.25f);
+        // sees a row of context on either side and any chrome rendered
+        // close to the viewport edge doesn't visually clip the focused
+        // row. Buffer is sized to roughly 15% of the visible band so the
+        // focused element lands well inside the visible area, but capped
+        // at one element-and-a-half height so a short viewport doesn't
+        // blow the budget on a tall entry.
+        float visibleBand = Mathf.Max(visibleBottom - visibleTop, 0f);
+        float buffer = Mathf.Min(elHeight * 1.5f, visibleBand * 0.15f);
 
         float targetScroll = scrollPos;
-        if (elTop < viewTop + buffer)
+        if (elTop < visibleTop + buffer)
         {
-            // Element is above the viewport (or peeking into the buffer
-            // zone at the top). Scroll up just enough to seat its top edge
-            // one buffer below the viewport top.
-            targetScroll = elTop - buffer;
+            // Element is above (or peeking into the buffer zone at the top
+            // of) the visible band. Scroll up just enough to seat its top
+            // edge one buffer below the visible band's top.
+            targetScroll = elTop - ScrollTopObstruction - buffer;
         }
-        else if (elBottom > viewBottom - buffer)
+        else if (elBottom > visibleBottom - buffer)
         {
-            // Element is below the viewport (or peeking into the buffer
-            // zone at the bottom). Scroll down just enough to seat its
-            // bottom edge one buffer above the viewport bottom.
-            targetScroll = elBottom - viewHeight + buffer;
+            // Element is below (or peeking into the buffer zone at the
+            // bottom of) the visible band. Scroll down just enough to seat
+            // its bottom edge one buffer above the visible band's bottom.
+            targetScroll = elBottom - viewHeight + ScrollBottomObstruction + buffer;
         }
         else
         {
-            // Element is fully inside the viewport's middle band. No scroll.
+            // Element is fully inside the visible band. No scroll.
             return;
         }
 
