@@ -63,15 +63,15 @@ public sealed class LeaderboardScreenController : NavigableScene
 
     /// <summary>
     /// Endless leaderboard size presets. Mirrors the singleplayer endless
-    /// preset row (5×5 / 10×10 / 20×20) plus an "All" tab for the global
-    /// cross-config ranking.
+    /// preset row (5×5 / 10×10 / 20×20). No "All" tab — endless rankings
+    /// are per-config; cross-config aggregation isn't meaningful for the
+    /// time-pressured run length.
     /// </summary>
     private static readonly (string name, int w, int h)[] EndlessTabs =
     {
         ("lb-endless-tab-small", 5, 5),
         ("lb-endless-tab-medium", 10, 10),
         ("lb-endless-tab-large", 20, 20),
-        ("lb-endless-tab-all", 0, 0),
     };
 
     // Cache of fetched endless leaderboards, indexed by EndlessTabs position.
@@ -565,17 +565,12 @@ public sealed class LeaderboardScreenController : NavigableScene
 
         var api = new ApiClient();
         var (w, h) = (EndlessTabs[_activeEndlessTabIndex].w, EndlessTabs[_activeEndlessTabIndex].h);
-        bool isAllTab = w == 0 && h == 0;
         int tabAtFetch = _activeEndlessTabIndex;
 
-        var lbTask = isAllTab
-            ? api.GetEndlessLeaderboardAllAsync()
-            : api.GetEndlessLeaderboardAsync(w, h);
+        var lbTask = api.GetEndlessLeaderboardAsync(w, h);
         System.Threading.Tasks.Task<ApiResult<EndlessPlayerEntryResponse>> meTask = null;
         if (api.IsLoggedIn)
-            meTask = isAllTab
-                ? api.GetEndlessPlayerEntryAllAsync()
-                : api.GetEndlessPlayerEntryAsync(w, h);
+            meTask = api.GetEndlessPlayerEntryAsync(w, h);
 
         var lbResult = await lbTask;
         if (_activeMode != LeaderboardMode.Endless || !_isGlobalView)
@@ -1769,39 +1764,20 @@ public sealed class LeaderboardScreenController : NavigableScene
 
         // -- Build nav graph --
 
-        // Local/Global toggle: horizontal pair.
-        Navigator.LinkBidi(localIdx, FocusNavigator.NavDir.Right, globalIdx);
-        Navigator.Link(globalIdx, FocusNavigator.NavDir.Left, localIdx);
-
-        // Header → Down → mode tabs (Back→Classic, Local/Global→Endless).
-        // If the mode tabs aren't present (defensive), fall back to the size
-        // tab row so the rest of the graph still wires up.
-        int firstModeIdx =
-            modeClassicIdx >= 0
-                ? modeClassicIdx
-                : (modeEndlessIdx >= 0 ? modeEndlessIdx : tabsStart);
-        int rightModeIdx =
-            modeEndlessIdx >= 0 ? modeEndlessIdx : (modeClassicIdx >= 0 ? modeClassicIdx : tabsEnd);
-        Navigator.Link(backIdx, FocusNavigator.NavDir.Down, firstModeIdx);
-        Navigator.Link(backIdx, FocusNavigator.NavDir.Right, firstModeIdx);
-        Navigator.Link(localIdx, FocusNavigator.NavDir.Down, rightModeIdx);
-        Navigator.Link(globalIdx, FocusNavigator.NavDir.Down, rightModeIdx);
-
-        // Mode tabs: horizontal pair, Up → header, Down → size tabs.
-        if (modeClassicIdx >= 0 && modeEndlessIdx >= 0)
-            Navigator.LinkBidi(modeClassicIdx, FocusNavigator.NavDir.Right, modeEndlessIdx);
+        // Top row is a single horizontal chain:
+        //   Back ↔ Classic ↔ Endless ↔ Local ↔ Global
+        // Each pair is bidirectional. The chain is built defensively — if a
+        // slot isn't present (e.g. mode tabs missing on some legacy state),
+        // adjacent links collapse around it.
+        var topChain = new List<int> { backIdx };
         if (modeClassicIdx >= 0)
-        {
-            Navigator.Link(modeClassicIdx, FocusNavigator.NavDir.Up, backIdx);
-            if (sizeTabCount > 0)
-                Navigator.Link(modeClassicIdx, FocusNavigator.NavDir.Down, tabsStart);
-        }
+            topChain.Add(modeClassicIdx);
         if (modeEndlessIdx >= 0)
-        {
-            Navigator.Link(modeEndlessIdx, FocusNavigator.NavDir.Up, localIdx);
-            if (sizeTabCount > 0)
-                Navigator.Link(modeEndlessIdx, FocusNavigator.NavDir.Down, tabsEnd);
-        }
+            topChain.Add(modeEndlessIdx);
+        topChain.Add(localIdx);
+        topChain.Add(globalIdx);
+        for (int i = 0; i < topChain.Count - 1; i++)
+            Navigator.LinkBidi(topChain[i], FocusNavigator.NavDir.Right, topChain[i + 1]);
 
         // Tab row: horizontal chain + refresh button at the end in global view.
         if (sizeTabCount > 1)
@@ -1809,29 +1785,46 @@ public sealed class LeaderboardScreenController : NavigableScene
         if (refreshIdx >= 0 && sizeTabCount > 0)
             Navigator.LinkBidi(tabsEnd, FocusNavigator.NavDir.Right, refreshIdx);
 
-        // Top-left half of tabs → Up → Classic mode tab (or back if no mode tabs).
-        // Top-right half → Up → Endless mode tab (or local/global).
-        int tabMid = sizeTabCount / 2;
-        for (int i = 0; i < sizeTabCount; i++)
+        // Classic's last size tab (the "All" tab in classic mode) → Right → Local.
+        // Lets the player chain rightward off the size tabs into the toggle.
+        // No symmetric link from local → Left → All — local already chains
+        // back through Endless/Classic into the size tabs via Down.
+        if (!isEndlessMode && sizeTabCount > 0 && refreshIdx < 0)
+            Navigator.Link(tabsEnd, FocusNavigator.NavDir.Right, localIdx);
+
+        // Top-row → Down → size tabs:
+        //   Back / Classic → first size tab.
+        //   Endless / Local / Global → last size tab.
+        // Falls back to the available tabs row if mode tabs aren't present.
+        if (sizeTabCount > 0)
         {
-            int tabIdx = tabsStart + i;
-            int upTarget =
-                i <= tabMid
-                    ? (modeClassicIdx >= 0 ? modeClassicIdx : backIdx)
-                    : (modeEndlessIdx >= 0 ? modeEndlessIdx : localIdx);
-            Navigator.Link(tabIdx, FocusNavigator.NavDir.Up, upTarget);
+            Navigator.Link(backIdx, FocusNavigator.NavDir.Down, tabsStart);
+            if (modeClassicIdx >= 0)
+                Navigator.Link(modeClassicIdx, FocusNavigator.NavDir.Down, tabsStart);
+            if (modeEndlessIdx >= 0)
+                Navigator.Link(modeEndlessIdx, FocusNavigator.NavDir.Down, tabsEnd);
+            Navigator.Link(localIdx, FocusNavigator.NavDir.Down, tabsEnd);
+            Navigator.Link(globalIdx, FocusNavigator.NavDir.Down, tabsEnd);
         }
+
+        // Size tabs → Up → currently active mode tab (the one that brought
+        // these size tabs into existence). Falls back to back/local if mode
+        // tabs aren't present.
+        int sizeTabsUpTarget = isEndlessMode
+            ? (modeEndlessIdx >= 0 ? modeEndlessIdx : localIdx)
+            : (modeClassicIdx >= 0 ? modeClassicIdx : backIdx);
+        for (int i = 0; i < sizeTabCount; i++)
+            Navigator.Link(tabsStart + i, FocusNavigator.NavDir.Up, sizeTabsUpTarget);
 
         // Tabs → Down → sort (or entries if no sort).
         int belowTabs = sortCount > 0 ? sortStart : entriesStart;
         for (int i = 0; i < sizeTabCount; i++)
             Navigator.Link(tabsStart + i, FocusNavigator.NavDir.Down, belowTabs);
 
-        // Refresh button: Up → Endless mode tab (or local if no mode tabs), Down → same as last tab.
+        // Refresh button: Up → active mode tab (matches size-tab Up target), Down → same as last tab.
         if (refreshIdx >= 0)
         {
-            int refreshUp = modeEndlessIdx >= 0 ? modeEndlessIdx : localIdx;
-            Navigator.Link(refreshIdx, FocusNavigator.NavDir.Up, refreshUp);
+            Navigator.Link(refreshIdx, FocusNavigator.NavDir.Up, sizeTabsUpTarget);
             Navigator.Link(refreshIdx, FocusNavigator.NavDir.Down, belowTabs);
         }
 
