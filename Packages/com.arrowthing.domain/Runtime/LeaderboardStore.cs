@@ -128,6 +128,10 @@ public sealed class LeaderboardStore
 
     /// <summary>
     /// Returns a sorted copy of the given entries by the specified criterion.
+    /// Sort logic lives on <see cref="LeaderboardComparers"/> as named
+    /// <see cref="IComparer{LeaderboardEntry}"/> instances; this helper just
+    /// dispatches to the right one and is kept as a convenience for callers
+    /// that have a <see cref="SortCriterion"/> in hand.
     /// </summary>
     public static List<LeaderboardEntry> SortBy(
         List<LeaderboardEntry> entries,
@@ -135,57 +139,8 @@ public sealed class LeaderboardStore
     )
     {
         var sorted = new List<LeaderboardEntry>(entries);
-        switch (criterion)
-        {
-            case SortCriterion.Fastest:
-                sorted.Sort(
-                    (a, b) =>
-                    {
-                        int cmp = a.solveTime.CompareTo(b.solveTime);
-                        return cmp != 0 ? cmp : DateTiebreak(a, b);
-                    }
-                );
-                break;
-            case SortCriterion.Biggest:
-                sorted.Sort(
-                    (a, b) =>
-                    {
-                        int areaA = a.boardWidth * a.boardHeight;
-                        int areaB = b.boardWidth * b.boardHeight;
-                        int cmp = areaB.CompareTo(areaA); // descending
-                        if (cmp != 0)
-                            return cmp;
-                        int timeCmp = a.solveTime.CompareTo(b.solveTime);
-                        return timeCmp != 0 ? timeCmp : DateTiebreak(a, b);
-                    }
-                );
-                break;
-            case SortCriterion.Favorites:
-                sorted.Sort(
-                    (a, b) =>
-                    {
-                        int favCmp = b.isFavorite.CompareTo(a.isFavorite);
-                        if (favCmp != 0)
-                            return favCmp;
-                        // Size descending (no-op on size-filtered tabs)
-                        int areaA = a.boardWidth * a.boardHeight;
-                        int areaB = b.boardWidth * b.boardHeight;
-                        int sizeCmp = areaB.CompareTo(areaA);
-                        if (sizeCmp != 0)
-                            return sizeCmp;
-                        int timeCmp = a.solveTime.CompareTo(b.solveTime);
-                        return timeCmp != 0 ? timeCmp : DateTiebreak(a, b);
-                    }
-                );
-                break;
-        }
+        sorted.Sort(LeaderboardComparers.ForCriterion(criterion));
         return sorted;
-    }
-
-    /// <summary>Tiebreaker: older entries first (ascending by completedAt).</summary>
-    private static int DateTiebreak(LeaderboardEntry a, LeaderboardEntry b)
-    {
-        return string.Compare(a.completedAt, b.completedAt, System.StringComparison.Ordinal);
     }
 
     public string ToJson()
