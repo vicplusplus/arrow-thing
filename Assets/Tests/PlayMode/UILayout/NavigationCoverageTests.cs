@@ -484,7 +484,6 @@ public class NavigationCoverageTests : UILayoutTestBase
         "lb-endless-tab-small",
         "lb-endless-tab-medium",
         "lb-endless-tab-large",
-        "lb-endless-tab-all",
     };
 
     private static readonly UIState Leaderboard_LocalView = new UIState(

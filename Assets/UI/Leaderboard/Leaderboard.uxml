@@ -37,12 +37,13 @@
             </ui:Button>
         </ui:VisualElement>
 
-        <!-- Endless size tabs (mirror endless preset row: 5×5 / 10×10 / 20×20 / All) -->
+        <!-- Endless size tabs (mirror endless preset row: 5×5 / 10×10 / 20×20).
+             No "All" tab — endless rankings are per-config; cross-config
+             aggregation isn't meaningful for the time-pressured run length. -->
         <ui:VisualElement name="lb-endless-size-tabs" class="tab-bar lb--hidden">
             <ui:Button name="lb-endless-tab-small" class="tab-bar__tab tab-bar__tab--active" text="Small" />
             <ui:Button name="lb-endless-tab-medium" class="tab-bar__tab" text="Medium" />
             <ui:Button name="lb-endless-tab-large" class="tab-bar__tab" text="Large" />
-            <ui:Button name="lb-endless-tab-all" class="tab-bar__tab" text="All" />
             <ui:Button name="lb-endless-refresh-btn" class="list-refresh-btn lb--hidden">
                 <ui:VisualElement class="list-refresh-icon" />
             </ui:Button>
