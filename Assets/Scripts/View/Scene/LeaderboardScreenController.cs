@@ -37,8 +37,6 @@ public sealed class LeaderboardScreenController : NavigableScene
     private ScrollView _scroll;
     private Label _emptyLabel;
     private VisualElement _comingSoon;
-    private VisualElement _contextMenu;
-    private ConfirmModal _deleteModal;
     private VisualElement _playerPanel;
     private Label _playerPanelLabel;
     private Button _playerPlayBtn;
@@ -92,11 +90,7 @@ public sealed class LeaderboardScreenController : NavigableScene
     private bool _isGlobalView;
 
     // Context menu state
-    private string _contextGameId;
-    private bool _contextIsFavorite;
-    private string _pendingDeleteGameId;
-    private Button _ctxFavoriteBtn;
-    private Button _ctxPlayBtn;
+    private LeaderboardContextMenu _contextMenu;
 
     // Compact mode — hides inline fav/play buttons on narrow screens.
     // Derived from the live class list (no caching) so it stays correct
@@ -134,7 +128,6 @@ public sealed class LeaderboardScreenController : NavigableScene
     private string _focusGameIdAfterRebuild;
     private string _focusBtnClassAfterRebuild;
     private int _focusEntryPositionAfterRebuild = -1;
-    private readonly PopupKeyboardNav _contextMenuNav = new PopupKeyboardNav();
 
     /// <summary>
     /// Per-row builder for classic-leaderboard entries. Created once in
@@ -158,7 +151,6 @@ public sealed class LeaderboardScreenController : NavigableScene
         _scroll = root.Q<ScrollView>("lb-scroll");
         _emptyLabel = root.Q<Label>("lb-empty");
         _comingSoon = root.Q("lb-coming-soon");
-        _contextMenu = root.Q("lb-context-menu");
 
         root.Q<Button>("lb-back-btn").clicked += OnBack;
 
@@ -220,23 +212,20 @@ public sealed class LeaderboardScreenController : NavigableScene
         _sortButtons[1].clicked += () => SelectSort(SortCriterion.Biggest);
         _sortButtons[2].clicked += () => SelectSort(SortCriterion.Favorites);
 
-        _ctxFavoriteBtn = root.Q<Button>("ctx-favorite-btn");
-        _ctxPlayBtn = root.Q<Button>("ctx-play-btn");
-        root.Q<Button>("ctx-delete-btn").clicked += OnContextDelete;
-        if (_ctxFavoriteBtn != null)
-            _ctxFavoriteBtn.clicked += OnContextFavorite;
-        if (_ctxPlayBtn != null)
-            _ctxPlayBtn.clicked += OnContextPlay;
-
-        _deleteModal = new ConfirmModal(
-            root.Q("delete-modal"),
-            "Delete this favorited entry?",
-            "Delete",
-            "Cancel",
-            isDanger: true
+        // Context menu (delete + compact-mode favorite/play). Owns the
+        // floating menu element, its delete-confirmation modal, and the
+        // popup keyboard nav. Calls back here for the actual mutations.
+        _contextMenu = new LeaderboardContextMenu(
+            root,
+            new LeaderboardContextMenu.Callbacks
+            {
+                IsCompact = () => _isCompact,
+                IsFavorite = id => LeaderboardManager.Instance?.IsFavorite(id) ?? false,
+                OnToggleFavorite = OnToggleFavorite,
+                OnPlay = OnPlayReplay,
+                OnDeleteConfirmed = OnContextMenuDeleteConfirmed,
+            }
         );
-        _deleteModal.Confirmed += OnDeleteConfirm;
-        _deleteModal.Cancelled += OnDeleteCancel;
 
         // Per-row builder for the classic-leaderboard list. Wires its
         // callbacks to controller-side methods so each row delegates
@@ -247,7 +236,7 @@ public sealed class LeaderboardScreenController : NavigableScene
                 IsFavoritesSort = () => _activeSortCriterion == SortCriterion.Favorites,
                 OnToggleFavorite = OnToggleFavorite,
                 OnPlay = OnPlayReplay,
-                OnContextMenu = ShowContextMenu,
+                OnContextMenu = (id, fav, anchor) => _contextMenu.Show(id, fav, anchor),
                 RegisterNameScroll = RegisterNameScroll,
             }
         );
@@ -271,8 +260,8 @@ public sealed class LeaderboardScreenController : NavigableScene
             });
 
         root.RegisterCallback<PointerDownEvent>(OnRootPointerDown);
-        _scroll.RegisterCallback<WheelEvent>(_ => DismissContextMenu());
-        _scroll.verticalScroller.valueChanged += _ => DismissContextMenu();
+        _scroll.RegisterCallback<WheelEvent>(_ => _contextMenu?.Dismiss());
+        _scroll.verticalScroller.valueChanged += _ => _contextMenu?.Dismiss();
 
         _scroll.RegisterCallback<PointerDownEvent>(OnScrollPointerDown);
         _scroll.RegisterCallback<PointerMoveEvent>(OnScrollPointerMove);
@@ -311,10 +300,10 @@ public sealed class LeaderboardScreenController : NavigableScene
     protected override bool PreUpdate(KeybindManager km)
     {
         // Context menu open: it handles its own navigation.
-        if (_contextMenuNav.IsActive)
+        if (_contextMenu != null && _contextMenu.IsKeyboardNavActive)
         {
-            _contextMenuNav.Update();
-            if (!_contextMenuNav.IsActive && Navigator != null)
+            _contextMenu.UpdateKeyboardNav();
+            if (!_contextMenu.IsKeyboardNavActive && Navigator != null)
                 Navigator.SuppressDAS();
             return false; // Skip Navigator.Update() this frame.
         }
@@ -456,7 +445,7 @@ public sealed class LeaderboardScreenController : NavigableScene
                 _tabButtons[i].RemoveFromClassList("tab-bar__tab--active");
         }
 
-        DismissContextMenu();
+        _contextMenu?.Dismiss();
 
         bool isAllTab = Tabs[index].w == 0 && Tabs[index].h == 0;
 
@@ -479,7 +468,7 @@ public sealed class LeaderboardScreenController : NavigableScene
 
     private void SelectSort(SortCriterion criterion)
     {
-        DismissContextMenu();
+        _contextMenu?.Dismiss();
         _activeSortCriterion = criterion;
         int idx = (int)criterion;
         for (int i = 0; i < _sortButtons.Length; i++)
@@ -502,7 +491,7 @@ public sealed class LeaderboardScreenController : NavigableScene
     private void SelectMode(LeaderboardMode mode)
     {
         _activeMode = mode;
-        DismissContextMenu();
+        _contextMenu?.Dismiss();
 
         bool isClassic = mode == LeaderboardMode.Classic;
         if (_modeClassicTab != null)
@@ -818,80 +807,11 @@ public sealed class LeaderboardScreenController : NavigableScene
         ShowElement(_scroll, !show);
     }
 
-    // --- Context menu ---
-
-    private void ShowContextMenu(string gameId, bool isFavorite, VisualElement anchorRow)
-    {
-        _contextGameId = gameId;
-        _contextIsFavorite = isFavorite;
-
-        // Show favorite/play in compact mode (hidden on wide screens)
-        if (_ctxFavoriteBtn != null)
-        {
-            ShowElement(_ctxFavoriteBtn, _isCompact);
-            _ctxFavoriteBtn.text = isFavorite ? "Unfavorite" : "Favorite";
-        }
-        ShowElement(_ctxPlayBtn, _isCompact);
-
-        // Position near the anchor row, flipping above if it would overflow
-        var rowBounds = anchorRow.worldBound;
-        float panelHeight = Root.resolvedStyle.height;
-        float menuHeight = _contextMenu.resolvedStyle.height;
-        if (menuHeight <= 0)
-            menuHeight = 60; // fallback estimate
-
-        bool fitsBelow = rowBounds.yMax + menuHeight <= panelHeight;
-
-        _contextMenu.style.right = 16;
-        _contextMenu.style.left = StyleKeyword.Auto;
-
-        if (fitsBelow)
-        {
-            _contextMenu.style.top = rowBounds.yMax;
-            _contextMenu.style.bottom = StyleKeyword.Auto;
-        }
-        else
-        {
-            _contextMenu.style.bottom = panelHeight - rowBounds.yMin;
-            _contextMenu.style.top = StyleKeyword.Auto;
-        }
-
-        ShowElement(_contextMenu, true);
-
-        // Set up keyboard navigation for visible context menu items.
-        var navItems = new List<VisualElement>();
-        var navCallbacks = new List<Action>();
-        if (_isCompact && _ctxFavoriteBtn != null)
-        {
-            navItems.Add(_ctxFavoriteBtn);
-            navCallbacks.Add(OnContextFavorite);
-        }
-        if (_isCompact && _ctxPlayBtn != null)
-        {
-            navItems.Add(_ctxPlayBtn);
-            navCallbacks.Add(OnContextPlay);
-        }
-        var deleteBtn = Root.Q<Button>("ctx-delete-btn");
-        if (deleteBtn != null)
-        {
-            navItems.Add(deleteBtn);
-            navCallbacks.Add(OnContextDelete);
-        }
-        _contextMenuNav.Open(navItems, navCallbacks, DismissContextMenu);
-    }
-
-    private void DismissContextMenu()
-    {
-        ShowElement(_contextMenu, false);
-        _contextMenuNav.Close();
-        _contextGameId = null;
-    }
-
     // --- Drag-to-scroll ---
 
     private void OnScrollPointerDown(PointerDownEvent evt)
     {
-        DismissContextMenu();
+        _contextMenu?.Dismiss();
 
         // Let row buttons handle their own pointer events
         if (IsRowButton(evt.target as VisualElement))
@@ -970,14 +890,14 @@ public sealed class LeaderboardScreenController : NavigableScene
 
     private void OnRootPointerDown(PointerDownEvent evt)
     {
-        if (_contextMenu.ClassListContains("lb--hidden"))
+        if (_contextMenu == null || !_contextMenu.IsOpen)
             return;
 
-        // Check if click is inside the context menu
-        if (_contextMenu.worldBound.Contains(evt.position))
+        // Click inside the menu itself doesn't dismiss it.
+        if (_contextMenu.ContainsWorldPoint(evt.position))
             return;
 
-        DismissContextMenu();
+        _contextMenu.Dismiss();
     }
 
     private void OnToggleFavorite(string gameId, bool currentlyFavorite)
@@ -992,81 +912,23 @@ public sealed class LeaderboardScreenController : NavigableScene
         RefreshList();
     }
 
-    private void OnContextFavorite()
+    /// <summary>
+    /// Fires when the context menu's delete flow has confirmed (either
+    /// immediately for non-favorited entries or after the modal Confirmed
+    /// for favorited ones). The controller mutates the store and stages
+    /// the post-rebuild focus restoration.
+    /// </summary>
+    private void OnContextMenuDeleteConfirmed(string gameId)
     {
-        if (_contextGameId == null)
-            return;
-        OnToggleFavorite(_contextGameId, _contextIsFavorite);
-        DismissContextMenu();
-    }
-
-    private void OnContextPlay()
-    {
-        if (_contextGameId == null)
-            return;
-        DismissContextMenu();
-        OnPlayReplay(_contextGameId);
-    }
-
-    private void OnContextDelete()
-    {
-        if (_contextGameId == null)
-            return;
-
-        // Re-check favorite status in case it was toggled while the context menu was open
-        var manager = LeaderboardManager.Instance;
-        if (manager != null)
-            _contextIsFavorite = manager.IsFavorite(_contextGameId);
-
-        // If favorited, show confirmation modal
-        if (_contextIsFavorite)
-        {
-            _pendingDeleteGameId = _contextGameId;
-            DismissContextMenu();
-            _deleteModal.Show();
-        }
-        else
-        {
-            PerformDelete();
-        }
-    }
-
-    private void OnDeleteConfirm()
-    {
-        _deleteModal.Hide();
-        if (_pendingDeleteGameId != null)
-        {
-            _focusEntryPositionAfterRebuild = FindEntryPosition(_pendingDeleteGameId);
-            _focusBtnClassAfterRebuild = "lb-ctx-trigger";
-
-            var manager = LeaderboardManager.Instance;
-            if (manager != null)
-                manager.RemoveEntry(_pendingDeleteGameId);
-            _pendingDeleteGameId = null;
-            RefreshList();
-        }
-    }
-
-    private void OnDeleteCancel()
-    {
-        _deleteModal.Hide();
-        _pendingDeleteGameId = null;
-    }
-
-    private void PerformDelete()
-    {
-        if (_contextGameId == null)
-            return;
-
-        // Track position so focus lands on the replacement entry.
-        _focusEntryPositionAfterRebuild = FindEntryPosition(_contextGameId);
+        // Track position so focus lands on the replacement entry after
+        // the list rebuilds — same row position now holds whatever entry
+        // moved up to fill the gap.
+        _focusEntryPositionAfterRebuild = FindEntryPosition(gameId);
         _focusBtnClassAfterRebuild = "lb-ctx-trigger";
 
         var manager = LeaderboardManager.Instance;
         if (manager != null)
-            manager.RemoveEntry(_contextGameId);
-
-        DismissContextMenu();
+            manager.RemoveEntry(gameId);
         RefreshList();
     }
 
@@ -1623,7 +1485,7 @@ public sealed class LeaderboardScreenController : NavigableScene
                             }
                             else if (capturedBtn.ClassListContains("lb-ctx-trigger"))
                             {
-                                ShowContextMenu(
+                                _contextMenu.Show(
                                     capturedId,
                                     capturedBtn.parent.Q(className: "lb-fav-icon--on") != null,
                                     capturedBtn.parent
