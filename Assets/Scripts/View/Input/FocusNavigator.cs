@@ -561,12 +561,12 @@ public sealed class FocusNavigator
 
     /// <summary>
     /// Scroll the focused element into view. Scrolls the minimum distance
-    /// needed to bring the element fully inside the viewport plus a small
-    /// buffer above/below — does NOT center. Centering felt jarring on
-    /// rowed lists (leaderboard) because navigating one row down would
-    /// pull the previously-top entry into a half-hidden state at the top
-    /// edge. With the buffer-based approach, scrolling only happens when
-    /// the focused element is at or beyond the viewport edge.
+    /// needed to keep the element inside the visible band plus a buffer.
+    /// "Visible band" excludes any chrome that the parent's siblings of
+    /// the scroll view occupy — when chrome ends up rendered over the top
+    /// edge of the scroll viewport (flex layout quirks, padding, stacking),
+    /// using <c>worldBound</c> here gives the actual visible area instead
+    /// of the layout-engine area.
     /// </summary>
     public void ScrollToFocused()
     {
@@ -577,64 +577,65 @@ public sealed class FocusNavigator
         if (scroll == null)
             return;
 
-        // Get element position relative to the scroll content.
-        float elTop = el.layout.y;
-        var parent = el.parent;
-        while (parent != null && parent != scroll.contentContainer)
-        {
-            elTop += parent.layout.y;
-            parent = parent.parent;
-        }
-        float elHeight = el.layout.height;
-        float elBottom = elTop + elHeight;
-
-        float viewHeight = scroll.contentViewport.layout.height;
-        float scrollPos = scroll.verticalScroller.value;
-
-        // The "effective" viewport — the part the user can actually see —
-        // shrinks by any chrome that overlays the top/bottom of the layout
-        // viewport. The leaderboard's screen-header etc. live in the same
-        // flex column as the ScrollView and don't overlap geometrically,
-        // but consumers with sticky overlays (panels rendered on top of
-        // the scroll area) report their pixel coverage via
-        // ScrollTop/BottomObstruction so a scrolled-to element lands inside
-        // the visible band, not behind the overlay.
-        float visibleTop = scrollPos + ScrollTopObstruction;
-        float visibleBottom = scrollPos + viewHeight - ScrollBottomObstruction;
-
         // Don't scroll if all content fits in the viewport.
         float maxScroll = scroll.verticalScroller.highValue;
         if (maxScroll <= 0)
             return;
 
-        // Reserve a buffer above and below the focused element so the user
-        // sees a row of context on either side and any chrome rendered
-        // close to the viewport edge doesn't visually clip the focused
-        // row. Buffer is sized to roughly 15% of the visible band so the
-        // focused element lands well inside the visible area, but capped
-        // at one element-and-a-half height so a short viewport doesn't
-        // blow the budget on a tall entry.
-        float visibleBand = Mathf.Max(visibleBottom - visibleTop, 0f);
-        float buffer = Mathf.Min(elHeight * 1.5f, visibleBand * 0.15f);
+        // World-space rects: these reflect what the user actually sees —
+        // including any layout offsets, stacking artifacts, or
+        // non-overlapping chrome above the scroll viewport.
+        var elRect = el.worldBound;
+        var viewRect = scroll.contentViewport.worldBound;
+        if (float.IsNaN(elRect.height) || elRect.height <= 0 || viewRect.height <= 0)
+            return;
 
-        float targetScroll = scrollPos;
-        if (elTop < visibleTop + buffer)
+        // The visible band's effective top is the lower of the scroll
+        // viewport's top and the bottom edge of any sibling rendered
+        // before the scroll view in the parent's children — that picks up
+        // chrome (header, mode tabs, sort row) regardless of whether it
+        // formally overlaps in flex coordinates. Manual obstruction values
+        // (ScrollTop/BottomObstruction) further shrink the band for
+        // cases the sibling walk can't see (e.g. floating panels).
+        float visibleTop = viewRect.yMin + ScrollTopObstruction;
+        float visibleBottom = viewRect.yMax - ScrollBottomObstruction;
+        if (scroll.parent != null)
         {
-            // Element is above (or peeking into the buffer zone at the top
-            // of) the visible band. Scroll up just enough to seat its top
-            // edge one buffer below the visible band's top.
-            targetScroll = elTop - ScrollTopObstruction - buffer;
+            foreach (var sibling in scroll.parent.Children())
+            {
+                if (sibling == scroll)
+                    break;
+                if (sibling.resolvedStyle.display == DisplayStyle.None)
+                    continue;
+                float chromeBottom = sibling.worldBound.yMax;
+                if (chromeBottom > visibleTop)
+                    visibleTop = chromeBottom;
+            }
         }
-        else if (elBottom > visibleBottom - buffer)
+
+        // Buffer keeps a row of context above/below the focused row.
+        float visibleBand = Mathf.Max(visibleBottom - visibleTop, 0f);
+        float buffer = Mathf.Min(elRect.height * 1.5f, visibleBand * 0.15f);
+
+        // Target the minimum scroll change that puts the element fully
+        // inside the visible band with the buffer reserved.
+        float scrollPos = scroll.verticalScroller.value;
+        float targetScroll = scrollPos;
+        if (elRect.yMin < visibleTop + buffer)
         {
-            // Element is below (or peeking into the buffer zone at the
-            // bottom of) the visible band. Scroll down just enough to seat
-            // its bottom edge one buffer above the visible band's bottom.
-            targetScroll = elBottom - viewHeight + ScrollBottomObstruction + buffer;
+            // Element is above the visible band's top + buffer. Scroll up:
+            // decrease scrollPos by enough to push the element down to
+            // visibleTop + buffer.
+            targetScroll = scrollPos - (visibleTop + buffer - elRect.yMin);
+        }
+        else if (elRect.yMax > visibleBottom - buffer)
+        {
+            // Element is below the visible band's bottom - buffer. Scroll
+            // down by the symmetric amount.
+            targetScroll = scrollPos + (elRect.yMax - (visibleBottom - buffer));
         }
         else
         {
-            // Element is fully inside the visible band. No scroll.
             return;
         }
 
