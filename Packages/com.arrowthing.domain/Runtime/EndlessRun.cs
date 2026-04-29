@@ -65,7 +65,6 @@ public sealed class EndlessRun
     private int _currentCombo;
     private float _runEndTime;
     private bool _active = true;
-    private bool _begun;
 
     private readonly List<PendingArrow> _commitScratch = new();
 
@@ -130,21 +129,12 @@ public sealed class EndlessRun
         // Seed the meter with one combo so the first push tick has something
         // to send to pending instead of an empty queue.
         _meter.Add(NewComboEntry());
-    }
 
-    /// <summary>
-    /// Fires the first push tick — spawning the initial pending arrows so an
-    /// empty start board doesn't leave the player staring at blank space until
-    /// the first interval. Must be called exactly once, after subscribing to
-    /// <see cref="PendingSpawned"/> / <see cref="MeterChanged"/> / etc., before
-    /// the first <see cref="Advance"/> or <see cref="HandleTap"/>.
-    /// Idempotent if already begun (no-op on repeat calls).
-    /// </summary>
-    public void Begin()
-    {
-        if (_begun)
-            return;
-        _begun = true;
+        // Fire the first push immediately so an empty start board doesn't
+        // leave the player staring at blank space until the first interval.
+        // Subscribers attached after construction won't see these events;
+        // they should iterate PendingArrows post-construction with the
+        // active combo's color and synthesise their own catch-up handling.
         OnPushTick();
     }
 

@@ -16,65 +16,21 @@ public class EndlessRunTests
     private static EndlessRun MakeRun(int seed = 42, int size = 10, int paletteCount = 6)
     {
         var board = new Board(size, size);
-        var run = new EndlessRun(board, seed, paletteCount, EndlessTuning.V1);
-        run.Begin();
-        return run;
+        return new EndlessRun(board, seed, paletteCount, EndlessTuning.V1);
     }
 
     [Test]
-    public void NewRun_HasOneCombo_FiresFirstPushOnBegin()
+    public void NewRun_HasOneCombo_FiresFirstPushImmediately()
     {
         var run = MakeRun();
-        // Begin() fires first push tick → meter has the seeded combo PLUS
-        // the new one pushed at the back. So 1 active combo + 1 queued.
+        // Constructor fires first push tick → meter has the seeded combo
+        // PLUS the new one pushed at the back. So 1 active combo + 1 queued.
         Assert.That(run.Meter.Count, Is.EqualTo(1));
         Assert.That(run.IsActive, Is.True);
         Assert.That(run.ClearCount, Is.EqualTo(0));
         Assert.That(run.SimTime, Is.EqualTo(0f));
         // First push spawned pending arrows.
         Assert.That(run.PendingArrows.Count, Is.GreaterThan(0));
-    }
-
-    [Test]
-    public void Constructor_DoesNotFireSpawnEvents()
-    {
-        // Regression test: the constructor used to call OnPushTick directly,
-        // which fired PendingSpawned before any subscriber could attach.
-        // EndlessModeController would then miss the first wave of spawn
-        // events and never create ArrowViews for those arrows — when they
-        // committed, tapping them logged "[BoardView] TryClearArrow: no view
-        // for arrow@..." and refused to clear. Begin() now owns the initial
-        // push so subscribers get the events.
-        var board = new Board(10, 10);
-        var run = new EndlessRun(board, seed: 42, paletteCount: 6, EndlessTuning.V1);
-
-        int spawnEventCount = 0;
-        run.PendingSpawned += (pending, colorIndex) => spawnEventCount++;
-
-        // Before Begin(), no pending arrows and no spawn events have fired.
-        Assert.That(run.PendingArrows.Count, Is.EqualTo(0));
-        Assert.That(spawnEventCount, Is.EqualTo(0));
-
-        run.Begin();
-
-        Assert.That(run.PendingArrows.Count, Is.GreaterThan(0));
-        Assert.That(spawnEventCount, Is.EqualTo(run.PendingArrows.Count));
-    }
-
-    [Test]
-    public void Begin_IsIdempotent()
-    {
-        var run = MakeRun(); // already calls Begin once
-        int initialPendingCount = run.PendingArrows.Count;
-
-        int extraSpawnEvents = 0;
-        run.PendingSpawned += (pending, colorIndex) => extraSpawnEvents++;
-
-        run.Begin();
-        run.Begin();
-
-        Assert.That(extraSpawnEvents, Is.EqualTo(0), "Begin() must not re-fire the initial push.");
-        Assert.That(run.PendingArrows.Count, Is.EqualTo(initialPendingCount));
     }
 
     [Test]
