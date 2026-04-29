@@ -1,0 +1,68 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4e7b30c1f49a4d2e9b1f5a8e3d2c1b40, type: 3}
+  m_Name: Replay
+  m_EditorClassIdentifier:
+  slots:
+  - name: Exit
+  - name: Seek
+  - name: Play
+  - name: Speed
+  - name: Highlight
+  - name: ControlsToggle
+  links:
+  - from: Exit
+    dir: 1
+    to: Seek
+    bidirectional: 1
+    breakDAS: 0
+  - from: Seek
+    dir: 1
+    to: Play
+    bidirectional: 1
+    breakDAS: 0
+  - from: Play
+    dir: 3
+    to: Speed
+    bidirectional: 1
+    breakDAS: 0
+  - from: Speed
+    dir: 3
+    to: Highlight
+    bidirectional: 1
+    breakDAS: 0
+  - from: Highlight
+    dir: 3
+    to: ControlsToggle
+    bidirectional: 1
+    breakDAS: 0
+  - from: Play
+    dir: 0
+    to: Seek
+    bidirectional: 0
+    breakDAS: 0
+  - from: Speed
+    dir: 0
+    to: Seek
+    bidirectional: 0
+    breakDAS: 0
+  - from: Highlight
+    dir: 0
+    to: Seek
+    bidirectional: 0
+    breakDAS: 0
+  - from: ControlsToggle
+    dir: 0
+    to: Seek
+    bidirectional: 0
+    breakDAS: 0
+  initialFocus: Play
