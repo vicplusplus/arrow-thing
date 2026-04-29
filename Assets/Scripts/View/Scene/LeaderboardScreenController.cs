@@ -1548,24 +1548,72 @@ public sealed class LeaderboardScreenController : NavigableScene
             }
         );
 
-        // -- Size tabs --
-        int tabsStart = items.Count;
-        for (int i = 0; i < Tabs.Length; i++)
+        // -- Mode tabs (Classic | Endless) --
+        // Always present so they can carry keyboard focus regardless of which
+        // size-tab row is currently visible.
+        int modeClassicIdx = -1;
+        int modeEndlessIdx = -1;
+        if (_modeClassicTab != null)
         {
+            modeClassicIdx = items.Count;
+            items.Add(
+                new FocusNavigator.FocusItem
+                {
+                    Element = _modeClassicTab,
+                    OnActivate = () =>
+                    {
+                        SelectMode(LeaderboardMode.Classic);
+                        return true;
+                    },
+                }
+            );
+        }
+        if (_modeEndlessTab != null)
+        {
+            modeEndlessIdx = items.Count;
+            items.Add(
+                new FocusNavigator.FocusItem
+                {
+                    Element = _modeEndlessTab,
+                    OnActivate = () =>
+                    {
+                        SelectMode(LeaderboardMode.Endless);
+                        return true;
+                    },
+                }
+            );
+        }
+
+        // -- Size tabs (varies by active mode) --
+        // Endless mode uses a smaller size set (S/M/L/All); classic uses
+        // the full S/M/L/XL/All. The hidden array's buttons are not focusable
+        // because their parent container has display: none.
+        bool isEndlessMode = _activeMode == LeaderboardMode.Endless;
+        Button[] activeSizeButtons = isEndlessMode ? _endlessTabButtons : _tabButtons;
+        int activeSizeTabCount = activeSizeButtons?.Length ?? 0;
+        int tabsStart = items.Count;
+        for (int i = 0; i < activeSizeTabCount; i++)
+        {
+            if (activeSizeButtons[i] == null)
+                continue;
             int idx = i;
             items.Add(
                 new FocusNavigator.FocusItem
                 {
-                    Element = _tabButtons[i],
+                    Element = activeSizeButtons[i],
                     OnActivate = () =>
                     {
-                        SelectTab(idx);
+                        if (isEndlessMode)
+                            SelectEndlessTab(idx);
+                        else
+                            SelectTab(idx);
                         return true;
                     },
                 }
             );
         }
         int tabsEnd = items.Count - 1;
+        int sizeTabCount = items.Count - tabsStart;
 
         // Refresh button (global view only, sits next to last tab).
         int refreshIdx = -1;
@@ -1714,49 +1762,76 @@ public sealed class LeaderboardScreenController : NavigableScene
         _navSortStart = sortStart;
         _navEntriesStart = entriesStart;
 
-        Navigator.SetItems(items, tabsStart + _activeTabIndex);
+        int activeSizeTabIdx = isEndlessMode ? _activeEndlessTabIndex : _activeTabIndex;
+        int initialFocus =
+            sizeTabCount > 0 ? tabsStart + Mathf.Clamp(activeSizeTabIdx, 0, sizeTabCount - 1) : 0;
+        Navigator.SetItems(items, initialFocus);
 
         // -- Build nav graph --
 
-        // Back ↔ first tab (Down/Right).
-        Navigator.Link(backIdx, FocusNavigator.NavDir.Down, tabsStart);
-        Navigator.Link(backIdx, FocusNavigator.NavDir.Right, tabsStart);
-
         // Local/Global toggle: horizontal pair.
         Navigator.LinkBidi(localIdx, FocusNavigator.NavDir.Right, globalIdx);
-        Navigator.Link(localIdx, FocusNavigator.NavDir.Down, tabsEnd);
-        Navigator.Link(globalIdx, FocusNavigator.NavDir.Down, tabsEnd);
         Navigator.Link(globalIdx, FocusNavigator.NavDir.Left, localIdx);
 
+        // Header → Down → mode tabs (Back→Classic, Local/Global→Endless).
+        // If the mode tabs aren't present (defensive), fall back to the size
+        // tab row so the rest of the graph still wires up.
+        int firstModeIdx =
+            modeClassicIdx >= 0
+                ? modeClassicIdx
+                : (modeEndlessIdx >= 0 ? modeEndlessIdx : tabsStart);
+        int rightModeIdx =
+            modeEndlessIdx >= 0 ? modeEndlessIdx : (modeClassicIdx >= 0 ? modeClassicIdx : tabsEnd);
+        Navigator.Link(backIdx, FocusNavigator.NavDir.Down, firstModeIdx);
+        Navigator.Link(backIdx, FocusNavigator.NavDir.Right, firstModeIdx);
+        Navigator.Link(localIdx, FocusNavigator.NavDir.Down, rightModeIdx);
+        Navigator.Link(globalIdx, FocusNavigator.NavDir.Down, rightModeIdx);
+
+        // Mode tabs: horizontal pair, Up → header, Down → size tabs.
+        if (modeClassicIdx >= 0 && modeEndlessIdx >= 0)
+            Navigator.LinkBidi(modeClassicIdx, FocusNavigator.NavDir.Right, modeEndlessIdx);
+        if (modeClassicIdx >= 0)
+        {
+            Navigator.Link(modeClassicIdx, FocusNavigator.NavDir.Up, backIdx);
+            if (sizeTabCount > 0)
+                Navigator.Link(modeClassicIdx, FocusNavigator.NavDir.Down, tabsStart);
+        }
+        if (modeEndlessIdx >= 0)
+        {
+            Navigator.Link(modeEndlessIdx, FocusNavigator.NavDir.Up, localIdx);
+            if (sizeTabCount > 0)
+                Navigator.Link(modeEndlessIdx, FocusNavigator.NavDir.Down, tabsEnd);
+        }
+
         // Tab row: horizontal chain + refresh button at the end in global view.
-        Navigator.LinkRow(tabsStart, Tabs.Length);
-        if (refreshIdx >= 0)
+        if (sizeTabCount > 1)
+            Navigator.LinkRow(tabsStart, sizeTabCount);
+        if (refreshIdx >= 0 && sizeTabCount > 0)
             Navigator.LinkBidi(tabsEnd, FocusNavigator.NavDir.Right, refreshIdx);
 
-        // Top-left half of tabs → Up → back. Top-right half → Up → local/global.
-        int tabMid = Tabs.Length / 2;
-        for (int i = 0; i < Tabs.Length; i++)
+        // Top-left half of tabs → Up → Classic mode tab (or back if no mode tabs).
+        // Top-right half → Up → Endless mode tab (or local/global).
+        int tabMid = sizeTabCount / 2;
+        for (int i = 0; i < sizeTabCount; i++)
         {
             int tabIdx = tabsStart + i;
-            if (i <= tabMid)
-            {
-                Navigator.Link(tabIdx, FocusNavigator.NavDir.Up, backIdx);
-            }
-            else
-            {
-                Navigator.Link(tabIdx, FocusNavigator.NavDir.Up, localIdx);
-            }
+            int upTarget =
+                i <= tabMid
+                    ? (modeClassicIdx >= 0 ? modeClassicIdx : backIdx)
+                    : (modeEndlessIdx >= 0 ? modeEndlessIdx : localIdx);
+            Navigator.Link(tabIdx, FocusNavigator.NavDir.Up, upTarget);
         }
 
         // Tabs → Down → sort (or entries if no sort).
         int belowTabs = sortCount > 0 ? sortStart : entriesStart;
-        for (int i = 0; i < Tabs.Length; i++)
+        for (int i = 0; i < sizeTabCount; i++)
             Navigator.Link(tabsStart + i, FocusNavigator.NavDir.Down, belowTabs);
 
-        // Refresh button: Up → local/global toggle, Down → same as last tab.
+        // Refresh button: Up → Endless mode tab (or local if no mode tabs), Down → same as last tab.
         if (refreshIdx >= 0)
         {
-            Navigator.Link(refreshIdx, FocusNavigator.NavDir.Up, localIdx);
+            int refreshUp = modeEndlessIdx >= 0 ? modeEndlessIdx : localIdx;
+            Navigator.Link(refreshIdx, FocusNavigator.NavDir.Up, refreshUp);
             Navigator.Link(refreshIdx, FocusNavigator.NavDir.Down, belowTabs);
         }
 
