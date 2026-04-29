@@ -393,6 +393,41 @@ public sealed class LeaderboardScreenController : NavigableScene
         _scroll.schedule.Execute(() => ScrollToFocusEntry()).ExecuteLater(50);
     }
 
+    /// <summary>
+    /// Configure the navigator's scroll obstruction so a scrolled-to entry
+    /// doesn't end up rendered behind chrome rendered at the top of the
+    /// scroll area (screen-header, mode tabs, size tabs, sort row).
+    /// Measures the actual overlap in world coordinates so the value
+    /// adapts to whichever rows are visible (sort row is hidden in
+    /// global / endless modes, etc.). Deferred to the next layout pass
+    /// because <c>worldBound</c> is only valid after layout resolves.
+    /// </summary>
+    private void ApplyScrollObstruction()
+    {
+        if (Navigator == null || _scroll == null)
+            return;
+        _scroll.schedule.Execute(() =>
+        {
+            if (Navigator == null || _scroll?.parent == null)
+                return;
+
+            float scrollTop = _scroll.contentViewport.worldBound.yMin;
+            float chromeBottom = scrollTop;
+            foreach (var sibling in _scroll.parent.Children())
+            {
+                if (sibling == _scroll)
+                    break;
+                if (sibling.resolvedStyle.display == DisplayStyle.None)
+                    continue;
+                float yMax = sibling.worldBound.yMax;
+                if (yMax > chromeBottom)
+                    chromeBottom = yMax;
+            }
+
+            Navigator.ScrollTopObstruction = Mathf.Max(0f, chromeBottom - scrollTop);
+        });
+    }
+
     private void ScrollToFocusEntry()
     {
         if (_focusGameId == null)
@@ -1498,6 +1533,7 @@ public sealed class LeaderboardScreenController : NavigableScene
     {
         Navigator?.Dispose();
         Navigator = new FocusNavigator(Root);
+        ApplyScrollObstruction();
 
         var items = new List<FocusNavigator.FocusItem>();
 
