@@ -136,6 +136,13 @@ public sealed class LeaderboardScreenController : NavigableScene
     private int _focusEntryPositionAfterRebuild = -1;
     private readonly PopupKeyboardNav _contextMenuNav = new PopupKeyboardNav();
 
+    /// <summary>
+    /// Per-row builder for classic-leaderboard entries. Created once in
+    /// <see cref="BuildUI"/> with controller-side callbacks; reused for
+    /// every list rebuild.
+    /// </summary>
+    private LeaderboardEntryRow _entryRow;
+
     protected override KeybindManager.Context NavContext => KeybindManager.Context.Leaderboard;
 
     protected override void BuildUI(VisualElement root)
@@ -230,6 +237,20 @@ public sealed class LeaderboardScreenController : NavigableScene
         );
         _deleteModal.Confirmed += OnDeleteConfirm;
         _deleteModal.Cancelled += OnDeleteCancel;
+
+        // Per-row builder for the classic-leaderboard list. Wires its
+        // callbacks to controller-side methods so each row delegates
+        // back here for favorite toggles, replay launches, etc.
+        _entryRow = new LeaderboardEntryRow(
+            new LeaderboardEntryRow.Callbacks
+            {
+                IsFavoritesSort = () => _activeSortCriterion == SortCriterion.Favorites,
+                OnToggleFavorite = OnToggleFavorite,
+                OnPlay = OnPlayReplay,
+                OnContextMenu = ShowContextMenu,
+                RegisterNameScroll = RegisterNameScroll,
+            }
+        );
 
         _playerPanel = root.Q("lb-player-panel");
         _playerPanelLabel = root.Q<Label>("lb-player-panel-label");
@@ -779,123 +800,16 @@ public sealed class LeaderboardScreenController : NavigableScene
         for (int i = 0; i < entries.Count; i++)
         {
             var entry = entries[i];
-            var row = CreateEntryRow(i + 1, entry, isAllTab, gold, silver, bronze);
+            var row = _entryRow.Build(
+                i + 1,
+                entry,
+                isAllTab,
+                new LeaderboardEntryRow.Medals(gold, silver, bronze)
+            );
             _list.Add(row);
         }
 
         RebuildEntryNavigator();
-    }
-
-    private VisualElement CreateEntryRow(
-        int rank,
-        LeaderboardEntry entry,
-        bool showSize,
-        HashSet<string> gold,
-        HashSet<string> silver,
-        HashSet<string> bronze
-    )
-    {
-        var row = new VisualElement();
-        row.AddToClassList("lb-entry");
-        row.userData = entry.gameId;
-
-        // Medal highlights (non-Favorites sort)
-        string medalRow = null;
-        string medalRank = null;
-        if (gold != null && gold.Contains(entry.gameId))
-        {
-            medalRow = "lb-entry--gold";
-            medalRank = "lb-rank--gold";
-        }
-        else if (silver != null && silver.Contains(entry.gameId))
-        {
-            medalRow = "lb-entry--silver";
-            medalRank = "lb-rank--silver";
-        }
-        else if (bronze != null && bronze.Contains(entry.gameId))
-        {
-            medalRow = "lb-entry--bronze";
-            medalRank = "lb-rank--bronze";
-        }
-
-        // Favorite tint (Favorites sort only — medals are null)
-        if (medalRow == null && _activeSortCriterion == SortCriterion.Favorites && entry.isFavorite)
-            row.AddToClassList("lb-entry--favorite");
-        if (medalRow != null)
-            row.AddToClassList(medalRow);
-
-        // Rank
-        var rankLabel = new Label($"#{rank}");
-        rankLabel.AddToClassList("lb-rank");
-        if (medalRank != null)
-            rankLabel.AddToClassList(medalRank);
-        row.Add(rankLabel);
-
-        // Size (All tab only)
-        if (showSize)
-        {
-            var sizeLabel = new Label($"{entry.boardWidth}x{entry.boardHeight}");
-            sizeLabel.AddToClassList("lb-size");
-            row.Add(sizeLabel);
-        }
-
-        // Time (compact format on All tab)
-        string timeText = showSize
-            ? FormatCompactTime(entry.solveTime)
-            : FormatTime(entry.solveTime);
-        var timeLabel = new Label(timeText);
-        timeLabel.AddToClassList("lb-time");
-        if (showSize)
-            timeLabel.AddToClassList("lb-time--compact");
-        row.Add(timeLabel);
-
-        // Display name — wrapped for horizontal auto-scroll on overflow
-        var nameWrapper = new VisualElement();
-        nameWrapper.AddToClassList("lb-name-wrapper");
-        var nameLabel = new Label(entry.displayName ?? "");
-        nameLabel.AddToClassList("lb-name");
-        nameWrapper.Add(nameLabel);
-        row.Add(nameWrapper);
-        RegisterNameScroll(nameWrapper, nameLabel);
-
-        // Date (relative text, tooltip shows exact date+time)
-        var dateLabel = new Label(FormatRelativeDate(entry.completedAt));
-        dateLabel.AddToClassList("lb-date");
-        dateLabel.tooltip = FormatExactDate(entry.completedAt);
-        row.Add(dateLabel);
-
-        // Favorite icon (clickable toggle)
-        string capturedGameId = entry.gameId;
-        bool capturedFav = entry.isFavorite;
-        var favBtn = new Button(() => OnToggleFavorite(capturedGameId, capturedFav));
-        favBtn.AddToClassList("lb-row-btn");
-        favBtn.AddToClassList("lb-fav-btn");
-        var favIcon = new VisualElement();
-        favIcon.AddToClassList("lb-row-btn__icon");
-        favIcon.AddToClassList(entry.isFavorite ? "lb-fav-icon--on" : "lb-fav-icon--off");
-        favBtn.Add(favIcon);
-        row.Add(favBtn);
-
-        // Play button
-        var playBtn = new Button(() => OnPlayReplay(capturedGameId));
-        playBtn.AddToClassList("lb-row-btn");
-        var playIcon = new VisualElement();
-        playIcon.AddToClassList("lb-row-btn__icon");
-        playIcon.AddToClassList("lb-play-icon");
-        playBtn.Add(playIcon);
-        row.Add(playBtn);
-
-        // Context menu trigger
-        var ctxBtn = new Button(() => ShowContextMenu(capturedGameId, capturedFav, row));
-        ctxBtn.AddToClassList("lb-row-btn");
-        ctxBtn.AddToClassList("lb-ctx-trigger");
-        var ctxIcon = new VisualElement();
-        ctxIcon.AddToClassList("lb-row-btn__icon");
-        ctxIcon.AddToClassList("lb-ctx-trigger-icon");
-        ctxBtn.Add(ctxIcon);
-        row.Add(ctxBtn);
-
-        return row;
     }
 
     private void ShowEmpty(bool show)
@@ -1329,7 +1243,9 @@ public sealed class LeaderboardScreenController : NavigableScene
         }
 
         // Time (compact format on All tab)
-        string timeText = showSize ? FormatCompactTime(entry.time) : FormatTime(entry.time);
+        string timeText = showSize
+            ? LeaderboardFormatters.FormatCompactTime(entry.time)
+            : LeaderboardFormatters.FormatTime(entry.time);
         var timeLabel = new Label(timeText);
         timeLabel.AddToClassList("lb-time");
         if (showSize)
@@ -1404,7 +1320,7 @@ public sealed class LeaderboardScreenController : NavigableScene
         }
 
         _playerPanelLabel.text =
-            $"Your best: #{me.rank} of {me.totalEntries} \u00B7 {FormatTime(me.time)}";
+            $"Your best: #{me.rank} of {me.totalEntries} \u00B7 {LeaderboardFormatters.FormatTime(me.time)}";
         _playerGameId = me.gameId;
         ShowElement(_playerPlayBtn, true);
     }
@@ -2139,96 +2055,6 @@ public sealed class LeaderboardScreenController : NavigableScene
         if (!string.IsNullOrEmpty(serverError) && serverError != "Unknown error")
             return serverError;
         return "Something went wrong. Try again later.";
-    }
-
-    // --- Formatting helpers ---
-
-    private static string FormatTime(double seconds)
-    {
-        if (seconds < 0)
-            seconds = 0;
-        int totalMillis = (int)(seconds * 1000);
-        int hours = totalMillis / 3600000;
-        int mins = (totalMillis % 3600000) / 60000;
-        int secs = (totalMillis % 60000) / 1000;
-        int millis = totalMillis % 1000;
-
-        if (hours > 0)
-            return $"{hours}:{mins:D2}:{secs:D2}.{millis:D3}";
-        if (mins > 0)
-            return $"{mins}:{secs:D2}.{millis:D3}";
-        return $"{secs}.{millis:D3}";
-    }
-
-    /// <summary>
-    /// Compact time format for the All tab — drops millisecond precision.
-    /// Under 1 minute: "45s". Under 1 hour: "12m 34s". Over 1 hour: "1h 23m".
-    /// </summary>
-    private static string FormatCompactTime(double seconds)
-    {
-        if (seconds < 0)
-            seconds = 0;
-        int totalSecs = (int)seconds;
-        if (totalSecs < 60)
-            return $"{totalSecs}s";
-        int mins = totalSecs / 60;
-        int secs = totalSecs % 60;
-        if (mins < 60)
-            return $"{mins}m {secs:D2}s";
-        int hours = mins / 60;
-        mins %= 60;
-        return $"{hours}h {mins:D2}m";
-    }
-
-    private static string FormatRelativeDate(string iso8601)
-    {
-        if (string.IsNullOrEmpty(iso8601))
-            return "";
-
-        DateTime date;
-        if (
-            !DateTime.TryParse(
-                iso8601,
-                null,
-                System.Globalization.DateTimeStyles.RoundtripKind,
-                out date
-            )
-        )
-            return "";
-
-        var span = DateTime.UtcNow - date.ToUniversalTime();
-
-        if (span.TotalMinutes < 1)
-            return "now";
-        if (span.TotalHours < 1)
-            return $"{(int)span.TotalMinutes}m ago";
-        if (span.TotalDays < 1)
-            return $"{(int)span.TotalHours}h ago";
-        if (span.TotalDays < 30)
-            return $"{(int)span.TotalDays}d ago";
-        if (span.TotalDays < 365)
-            return $"{(int)(span.TotalDays / 30)}mo ago";
-
-        return $"{(int)(span.TotalDays / 365)}yr ago";
-    }
-
-    private static string FormatExactDate(string iso8601)
-    {
-        if (string.IsNullOrEmpty(iso8601))
-            return "";
-
-        DateTime date;
-        if (
-            !DateTime.TryParse(
-                iso8601,
-                null,
-                System.Globalization.DateTimeStyles.RoundtripKind,
-                out date
-            )
-        )
-            return "";
-
-        return date.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
     }
 
     private static void ShowElement(VisualElement el, bool show)
