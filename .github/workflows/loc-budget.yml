@@ -1,0 +1,96 @@
+name: LOC Budget
+
+# Per-directory soft LOC budgets, fail-warn (annotations only, never red).
+# Goal: surface file growth on PRs that's outside the working set, so a
+# 70-line bloat in LeaderboardScreenController doesn't slip past unnoticed.
+#
+# Budgets are intentionally generous — sized at ~110% of current max per
+# directory at workflow-introduction time so existing files don't trigger
+# noise on day-1 PRs. Tighten over time as files get split (see #162,
+# #167).
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  loc-budget:
+    name: Per-directory LOC budgets
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Check budgets
+        run: |
+          set -uo pipefail
+
+          # ── Budgets ────────────────────────────────────────────────────
+          # Format: <dir>:<max-lines>. Each directory's budget applies to
+          # its direct .cs files only (maxdepth 1) — subdirectories have
+          # their own budgets. Adjust by editing this list; nothing else.
+          budgets=(
+            # Game-side
+            "Assets/Scripts/View/Scene:2400"
+            "Assets/Scripts/View/Scene/Modes:900"
+            "Assets/Scripts/View/Account:1900"
+            "Assets/Scripts/View/Board:900"
+            "Assets/Scripts/View/Components:500"
+            "Assets/Scripts/View/Coop:500"
+            "Assets/Scripts/View/HUD:500"
+            "Assets/Scripts/View/Input:900"
+            "Assets/Scripts/View/Theme:300"
+            # Domain (cross-platform; harder to grow without bloating)
+            "Packages/com.arrowthing.domain/Runtime:600"
+            "Packages/com.arrowthing.domain/Runtime/Models:800"
+            "Packages/com.arrowthing.domain/Runtime/Generation:1200"
+            # Server-side
+            "Domain:200"
+            "server/ArrowThing.Server:1300"
+            "server/ArrowThing.Server/Auth:1200"
+            "server/ArrowThing.Server/Coop:1800"
+            "server/ArrowThing.Server/Games:800"
+            "server/ArrowThing.Server.Tests:1200"
+            "server/ArrowThing.Worker:200"
+          )
+
+          warned=0
+          for entry in "${budgets[@]}"; do
+            dir="${entry%:*}"
+            budget="${entry##*:}"
+            if [ ! -d "$dir" ]; then
+              continue
+            fi
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              n=$(wc -l < "$f")
+              if [ "$n" -gt "$budget" ]; then
+                # ::warning:: surfaces in the PR's "Files changed" tab as a
+                # yellow annotation on line 1. The job stays green.
+                echo "::warning file=$f,line=1::$f has $n lines (budget for $dir is $budget). Consider splitting; see #162 / #167 for ongoing work."
+                warned=$((warned + 1))
+              fi
+            done < <(find "$dir" -maxdepth 1 -name '*.cs' -not -path '*/bin/*' -not -path '*/obj/*' 2>/dev/null)
+          done
+
+          if [ "$warned" -gt 0 ]; then
+            echo
+            echo "$warned file(s) over budget. Annotations were emitted; build is intentionally not failed."
+            echo "When the offenders are split, lower the corresponding directory budget in this workflow."
+          else
+            echo "All directories within budget."
+          fi
+
+          # Soft gate — never fail the build.
+          exit 0
