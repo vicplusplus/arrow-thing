@@ -122,11 +122,16 @@ public sealed class EndlessModeController : MonoBehaviour
         int paletteCount = _palette?.Count ?? 0;
         _run = new EndlessRun(board, spawnSeed, paletteCount, tuning);
 
-        // View reactions to run events.
+        // View reactions to run events. Subscribed BEFORE Begin() so the
+        // initial-push spawn events reach OnPendingSpawned and produce
+        // ArrowViews — otherwise the first wave of arrows would commit
+        // into the live board without views, and tapping them would warn
+        // "no view for arrow@(x,y)" and refuse to clear.
         _run.PendingSpawned += OnPendingSpawned;
         _run.PendingCommitted += OnPendingCommitted;
         _run.MeterChanged += RebuildMeterUI;
         _run.ToppedOut += OnRunToppedOut;
+        _run.Begin();
 
         // Initial meter render reflects the seeded combo + first immediate push.
         RebuildMeterUI();

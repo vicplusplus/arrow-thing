@@ -67,6 +67,10 @@ public static class EndlessReplayVerifier
         var board = new Board(replay.boardWidth, replay.boardHeight);
         var tuning = EndlessTuning.ForVersion(tuningVersion);
         var run = new EndlessRun(board, replay.seed, paletteCount, tuning);
+        // Verifier doesn't subscribe to spawn events, but Begin must still be
+        // called so the initial-push pending arrows match the live game's
+        // post-Begin state.
+        run.Begin();
 
         float lastSimTime = 0f;
         bool sawTopout = false;

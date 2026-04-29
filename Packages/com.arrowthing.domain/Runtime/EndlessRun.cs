@@ -129,11 +129,25 @@ public sealed class EndlessRun
         // Seed the meter with one combo so the first push tick has something
         // to send to pending instead of an empty queue.
         _meter.Add(NewComboEntry());
+    }
 
-        // Fire the first push immediately so an empty start board doesn't
-        // leave the player staring at blank space until the first interval.
+    /// <summary>
+    /// Fires the first push tick — spawning the initial pending arrows so an
+    /// empty start board doesn't leave the player staring at blank space until
+    /// the first interval. Must be called exactly once, after subscribing to
+    /// <see cref="PendingSpawned"/> / <see cref="MeterChanged"/> / etc., before
+    /// the first <see cref="Advance"/> or <see cref="HandleTap"/>.
+    /// Idempotent if already begun (no-op on repeat calls).
+    /// </summary>
+    public void Begin()
+    {
+        if (_begun)
+            return;
+        _begun = true;
         OnPushTick();
     }
+
+    private bool _begun;
 
     // ---- Driving APIs -----------------------------------------------------
 
