@@ -168,8 +168,14 @@ This document is the implementation-facing counterpart to [`GDD.md`](GDD.md).
 - Pure C# leaderboard storage. Manages entries with per-config (50) and global (500) caps.
 - Favorited entries are exempt from automatic pruning. When a cap is exceeded, the slowest non-favorited entry is pruned and its `gameId` returned for replay file cleanup.
 - `AddEntry`, `GetEntries(w,h)`, `GetAllEntries`, `GetPersonalBest(w,h)`, `GetNeighborEntries(w,h,time,count)`, `SetFavorite`, `RemoveEntry`.
-- `SortBy(entries, SortCriterion)` — static sort by `Fastest` (solveTime asc), `Biggest` (area desc), or `Favorites` (favorited first, then solveTime).
+- `SortBy(entries, SortCriterion)` — static helper; delegates to `LeaderboardComparers.ForCriterion(criterion)` and returns a sorted copy.
 - JSON serialization via `Newtonsoft.Json` (`ToJson`/`FromJson`).
+
+### `LeaderboardComparers` (`static class`)
+
+- Named `IComparer<LeaderboardEntry>` instances backing each `SortCriterion`. Singletons exposed as `Fastest` (solveTime asc, date tiebreak), `Biggest` (area desc → time asc → date), `Favorites` (favorited first → area desc → time asc → date). All three break ties deterministically by `completedAt` (older first) so equal-key pairs order stably.
+- `ForCriterion(SortCriterion)` dispatch returns the matching singleton; throws `ArgumentOutOfRangeException` on unknown values.
+- Comparers are reusable from contexts that don't carry a `SortCriterion` (e.g. controller policy that compares the active comparer reference rather than enum-switching), and are individually unit-tested in `LeaderboardComparersTests`.
 
 ### `ReplayPlayer` (`sealed class`)
 
