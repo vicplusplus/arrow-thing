@@ -49,7 +49,7 @@ public class EndlessRunTests
         var run = new EndlessRun(board, seed: 42, paletteCount: 6, EndlessTuning.V1);
 
         int spawnEventCount = 0;
-        run.PendingSpawned += (_, _) => spawnEventCount++;
+        run.PendingSpawned += (pending, colorIndex) => spawnEventCount++;
 
         // Before Begin(), no pending arrows and no spawn events have fired.
         Assert.That(run.PendingArrows.Count, Is.EqualTo(0));
@@ -68,7 +68,7 @@ public class EndlessRunTests
         int initialPendingCount = run.PendingArrows.Count;
 
         int extraSpawnEvents = 0;
-        run.PendingSpawned += (_, _) => extraSpawnEvents++;
+        run.PendingSpawned += (pending, colorIndex) => extraSpawnEvents++;
 
         run.Begin();
         run.Begin();

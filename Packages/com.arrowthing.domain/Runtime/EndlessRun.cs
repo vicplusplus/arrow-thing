@@ -65,6 +65,7 @@ public sealed class EndlessRun
     private int _currentCombo;
     private float _runEndTime;
     private bool _active = true;
+    private bool _begun;
 
     private readonly List<PendingArrow> _commitScratch = new();
 
@@ -146,8 +147,6 @@ public sealed class EndlessRun
         _begun = true;
         OnPushTick();
     }
-
-    private bool _begun;
 
     // ---- Driving APIs -----------------------------------------------------
 
