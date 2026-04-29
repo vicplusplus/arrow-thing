@@ -128,6 +128,19 @@ public sealed class EndlessModeController : MonoBehaviour
         _run.MeterChanged += RebuildMeterUI;
         _run.ToppedOut += OnRunToppedOut;
 
+        // EndlessRun's constructor fires its first push tick eagerly so an
+        // empty start board doesn't leave the player staring at blank space
+        // until the first interval — which means PendingSpawned events for
+        // that initial wave fired BEFORE we could subscribe just above.
+        // Replay them now: every arrow currently in PendingArrows belongs
+        // to the seeded active combo, so they all share its color index.
+        // Without this catch-up, those arrows commit into the live board
+        // with no ArrowViews and tapping them warns "no view for arrow@…"
+        // and refuses the clear.
+        int initialColorIndex = _run.ActiveCombo.ColorIndex;
+        foreach (var pending in _run.PendingArrows)
+            OnPendingSpawned(pending, initialColorIndex);
+
         // Initial meter render reflects the seeded combo + first immediate push.
         RebuildMeterUI();
     }

@@ -132,6 +132,9 @@ public sealed class EndlessRun
 
         // Fire the first push immediately so an empty start board doesn't
         // leave the player staring at blank space until the first interval.
+        // Subscribers attached after construction won't see these events;
+        // they should iterate PendingArrows post-construction with the
+        // active combo's color and synthesise their own catch-up handling.
         OnPushTick();
     }
 
