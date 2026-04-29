@@ -312,6 +312,78 @@ public class NavGraphBuilderTests
         );
     }
 
+    // ── BindItem (factory-built FocusItems) ───────────────────────────
+
+    [Test]
+    public void BindItem_AcceptsPrebuiltFocusItem()
+    {
+        var graph = MakeGraph(
+            slots: new List<NavGraph.Slot>
+            {
+                new NavGraph.Slot { name = "Slider" },
+                new NavGraph.Slot { name = "Submit" },
+            },
+            links: new List<NavGraph.Link>
+            {
+                new NavGraph.Link
+                {
+                    from = "Slider",
+                    dir = FocusNavigator.NavDir.Down,
+                    to = "Submit",
+                    bidirectional = true,
+                },
+            }
+        );
+
+        var sliderTrack = NewButton("track");
+        var submit = NewButton("submit");
+        _root.Add(sliderTrack);
+        _root.Add(submit);
+
+        // Pretend MakeSliderFocusItem produced this (CustomFocusVisual + OnHorizontal).
+        var sliderItem = new FocusNavigator.FocusItem
+        {
+            Element = sliderTrack,
+            CustomFocusVisual = true,
+            OnHorizontal = _ => true,
+        };
+
+        new NavGraphBuilder(graph)
+            .BindItem("Slider", sliderItem)
+            .Bind("Submit", submit, onActivate: () => true)
+            .Apply(_nav);
+
+        Assert.AreEqual(2, _nav.ItemCount);
+        Assert.AreSame(sliderTrack, _nav.GetItemElement(0));
+        Assert.AreSame(submit, _nav.GetItemElement(1));
+        Assert.IsTrue(_nav.TryGetLink(0, FocusNavigator.NavDir.Down, out var down));
+        Assert.AreEqual(1, down);
+    }
+
+    [Test]
+    public void BindItem_NullElement_SkipsSlot()
+    {
+        var graph = MakeGraph(
+            slots: new List<NavGraph.Slot>
+            {
+                new NavGraph.Slot { name = "Maybe" },
+                new NavGraph.Slot { name = "Real" },
+            },
+            links: new List<NavGraph.Link>()
+        );
+
+        var real = NewButton("real");
+        _root.Add(real);
+
+        new NavGraphBuilder(graph)
+            .BindItem("Maybe", new FocusNavigator.FocusItem { Element = null })
+            .Bind("Real", real)
+            .Apply(_nav);
+
+        Assert.AreEqual(1, _nav.ItemCount);
+        Assert.AreSame(real, _nav.GetItemElement(0));
+    }
+
     // ── Builder state ─────────────────────────────────────────────────
 
     [Test]

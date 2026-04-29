@@ -69,6 +69,29 @@ public sealed class NavGraphBuilder
     }
 
     /// <summary>
+    /// Bind a slot to a fully-constructed <see cref="FocusNavigator.FocusItem"/>.
+    /// Useful when the controller has a factory (text-field, slider, dropdown, etc.)
+    /// that already produces a complete <c>FocusItem</c>. An item with a null
+    /// <see cref="FocusNavigator.FocusItem.Element"/> is treated the same as an
+    /// unbound slot.
+    /// </summary>
+    public NavGraphBuilder BindItem(string slotName, FocusNavigator.FocusItem item)
+    {
+        if (slotName == null)
+            throw new ArgumentNullException(nameof(slotName));
+        if (!_slotNames.Contains(slotName))
+            throw new ArgumentException(
+                $"NavGraph '{_graph.name}' has no slot named '{slotName}'.",
+                nameof(slotName)
+            );
+        if (item.Element == null)
+            return this;
+
+        _bindings[slotName] = item;
+        return this;
+    }
+
+    /// <summary>
     /// Apply the resolved graph to <paramref name="nav"/>. Items are emitted
     /// in slot-declaration order, skipping unbound slots. Initial focus
     /// resolves to <paramref name="initialFocus"/> if given, else the SO's

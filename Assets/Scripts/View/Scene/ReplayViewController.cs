@@ -84,11 +84,7 @@ public sealed class ReplayViewController : MonoBehaviour
 
     // Keyboard navigation
     private FocusNavigator _replayNavigator;
-    private int _navPlayIdx;
-    private int _navSpeedIdx;
-    private int _navHighlightIdx;
-    private int _navSeekIdx;
-    private int _navExitIdx;
+    private NavGraph _replayNavGraph;
 
     private void Awake()
     {
@@ -467,126 +463,79 @@ public sealed class ReplayViewController : MonoBehaviour
 
     private void BuildReplayNavigator()
     {
+        if (_replayNavGraph == null)
+            _replayNavGraph = Resources.Load<NavGraph>("NavGraphs/Replay");
+
         var root = hudUIDocument.rootVisualElement;
         _replayNavigator?.Dispose();
         _replayNavigator = new FocusNavigator(root);
 
-        var items = new System.Collections.Generic.List<FocusNavigator.FocusItem>();
-
-        // Exit button.
-        _navExitIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = _exitBtn,
-                OnActivate = () =>
+        new NavGraphBuilder(_replayNavGraph)
+            .Bind(
+                "Exit",
+                _exitBtn,
+                onActivate: () =>
                 {
                     OnExit();
                     return true;
-                },
-            }
-        );
-
-        // Seek handle — OnHorizontal is already DAS-gated by the navigator.
-        _navSeekIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = _seekHandle,
-                OnHorizontal = dir =>
-                {
-                    if (_player != null)
-                    {
-                        float duration = (float)_player.DisplayDuration;
-                        float step = duration * 0.02f; // 2% per step
-                        float target = (float)_player.CurrentTime + dir * step;
-                        target = Mathf.Clamp(target, 0f, duration);
-                        SeekTo(target);
-                    }
-                    return true;
-                },
-            }
-        );
-
-        // Play/Pause button.
-        _navPlayIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = _playPauseBtn,
-                OnActivate = () =>
-                {
-                    OnPlayPause();
-                    return true;
-                },
-            }
-        );
-
-        // Speed button.
-        _navSpeedIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = _speedBtn,
-                OnActivate = () =>
-                {
-                    OnSpeedCycle();
-                    return true;
-                },
-            }
-        );
-
-        // Highlight/Clearable button.
-        _navHighlightIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = _highlightBtn,
-                OnActivate = () =>
-                {
-                    OnHighlightToggle();
-                    return true;
-                },
-            }
-        );
-
-        // Controls toggle (show/hide bar).
-        int toggleIdx = -1;
-        if (_controlsToggleBtn != null)
-        {
-            toggleIdx = items.Count;
-            items.Add(
+                }
+            )
+            .BindItem(
+                "Seek",
                 new FocusNavigator.FocusItem
                 {
-                    Element = _controlsToggleBtn,
-                    OnActivate = () =>
+                    Element = _seekHandle,
+                    OnHorizontal = dir =>
                     {
-                        OnControlsToggle();
+                        if (_player != null)
+                        {
+                            float duration = (float)_player.DisplayDuration;
+                            float step = duration * 0.02f; // 2% per step
+                            float target = (float)_player.CurrentTime + dir * step;
+                            target = Mathf.Clamp(target, 0f, duration);
+                            SeekTo(target);
+                        }
                         return true;
                     },
                 }
-            );
-        }
-
-        _replayNavigator.SetItems(items, _navPlayIdx);
-
-        // Nav graph:
-        // Exit ↔ Seek (Down/Up)
-        _replayNavigator.LinkBidi(_navExitIdx, FocusNavigator.NavDir.Down, _navSeekIdx);
-        // Seek ↔ Play (Down/Up)
-        _replayNavigator.LinkBidi(_navSeekIdx, FocusNavigator.NavDir.Down, _navPlayIdx);
-        // Play ↔ Speed ↔ Highlight (Right chain)
-        _replayNavigator.LinkBidi(_navPlayIdx, FocusNavigator.NavDir.Right, _navSpeedIdx);
-        _replayNavigator.LinkBidi(_navSpeedIdx, FocusNavigator.NavDir.Right, _navHighlightIdx);
-        // Highlight ↔ Controls toggle (Right)
-        if (toggleIdx >= 0)
-            _replayNavigator.LinkBidi(_navHighlightIdx, FocusNavigator.NavDir.Right, toggleIdx);
-        // All playback row buttons → Up → Seek
-        _replayNavigator.Link(_navPlayIdx, FocusNavigator.NavDir.Up, _navSeekIdx);
-        _replayNavigator.Link(_navSpeedIdx, FocusNavigator.NavDir.Up, _navSeekIdx);
-        _replayNavigator.Link(_navHighlightIdx, FocusNavigator.NavDir.Up, _navSeekIdx);
-        if (toggleIdx >= 0)
-            _replayNavigator.Link(toggleIdx, FocusNavigator.NavDir.Up, _navSeekIdx);
+            )
+            .Bind(
+                "Play",
+                _playPauseBtn,
+                onActivate: () =>
+                {
+                    OnPlayPause();
+                    return true;
+                }
+            )
+            .Bind(
+                "Speed",
+                _speedBtn,
+                onActivate: () =>
+                {
+                    OnSpeedCycle();
+                    return true;
+                }
+            )
+            .Bind(
+                "Highlight",
+                _highlightBtn,
+                onActivate: () =>
+                {
+                    OnHighlightToggle();
+                    return true;
+                }
+            )
+            .Bind(
+                "ControlsToggle",
+                _controlsToggleBtn,
+                onActivate: () =>
+                {
+                    OnControlsToggle();
+                    return true;
+                }
+            )
+            .Apply(_replayNavigator);
     }
 
     private void OnExit()

@@ -34,6 +34,8 @@ public sealed class MainMenuController : NavigableScene
     private ConfirmModal _quitModal;
 
     private NavGraph _rootNavGraph;
+    private NavGraph _playNavGraph;
+    private NavGraph _multiplayerNavGraph;
 
     // -- Size select state -------------------------------------------------------
 
@@ -266,91 +268,65 @@ public sealed class MainMenuController : NavigableScene
 
     private void BuildPlayNavGraph(FocusNavigator nav)
     {
-        var items = new List<FocusNavigator.FocusItem>();
+        if (_playNavGraph == null)
+            _playNavGraph = Resources.Load<NavGraph>("NavGraphs/MainMenuPlay");
 
-        int backIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = Root.Q<Button>("back-play-btn"),
-                OnActivate = () =>
+        new NavGraphBuilder(_playNavGraph)
+            .Bind(
+                "Back",
+                Root.Q<Button>("back-play-btn"),
+                onActivate: () =>
                 {
                     SetState(MenuState.Root);
                     return true;
-                },
-            }
-        );
-
-        int spIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = Root.Q<Button>("singleplayer-btn"),
-                OnActivate = () =>
+                }
+            )
+            .Bind(
+                "Singleplayer",
+                Root.Q<Button>("singleplayer-btn"),
+                onActivate: () =>
                 {
                     SetState(MenuState.Singleplayer);
                     return true;
-                },
-            }
-        );
-
-        int mpIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = Root.Q<Button>("multiplayer-btn"),
-                OnActivate = () =>
+                }
+            )
+            .Bind(
+                "Multiplayer",
+                Root.Q<Button>("multiplayer-btn"),
+                onActivate: () =>
                 {
                     SetState(MenuState.Multiplayer);
                     return true;
-                },
-            }
-        );
-
-        nav.SetItems(items, spIdx);
-
-        nav.Link(backIdx, FocusNavigator.NavDir.Down, spIdx);
-        nav.Link(spIdx, FocusNavigator.NavDir.Up, backIdx);
-        nav.Link(spIdx, FocusNavigator.NavDir.Left, backIdx);
-        nav.Link(mpIdx, FocusNavigator.NavDir.Up, backIdx);
-        nav.LinkBidi(spIdx, FocusNavigator.NavDir.Right, mpIdx);
+                }
+            )
+            .Apply(nav);
     }
 
     private void BuildMultiplayerNavGraph(FocusNavigator nav)
     {
-        var items = new List<FocusNavigator.FocusItem>();
+        if (_multiplayerNavGraph == null)
+            _multiplayerNavGraph = Resources.Load<NavGraph>("NavGraphs/MainMenuMultiplayer");
 
-        int backIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = Root.Q<Button>("back-mp-btn"),
-                OnActivate = () =>
+        new NavGraphBuilder(_multiplayerNavGraph)
+            .Bind(
+                "Back",
+                Root.Q<Button>("back-mp-btn"),
+                onActivate: () =>
                 {
                     SetState(MenuState.Play);
                     return true;
-                },
-            }
-        );
-
-        int coopIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = Root.Q<Button>("coop-btn"),
-                OnActivate = () =>
+                }
+            )
+            .Bind(
+                "Coop",
+                Root.Q<Button>("coop-btn"),
+                onActivate: () =>
                 {
                     SceneNav.Push("CoopHub");
                     return true;
-                },
-            }
-        );
-
-        nav.SetItems(items, coopIdx);
-
-        nav.Link(backIdx, FocusNavigator.NavDir.Down, coopIdx);
-        nav.Link(coopIdx, FocusNavigator.NavDir.Up, backIdx);
-        nav.Link(coopIdx, FocusNavigator.NavDir.Left, backIdx);
+                }
+            )
+            .Apply(nav);
     }
 
     // -- Singleplayer: size select + continue + leaderboard ---------------------

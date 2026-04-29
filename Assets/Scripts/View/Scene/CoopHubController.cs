@@ -39,6 +39,10 @@ public sealed class CoopHubController : NavigableScene
     private LabeledField _hostNameField;
     private LabeledField _joinCodeField;
 
+    private NavGraph _hostModalNavGraph;
+    private NavGraph _joinModalNavGraph;
+    private NavGraph _hostingModalNavGraph;
+
     // Focus items per lobby row, rebuilt on each RefreshListAsync.
     // Each row is a grid of 4 columns: [visibility, copy, main (play/retry), delete].
     // Columns may be null when the button isn't shown for that row (e.g., no delete
@@ -184,21 +188,19 @@ public sealed class CoopHubController : NavigableScene
 
     protected override void BuildNavGraph(FocusNavigator nav)
     {
-        var items = new List<FocusNavigator.FocusItem>();
-
         switch (_state)
         {
             case HubState.List:
-                BuildListNavGraph(nav, items);
+                BuildListNavGraph(nav, new List<FocusNavigator.FocusItem>());
                 break;
             case HubState.HostModal:
-                BuildHostModalNavGraph(nav, items);
+                BuildHostModalNavGraph(nav);
                 break;
             case HubState.JoinModal:
-                BuildJoinModalNavGraph(nav, items);
+                BuildJoinModalNavGraph(nav);
                 break;
             case HubState.HostingModal:
-                BuildHostingModalNavGraph(nav, items);
+                BuildHostingModalNavGraph(nav);
                 break;
         }
     }
@@ -407,43 +409,34 @@ public sealed class CoopHubController : NavigableScene
         return -1;
     }
 
-    private void BuildHostModalNavGraph(FocusNavigator nav, List<FocusNavigator.FocusItem> items)
+    private void BuildHostModalNavGraph(FocusNavigator nav)
     {
-        items.Add(MakeTextFieldFocusItem(_hostNameField, OnHostSubmit));
+        if (_hostModalNavGraph == null)
+            _hostModalNavGraph = Resources.Load<NavGraph>("NavGraphs/CoopHubHost");
 
-        int widthIdx = items.Count;
-        items.Add(MakeSliderFocusItem(_hostWidthSlider));
-        int heightIdx = items.Count;
-        items.Add(MakeSliderFocusItem(_hostHeightSlider));
-
-        int submitIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = Root.Q<Button>("host-submit-btn"),
-                OnActivate = () =>
+        new NavGraphBuilder(_hostModalNavGraph)
+            .BindItem("Name", MakeTextFieldFocusItem(_hostNameField, OnHostSubmit))
+            .BindItem("Width", MakeSliderFocusItem(_hostWidthSlider))
+            .BindItem("Height", MakeSliderFocusItem(_hostHeightSlider))
+            .Bind(
+                "Submit",
+                Root.Q<Button>("host-submit-btn"),
+                onActivate: () =>
                 {
                     OnHostSubmit();
                     return true;
-                },
-            }
-        );
-        int cancelIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = Root.Q<Button>("host-cancel-btn"),
-                OnActivate = () =>
+                }
+            )
+            .Bind(
+                "Cancel",
+                Root.Q<Button>("host-cancel-btn"),
+                onActivate: () =>
                 {
                     CloseHostModal();
                     return true;
-                },
-            }
-        );
-
-        nav.SetItems(items, 0);
-        nav.LinkChain(0, items.Count);
-        nav.LinkBidi(submitIdx, FocusNavigator.NavDir.Right, cancelIdx);
+                }
+            )
+            .Apply(nav);
     }
 
     private static FocusNavigator.FocusItem MakeTextFieldFocusItem(
@@ -486,54 +479,50 @@ public sealed class CoopHubController : NavigableScene
         };
     }
 
-    private void BuildJoinModalNavGraph(FocusNavigator nav, List<FocusNavigator.FocusItem> items)
+    private void BuildJoinModalNavGraph(FocusNavigator nav)
     {
-        items.Add(MakeTextFieldFocusItem(_joinCodeField, OnJoinSubmit));
-        int submitIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = Root.Q<Button>("join-submit-btn"),
-                OnActivate = () =>
+        if (_joinModalNavGraph == null)
+            _joinModalNavGraph = Resources.Load<NavGraph>("NavGraphs/CoopHubJoin");
+
+        new NavGraphBuilder(_joinModalNavGraph)
+            .BindItem("Code", MakeTextFieldFocusItem(_joinCodeField, OnJoinSubmit))
+            .Bind(
+                "Submit",
+                Root.Q<Button>("join-submit-btn"),
+                onActivate: () =>
                 {
                     OnJoinSubmit();
                     return true;
-                },
-            }
-        );
-        int cancelIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = Root.Q<Button>("join-cancel-btn"),
-                OnActivate = () =>
+                }
+            )
+            .Bind(
+                "Cancel",
+                Root.Q<Button>("join-cancel-btn"),
+                onActivate: () =>
                 {
                     CloseJoinModal();
                     return true;
-                },
-            }
-        );
-
-        nav.SetItems(items, 0);
-        nav.LinkChain(0, items.Count);
-        nav.LinkBidi(submitIdx, FocusNavigator.NavDir.Right, cancelIdx);
+                }
+            )
+            .Apply(nav);
     }
 
-    private void BuildHostingModalNavGraph(FocusNavigator nav, List<FocusNavigator.FocusItem> items)
+    private void BuildHostingModalNavGraph(FocusNavigator nav)
     {
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = Root.Q<Button>("hosting-cancel-btn"),
-                OnActivate = () =>
+        if (_hostingModalNavGraph == null)
+            _hostingModalNavGraph = Resources.Load<NavGraph>("NavGraphs/CoopHubHosting");
+
+        new NavGraphBuilder(_hostingModalNavGraph)
+            .Bind(
+                "Cancel",
+                Root.Q<Button>("hosting-cancel-btn"),
+                onActivate: () =>
                 {
                     CloseHostingModal();
                     return true;
-                },
-            }
-        );
-
-        nav.SetItems(items, 0);
+                }
+            )
+            .Apply(nav);
     }
 
     protected override void OnCancel()
