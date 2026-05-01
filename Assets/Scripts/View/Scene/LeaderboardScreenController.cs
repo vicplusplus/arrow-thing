@@ -1475,172 +1475,29 @@ public sealed class LeaderboardScreenController : NavigableScene
             sizeTabCount > 0 ? tabsStart + Mathf.Clamp(activeSizeTabIdx, 0, sizeTabCount - 1) : 0;
         Navigator.SetItems(items, initialFocus);
 
-        // -- Build nav graph --
-
-        // Top row is a single horizontal chain:
-        //   Back ↔ Classic ↔ Endless ↔ Local ↔ Global
-        // Each pair is bidirectional. The chain is built defensively — if a
-        // slot isn't present (e.g. mode tabs missing on some legacy state),
-        // adjacent links collapse around it.
-        var topChain = new List<int> { backIdx };
-        if (modeClassicIdx >= 0)
-            topChain.Add(modeClassicIdx);
-        if (modeEndlessIdx >= 0)
-            topChain.Add(modeEndlessIdx);
-        topChain.Add(localIdx);
-        topChain.Add(globalIdx);
-        for (int i = 0; i < topChain.Count - 1; i++)
-            Navigator.LinkBidi(topChain[i], FocusNavigator.NavDir.Right, topChain[i + 1]);
-
-        // Tab row: horizontal chain + refresh button at the end in global view.
-        if (sizeTabCount > 1)
-            Navigator.LinkRow(tabsStart, sizeTabCount);
-        if (refreshIdx >= 0 && sizeTabCount > 0)
-            Navigator.LinkBidi(tabsEnd, FocusNavigator.NavDir.Right, refreshIdx);
-
-        // Classic's last size tab (the "All" tab in classic mode) → Right → Local.
-        // Lets the player chain rightward off the size tabs into the toggle.
-        // No symmetric link from local → Left → All — local already chains
-        // back through Endless/Classic into the size tabs via Down.
-        if (!isEndlessMode && sizeTabCount > 0 && refreshIdx < 0)
-            Navigator.Link(tabsEnd, FocusNavigator.NavDir.Right, localIdx);
-
-        // Top-row → Down → size tabs:
-        //   Back / Classic → first size tab.
-        //   Endless / Local / Global → last size tab.
-        // Falls back to the available tabs row if mode tabs aren't present.
-        if (sizeTabCount > 0)
-        {
-            Navigator.Link(backIdx, FocusNavigator.NavDir.Down, tabsStart);
-            if (modeClassicIdx >= 0)
-                Navigator.Link(modeClassicIdx, FocusNavigator.NavDir.Down, tabsStart);
-            if (modeEndlessIdx >= 0)
-                Navigator.Link(modeEndlessIdx, FocusNavigator.NavDir.Down, tabsEnd);
-            Navigator.Link(localIdx, FocusNavigator.NavDir.Down, tabsEnd);
-            Navigator.Link(globalIdx, FocusNavigator.NavDir.Down, tabsEnd);
-        }
-
-        // Size tabs → Up → currently active mode tab (the one that brought
-        // these size tabs into existence). Falls back to back/local if mode
-        // tabs aren't present.
-        int sizeTabsUpTarget = isEndlessMode
-            ? (modeEndlessIdx >= 0 ? modeEndlessIdx : localIdx)
-            : (modeClassicIdx >= 0 ? modeClassicIdx : backIdx);
-        for (int i = 0; i < sizeTabCount; i++)
-            Navigator.Link(tabsStart + i, FocusNavigator.NavDir.Up, sizeTabsUpTarget);
-
-        // Tabs → Down → sort (or entries if no sort).
-        int belowTabs = sortCount > 0 ? sortStart : entriesStart;
-        for (int i = 0; i < sizeTabCount; i++)
-            Navigator.Link(tabsStart + i, FocusNavigator.NavDir.Down, belowTabs);
-
-        // Refresh button: Up → active mode tab (matches size-tab Up target), Down → same as last tab.
-        if (refreshIdx >= 0)
-        {
-            Navigator.Link(refreshIdx, FocusNavigator.NavDir.Up, sizeTabsUpTarget);
-            Navigator.Link(refreshIdx, FocusNavigator.NavDir.Down, belowTabs);
-        }
-
-        // Sort row.
-        if (sortCount > 0)
-        {
-            if (sortCount > 1)
-                Navigator.LinkRow(sortStart, sortCount);
-
-            // Sort → Up → active tab.
-            for (int i = 0; i < sortCount; i++)
-                Navigator.Link(
-                    sortStart + i,
-                    FocusNavigator.NavDir.Up,
-                    tabsStart + _activeTabIndex
-                );
-
-            // Sort → Down → first entry.
-            if (entryCount > 0)
-                for (int i = 0; i < sortCount; i++)
-                    Navigator.Link(sortStart + i, FocusNavigator.NavDir.Down, entriesStart);
-        }
-
-        // Entry rows: vertical chain (row elements only, skip inline buttons).
-        // Entry rows with inline buttons: build row↔button links and vertical grid.
-        // Each row is [row, btn0, btn1, btn2, ...]. Buttons form columns across rows.
-        int prevRowIdx = -1;
-        int prevBtnCount = 0;
-        int curIdx = entriesStart;
-        for (int e = 0; e < entryCount; e++)
-        {
-            int rowIdx = curIdx;
-            var row = items[rowIdx].Element;
-            int btnCount = row.Query<Button>(className: "lb-row-btn").ToList().Count;
-            int firstBtnIdx = rowIdx + 1;
-            int lastBtnIdx = rowIdx + btnCount;
-
-            // Row → Right → first inline button, first button → Left → row.
-            if (btnCount > 0)
+        LeaderboardNavLinks.Apply(
+            Navigator,
+            items,
+            new LeaderboardNavLinks.Sections
             {
-                Navigator.Link(rowIdx, FocusNavigator.NavDir.Right, firstBtnIdx);
-                Navigator.Link(firstBtnIdx, FocusNavigator.NavDir.Left, rowIdx);
+                BackIdx = backIdx,
+                LocalIdx = localIdx,
+                GlobalIdx = globalIdx,
+                ModeClassicIdx = modeClassicIdx,
+                ModeEndlessIdx = modeEndlessIdx,
+                TabsStart = tabsStart,
+                TabsEnd = tabsEnd,
+                SizeTabCount = sizeTabCount,
+                RefreshIdx = refreshIdx,
+                SortStart = sortStart,
+                SortCount = sortCount,
+                EntriesStart = entriesStart,
+                EntryCount = entryCount,
+                PlayerPlayIdx = playerPlayIdx,
+                IsEndlessMode = isEndlessMode,
+                ActiveTabIndex = _activeTabIndex,
             }
-
-            // Inline buttons: horizontal chain.
-            for (int i = firstBtnIdx; i < lastBtnIdx; i++)
-                Navigator.LinkBidi(i, FocusNavigator.NavDir.Right, i + 1);
-
-            // Vertical: row↔row.
-            if (prevRowIdx >= 0)
-                Navigator.LinkBidi(prevRowIdx, FocusNavigator.NavDir.Down, rowIdx);
-
-            // Vertical: button column↔button column (grid navigation).
-            // Both rows always have the same buttons (fav, play, ctx) — the set
-            // is determined by compact mode which applies uniformly to all rows.
-            if (prevRowIdx >= 0)
-            {
-                int cols = Mathf.Min(btnCount, prevBtnCount);
-                for (int c = 0; c < cols; c++)
-                {
-                    int prevBtn = prevRowIdx + 1 + c;
-                    int curBtn = rowIdx + 1 + c;
-                    Navigator.LinkBidi(prevBtn, FocusNavigator.NavDir.Down, curBtn);
-                }
-            }
-
-            prevRowIdx = rowIdx;
-            prevBtnCount = btnCount;
-            curIdx += 1 + btnCount;
-        }
-
-        // First entry row + all its inline buttons → Up → sort (or tabs).
-        // Uses LinkBreak so DAS stops at #1 and requires a fresh press to exit.
-        if (entryCount > 0)
-        {
-            int aboveEntries = sortCount > 0 ? sortStart : tabsStart + _activeTabIndex;
-            var firstRow = items[entriesStart].Element;
-            int firstRowBtnCount = firstRow.Query<Button>(className: "lb-row-btn").ToList().Count;
-
-            Navigator.LinkBreak(entriesStart, FocusNavigator.NavDir.Up, aboveEntries);
-            for (int c = 1; c <= firstRowBtnCount; c++)
-                Navigator.LinkBreak(entriesStart + c, FocusNavigator.NavDir.Up, aboveEntries);
-        }
-
-        // Player panel play button below the last entry (with DAS break).
-        if (playerPlayIdx >= 0 && prevRowIdx >= 0)
-        {
-            Navigator.LinkBreak(prevRowIdx, FocusNavigator.NavDir.Down, playerPlayIdx);
-            Navigator.Link(playerPlayIdx, FocusNavigator.NavDir.Up, prevRowIdx);
-            // Also link last row's inline buttons down to player panel.
-            if (prevBtnCount > 0)
-            {
-                for (int bi = 1; bi <= prevBtnCount; bi++)
-                    Navigator.LinkBreak(prevRowIdx + bi, FocusNavigator.NavDir.Down, playerPlayIdx);
-            }
-        }
-        else if (playerPlayIdx >= 0)
-        {
-            // No entries — link player panel below tabs/sort.
-            int above = sortCount > 0 ? sortStart : tabsStart + _activeTabIndex;
-            Navigator.Link(above, FocusNavigator.NavDir.Down, playerPlayIdx);
-            Navigator.Link(playerPlayIdx, FocusNavigator.NavDir.Up, above);
-        }
+        );
 
         // Restore focus to a specific element if requested (e.g. after sort/favorite).
         if (_focusAfterRebuild != null)
