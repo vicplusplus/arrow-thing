@@ -37,8 +37,6 @@ public sealed class LeaderboardScreenController : NavigableScene
     private ScrollView _scroll;
     private Label _emptyLabel;
     private VisualElement _comingSoon;
-    private VisualElement _contextMenu;
-    private ConfirmModal _deleteModal;
     private VisualElement _playerPanel;
     private Label _playerPanelLabel;
     private Button _playerPlayBtn;
@@ -92,11 +90,7 @@ public sealed class LeaderboardScreenController : NavigableScene
     private bool _isGlobalView;
 
     // Context menu state
-    private string _contextGameId;
-    private bool _contextIsFavorite;
-    private string _pendingDeleteGameId;
-    private Button _ctxFavoriteBtn;
-    private Button _ctxPlayBtn;
+    private LeaderboardContextMenu _contextMenu;
 
     // Compact mode — hides inline fav/play buttons on narrow screens.
     // Derived from the live class list (no caching) so it stays correct
@@ -134,7 +128,13 @@ public sealed class LeaderboardScreenController : NavigableScene
     private string _focusGameIdAfterRebuild;
     private string _focusBtnClassAfterRebuild;
     private int _focusEntryPositionAfterRebuild = -1;
-    private readonly PopupKeyboardNav _contextMenuNav = new PopupKeyboardNav();
+
+    /// <summary>
+    /// Per-row builder for classic-leaderboard entries. Created once in
+    /// <see cref="BuildUI"/> with controller-side callbacks; reused for
+    /// every list rebuild.
+    /// </summary>
+    private LeaderboardEntryRow _entryRow;
 
     protected override KeybindManager.Context NavContext => KeybindManager.Context.Leaderboard;
 
@@ -151,7 +151,6 @@ public sealed class LeaderboardScreenController : NavigableScene
         _scroll = root.Q<ScrollView>("lb-scroll");
         _emptyLabel = root.Q<Label>("lb-empty");
         _comingSoon = root.Q("lb-coming-soon");
-        _contextMenu = root.Q("lb-context-menu");
 
         root.Q<Button>("lb-back-btn").clicked += OnBack;
 
@@ -213,23 +212,34 @@ public sealed class LeaderboardScreenController : NavigableScene
         _sortButtons[1].clicked += () => SelectSort(SortCriterion.Biggest);
         _sortButtons[2].clicked += () => SelectSort(SortCriterion.Favorites);
 
-        _ctxFavoriteBtn = root.Q<Button>("ctx-favorite-btn");
-        _ctxPlayBtn = root.Q<Button>("ctx-play-btn");
-        root.Q<Button>("ctx-delete-btn").clicked += OnContextDelete;
-        if (_ctxFavoriteBtn != null)
-            _ctxFavoriteBtn.clicked += OnContextFavorite;
-        if (_ctxPlayBtn != null)
-            _ctxPlayBtn.clicked += OnContextPlay;
-
-        _deleteModal = new ConfirmModal(
-            root.Q("delete-modal"),
-            "Delete this favorited entry?",
-            "Delete",
-            "Cancel",
-            isDanger: true
+        // Context menu (delete + compact-mode favorite/play). Owns the
+        // floating menu element, its delete-confirmation modal, and the
+        // popup keyboard nav. Calls back here for the actual mutations.
+        _contextMenu = new LeaderboardContextMenu(
+            root,
+            new LeaderboardContextMenu.Callbacks
+            {
+                IsCompact = () => _isCompact,
+                IsFavorite = id => LeaderboardManager.Instance?.IsFavorite(id) ?? false,
+                OnToggleFavorite = OnToggleFavorite,
+                OnPlay = OnPlayReplay,
+                OnDeleteConfirmed = OnContextMenuDeleteConfirmed,
+            }
         );
-        _deleteModal.Confirmed += OnDeleteConfirm;
-        _deleteModal.Cancelled += OnDeleteCancel;
+
+        // Per-row builder for the classic-leaderboard list. Wires its
+        // callbacks to controller-side methods so each row delegates
+        // back here for favorite toggles, replay launches, etc.
+        _entryRow = new LeaderboardEntryRow(
+            new LeaderboardEntryRow.Callbacks
+            {
+                IsFavoritesSort = () => _activeSortCriterion == SortCriterion.Favorites,
+                OnToggleFavorite = OnToggleFavorite,
+                OnPlay = OnPlayReplay,
+                OnContextMenu = (id, fav, anchor) => _contextMenu.Show(id, fav, anchor),
+                RegisterNameScroll = RegisterNameScroll,
+            }
+        );
 
         _playerPanel = root.Q("lb-player-panel");
         _playerPanelLabel = root.Q<Label>("lb-player-panel-label");
@@ -250,8 +260,8 @@ public sealed class LeaderboardScreenController : NavigableScene
             });
 
         root.RegisterCallback<PointerDownEvent>(OnRootPointerDown);
-        _scroll.RegisterCallback<WheelEvent>(_ => DismissContextMenu());
-        _scroll.verticalScroller.valueChanged += _ => DismissContextMenu();
+        _scroll.RegisterCallback<WheelEvent>(_ => _contextMenu?.Dismiss());
+        _scroll.verticalScroller.valueChanged += _ => _contextMenu?.Dismiss();
 
         _scroll.RegisterCallback<PointerDownEvent>(OnScrollPointerDown);
         _scroll.RegisterCallback<PointerMoveEvent>(OnScrollPointerMove);
@@ -290,10 +300,10 @@ public sealed class LeaderboardScreenController : NavigableScene
     protected override bool PreUpdate(KeybindManager km)
     {
         // Context menu open: it handles its own navigation.
-        if (_contextMenuNav.IsActive)
+        if (_contextMenu != null && _contextMenu.IsKeyboardNavActive)
         {
-            _contextMenuNav.Update();
-            if (!_contextMenuNav.IsActive && Navigator != null)
+            _contextMenu.UpdateKeyboardNav();
+            if (!_contextMenu.IsKeyboardNavActive && Navigator != null)
                 Navigator.SuppressDAS();
             return false; // Skip Navigator.Update() this frame.
         }
@@ -435,7 +445,7 @@ public sealed class LeaderboardScreenController : NavigableScene
                 _tabButtons[i].RemoveFromClassList("tab-bar__tab--active");
         }
 
-        DismissContextMenu();
+        _contextMenu?.Dismiss();
 
         bool isAllTab = Tabs[index].w == 0 && Tabs[index].h == 0;
 
@@ -458,7 +468,7 @@ public sealed class LeaderboardScreenController : NavigableScene
 
     private void SelectSort(SortCriterion criterion)
     {
-        DismissContextMenu();
+        _contextMenu?.Dismiss();
         _activeSortCriterion = criterion;
         int idx = (int)criterion;
         for (int i = 0; i < _sortButtons.Length; i++)
@@ -481,7 +491,7 @@ public sealed class LeaderboardScreenController : NavigableScene
     private void SelectMode(LeaderboardMode mode)
     {
         _activeMode = mode;
-        DismissContextMenu();
+        _contextMenu?.Dismiss();
 
         bool isClassic = mode == LeaderboardMode.Classic;
         if (_modeClassicTab != null)
@@ -779,123 +789,16 @@ public sealed class LeaderboardScreenController : NavigableScene
         for (int i = 0; i < entries.Count; i++)
         {
             var entry = entries[i];
-            var row = CreateEntryRow(i + 1, entry, isAllTab, gold, silver, bronze);
+            var row = _entryRow.Build(
+                i + 1,
+                entry,
+                isAllTab,
+                new LeaderboardEntryRow.Medals(gold, silver, bronze)
+            );
             _list.Add(row);
         }
 
         RebuildEntryNavigator();
-    }
-
-    private VisualElement CreateEntryRow(
-        int rank,
-        LeaderboardEntry entry,
-        bool showSize,
-        HashSet<string> gold,
-        HashSet<string> silver,
-        HashSet<string> bronze
-    )
-    {
-        var row = new VisualElement();
-        row.AddToClassList("lb-entry");
-        row.userData = entry.gameId;
-
-        // Medal highlights (non-Favorites sort)
-        string medalRow = null;
-        string medalRank = null;
-        if (gold != null && gold.Contains(entry.gameId))
-        {
-            medalRow = "lb-entry--gold";
-            medalRank = "lb-rank--gold";
-        }
-        else if (silver != null && silver.Contains(entry.gameId))
-        {
-            medalRow = "lb-entry--silver";
-            medalRank = "lb-rank--silver";
-        }
-        else if (bronze != null && bronze.Contains(entry.gameId))
-        {
-            medalRow = "lb-entry--bronze";
-            medalRank = "lb-rank--bronze";
-        }
-
-        // Favorite tint (Favorites sort only — medals are null)
-        if (medalRow == null && _activeSortCriterion == SortCriterion.Favorites && entry.isFavorite)
-            row.AddToClassList("lb-entry--favorite");
-        if (medalRow != null)
-            row.AddToClassList(medalRow);
-
-        // Rank
-        var rankLabel = new Label($"#{rank}");
-        rankLabel.AddToClassList("lb-rank");
-        if (medalRank != null)
-            rankLabel.AddToClassList(medalRank);
-        row.Add(rankLabel);
-
-        // Size (All tab only)
-        if (showSize)
-        {
-            var sizeLabel = new Label($"{entry.boardWidth}x{entry.boardHeight}");
-            sizeLabel.AddToClassList("lb-size");
-            row.Add(sizeLabel);
-        }
-
-        // Time (compact format on All tab)
-        string timeText = showSize
-            ? FormatCompactTime(entry.solveTime)
-            : FormatTime(entry.solveTime);
-        var timeLabel = new Label(timeText);
-        timeLabel.AddToClassList("lb-time");
-        if (showSize)
-            timeLabel.AddToClassList("lb-time--compact");
-        row.Add(timeLabel);
-
-        // Display name — wrapped for horizontal auto-scroll on overflow
-        var nameWrapper = new VisualElement();
-        nameWrapper.AddToClassList("lb-name-wrapper");
-        var nameLabel = new Label(entry.displayName ?? "");
-        nameLabel.AddToClassList("lb-name");
-        nameWrapper.Add(nameLabel);
-        row.Add(nameWrapper);
-        RegisterNameScroll(nameWrapper, nameLabel);
-
-        // Date (relative text, tooltip shows exact date+time)
-        var dateLabel = new Label(FormatRelativeDate(entry.completedAt));
-        dateLabel.AddToClassList("lb-date");
-        dateLabel.tooltip = FormatExactDate(entry.completedAt);
-        row.Add(dateLabel);
-
-        // Favorite icon (clickable toggle)
-        string capturedGameId = entry.gameId;
-        bool capturedFav = entry.isFavorite;
-        var favBtn = new Button(() => OnToggleFavorite(capturedGameId, capturedFav));
-        favBtn.AddToClassList("lb-row-btn");
-        favBtn.AddToClassList("lb-fav-btn");
-        var favIcon = new VisualElement();
-        favIcon.AddToClassList("lb-row-btn__icon");
-        favIcon.AddToClassList(entry.isFavorite ? "lb-fav-icon--on" : "lb-fav-icon--off");
-        favBtn.Add(favIcon);
-        row.Add(favBtn);
-
-        // Play button
-        var playBtn = new Button(() => OnPlayReplay(capturedGameId));
-        playBtn.AddToClassList("lb-row-btn");
-        var playIcon = new VisualElement();
-        playIcon.AddToClassList("lb-row-btn__icon");
-        playIcon.AddToClassList("lb-play-icon");
-        playBtn.Add(playIcon);
-        row.Add(playBtn);
-
-        // Context menu trigger
-        var ctxBtn = new Button(() => ShowContextMenu(capturedGameId, capturedFav, row));
-        ctxBtn.AddToClassList("lb-row-btn");
-        ctxBtn.AddToClassList("lb-ctx-trigger");
-        var ctxIcon = new VisualElement();
-        ctxIcon.AddToClassList("lb-row-btn__icon");
-        ctxIcon.AddToClassList("lb-ctx-trigger-icon");
-        ctxBtn.Add(ctxIcon);
-        row.Add(ctxBtn);
-
-        return row;
     }
 
     private void ShowEmpty(bool show)
@@ -904,80 +807,11 @@ public sealed class LeaderboardScreenController : NavigableScene
         ShowElement(_scroll, !show);
     }
 
-    // --- Context menu ---
-
-    private void ShowContextMenu(string gameId, bool isFavorite, VisualElement anchorRow)
-    {
-        _contextGameId = gameId;
-        _contextIsFavorite = isFavorite;
-
-        // Show favorite/play in compact mode (hidden on wide screens)
-        if (_ctxFavoriteBtn != null)
-        {
-            ShowElement(_ctxFavoriteBtn, _isCompact);
-            _ctxFavoriteBtn.text = isFavorite ? "Unfavorite" : "Favorite";
-        }
-        ShowElement(_ctxPlayBtn, _isCompact);
-
-        // Position near the anchor row, flipping above if it would overflow
-        var rowBounds = anchorRow.worldBound;
-        float panelHeight = Root.resolvedStyle.height;
-        float menuHeight = _contextMenu.resolvedStyle.height;
-        if (menuHeight <= 0)
-            menuHeight = 60; // fallback estimate
-
-        bool fitsBelow = rowBounds.yMax + menuHeight <= panelHeight;
-
-        _contextMenu.style.right = 16;
-        _contextMenu.style.left = StyleKeyword.Auto;
-
-        if (fitsBelow)
-        {
-            _contextMenu.style.top = rowBounds.yMax;
-            _contextMenu.style.bottom = StyleKeyword.Auto;
-        }
-        else
-        {
-            _contextMenu.style.bottom = panelHeight - rowBounds.yMin;
-            _contextMenu.style.top = StyleKeyword.Auto;
-        }
-
-        ShowElement(_contextMenu, true);
-
-        // Set up keyboard navigation for visible context menu items.
-        var navItems = new List<VisualElement>();
-        var navCallbacks = new List<Action>();
-        if (_isCompact && _ctxFavoriteBtn != null)
-        {
-            navItems.Add(_ctxFavoriteBtn);
-            navCallbacks.Add(OnContextFavorite);
-        }
-        if (_isCompact && _ctxPlayBtn != null)
-        {
-            navItems.Add(_ctxPlayBtn);
-            navCallbacks.Add(OnContextPlay);
-        }
-        var deleteBtn = Root.Q<Button>("ctx-delete-btn");
-        if (deleteBtn != null)
-        {
-            navItems.Add(deleteBtn);
-            navCallbacks.Add(OnContextDelete);
-        }
-        _contextMenuNav.Open(navItems, navCallbacks, DismissContextMenu);
-    }
-
-    private void DismissContextMenu()
-    {
-        ShowElement(_contextMenu, false);
-        _contextMenuNav.Close();
-        _contextGameId = null;
-    }
-
     // --- Drag-to-scroll ---
 
     private void OnScrollPointerDown(PointerDownEvent evt)
     {
-        DismissContextMenu();
+        _contextMenu?.Dismiss();
 
         // Let row buttons handle their own pointer events
         if (IsRowButton(evt.target as VisualElement))
@@ -1056,14 +890,14 @@ public sealed class LeaderboardScreenController : NavigableScene
 
     private void OnRootPointerDown(PointerDownEvent evt)
     {
-        if (_contextMenu.ClassListContains("lb--hidden"))
+        if (_contextMenu == null || !_contextMenu.IsOpen)
             return;
 
-        // Check if click is inside the context menu
-        if (_contextMenu.worldBound.Contains(evt.position))
+        // Click inside the menu itself doesn't dismiss it.
+        if (_contextMenu.ContainsWorldPoint(evt.position))
             return;
 
-        DismissContextMenu();
+        _contextMenu.Dismiss();
     }
 
     private void OnToggleFavorite(string gameId, bool currentlyFavorite)
@@ -1078,81 +912,23 @@ public sealed class LeaderboardScreenController : NavigableScene
         RefreshList();
     }
 
-    private void OnContextFavorite()
+    /// <summary>
+    /// Fires when the context menu's delete flow has confirmed (either
+    /// immediately for non-favorited entries or after the modal Confirmed
+    /// for favorited ones). The controller mutates the store and stages
+    /// the post-rebuild focus restoration.
+    /// </summary>
+    private void OnContextMenuDeleteConfirmed(string gameId)
     {
-        if (_contextGameId == null)
-            return;
-        OnToggleFavorite(_contextGameId, _contextIsFavorite);
-        DismissContextMenu();
-    }
-
-    private void OnContextPlay()
-    {
-        if (_contextGameId == null)
-            return;
-        DismissContextMenu();
-        OnPlayReplay(_contextGameId);
-    }
-
-    private void OnContextDelete()
-    {
-        if (_contextGameId == null)
-            return;
-
-        // Re-check favorite status in case it was toggled while the context menu was open
-        var manager = LeaderboardManager.Instance;
-        if (manager != null)
-            _contextIsFavorite = manager.IsFavorite(_contextGameId);
-
-        // If favorited, show confirmation modal
-        if (_contextIsFavorite)
-        {
-            _pendingDeleteGameId = _contextGameId;
-            DismissContextMenu();
-            _deleteModal.Show();
-        }
-        else
-        {
-            PerformDelete();
-        }
-    }
-
-    private void OnDeleteConfirm()
-    {
-        _deleteModal.Hide();
-        if (_pendingDeleteGameId != null)
-        {
-            _focusEntryPositionAfterRebuild = FindEntryPosition(_pendingDeleteGameId);
-            _focusBtnClassAfterRebuild = "lb-ctx-trigger";
-
-            var manager = LeaderboardManager.Instance;
-            if (manager != null)
-                manager.RemoveEntry(_pendingDeleteGameId);
-            _pendingDeleteGameId = null;
-            RefreshList();
-        }
-    }
-
-    private void OnDeleteCancel()
-    {
-        _deleteModal.Hide();
-        _pendingDeleteGameId = null;
-    }
-
-    private void PerformDelete()
-    {
-        if (_contextGameId == null)
-            return;
-
-        // Track position so focus lands on the replacement entry.
-        _focusEntryPositionAfterRebuild = FindEntryPosition(_contextGameId);
+        // Track position so focus lands on the replacement entry after
+        // the list rebuilds — same row position now holds whatever entry
+        // moved up to fill the gap.
+        _focusEntryPositionAfterRebuild = FindEntryPosition(gameId);
         _focusBtnClassAfterRebuild = "lb-ctx-trigger";
 
         var manager = LeaderboardManager.Instance;
         if (manager != null)
-            manager.RemoveEntry(_contextGameId);
-
-        DismissContextMenu();
+            manager.RemoveEntry(gameId);
         RefreshList();
     }
 
@@ -1329,7 +1105,9 @@ public sealed class LeaderboardScreenController : NavigableScene
         }
 
         // Time (compact format on All tab)
-        string timeText = showSize ? FormatCompactTime(entry.time) : FormatTime(entry.time);
+        string timeText = showSize
+            ? LeaderboardFormatters.FormatCompactTime(entry.time)
+            : LeaderboardFormatters.FormatTime(entry.time);
         var timeLabel = new Label(timeText);
         timeLabel.AddToClassList("lb-time");
         if (showSize)
@@ -1404,7 +1182,7 @@ public sealed class LeaderboardScreenController : NavigableScene
         }
 
         _playerPanelLabel.text =
-            $"Your best: #{me.rank} of {me.totalEntries} \u00B7 {FormatTime(me.time)}";
+            $"Your best: #{me.rank} of {me.totalEntries} \u00B7 {LeaderboardFormatters.FormatTime(me.time)}";
         _playerGameId = me.gameId;
         ShowElement(_playerPlayBtn, true);
     }
@@ -1494,6 +1272,66 @@ public sealed class LeaderboardScreenController : NavigableScene
         SceneNav.Pop();
     }
 
+    /// <summary>
+    /// Append a Button-shaped FocusItem to <paramref name="items"/> with
+    /// the given activate handler, returning its index. Wraps the
+    /// `OnActivate = () => { handler(); return true; }` boilerplate that
+    /// otherwise repeats for every nav target in this scene's graph.
+    /// </summary>
+    private static int AddNavItem(
+        List<FocusNavigator.FocusItem> items,
+        VisualElement element,
+        Action onActivate
+    )
+    {
+        int idx = items.Count;
+        items.Add(
+            new FocusNavigator.FocusItem
+            {
+                Element = element,
+                OnActivate = () =>
+                {
+                    onActivate();
+                    return true;
+                },
+            }
+        );
+        return idx;
+    }
+
+    /// <summary>
+    /// Dispatch for a click on one of an entry row's inline action
+    /// buttons. The same button class encodes which action runs (favorite
+    /// toggle / context menu open / replay launch — local or global).
+    /// Pulled out of the per-row OnActivate lambda so the row-construction
+    /// loop stays readable.
+    /// </summary>
+    private void HandleEntryButtonClick(Button btn, string gameId)
+    {
+        if (btn.ClassListContains("lb-fav-btn"))
+        {
+            _focusGameIdAfterRebuild = gameId;
+            _focusBtnClassAfterRebuild = "lb-fav-btn";
+            OnToggleFavorite(gameId, btn.Q(className: "lb-fav-icon--on") != null);
+        }
+        else if (btn.ClassListContains("lb-ctx-trigger"))
+        {
+            _contextMenu.Show(
+                gameId,
+                btn.parent.Q(className: "lb-fav-icon--on") != null,
+                btn.parent
+            );
+        }
+        else if (_isGlobalView)
+        {
+            OnPlayGlobalReplay(gameId);
+        }
+        else
+        {
+            OnPlayReplay(gameId);
+        }
+    }
+
     private void RebuildEntryNavigator()
     {
         Navigator?.Dispose();
@@ -1503,81 +1341,24 @@ public sealed class LeaderboardScreenController : NavigableScene
 
         // -- Header row: back button + local/global toggle --
         var backBtn = Root.Q<Button>("lb-back-btn");
-        int backIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = backBtn,
-                OnActivate = () =>
-                {
-                    OnBack();
-                    return true;
-                },
-            }
-        );
+        int backIdx = AddNavItem(items, backBtn, OnBack);
 
         var localBtn = Root.Q<Button>("lb-local-btn");
         var globalBtn = Root.Q<Button>("lb-global-btn");
-        int localIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = localBtn,
-                OnActivate = () =>
-                {
-                    SetScope(false, localBtn, globalBtn);
-                    return true;
-                },
-            }
-        );
-        int globalIdx = items.Count;
-        items.Add(
-            new FocusNavigator.FocusItem
-            {
-                Element = globalBtn,
-                OnActivate = () =>
-                {
-                    SetScope(true, localBtn, globalBtn);
-                    return true;
-                },
-            }
-        );
+        int localIdx = AddNavItem(items, localBtn, () => SetScope(false, localBtn, globalBtn));
+        int globalIdx = AddNavItem(items, globalBtn, () => SetScope(true, localBtn, globalBtn));
 
         // -- Mode tabs (Classic | Endless) --
         // Always present so they can carry keyboard focus regardless of which
         // size-tab row is currently visible.
-        int modeClassicIdx = -1;
-        int modeEndlessIdx = -1;
-        if (_modeClassicTab != null)
-        {
-            modeClassicIdx = items.Count;
-            items.Add(
-                new FocusNavigator.FocusItem
-                {
-                    Element = _modeClassicTab,
-                    OnActivate = () =>
-                    {
-                        SelectMode(LeaderboardMode.Classic);
-                        return true;
-                    },
-                }
-            );
-        }
-        if (_modeEndlessTab != null)
-        {
-            modeEndlessIdx = items.Count;
-            items.Add(
-                new FocusNavigator.FocusItem
-                {
-                    Element = _modeEndlessTab,
-                    OnActivate = () =>
-                    {
-                        SelectMode(LeaderboardMode.Endless);
-                        return true;
-                    },
-                }
-            );
-        }
+        int modeClassicIdx =
+            _modeClassicTab != null
+                ? AddNavItem(items, _modeClassicTab, () => SelectMode(LeaderboardMode.Classic))
+                : -1;
+        int modeEndlessIdx =
+            _modeEndlessTab != null
+                ? AddNavItem(items, _modeEndlessTab, () => SelectMode(LeaderboardMode.Endless))
+                : -1;
 
         // -- Size tabs (varies by active mode) --
         // Endless mode uses a smaller size set (S/M/L/All); classic uses
@@ -1592,18 +1373,15 @@ public sealed class LeaderboardScreenController : NavigableScene
             if (activeSizeButtons[i] == null)
                 continue;
             int idx = i;
-            items.Add(
-                new FocusNavigator.FocusItem
+            AddNavItem(
+                items,
+                activeSizeButtons[i],
+                () =>
                 {
-                    Element = activeSizeButtons[i],
-                    OnActivate = () =>
-                    {
-                        if (isEndlessMode)
-                            SelectEndlessTab(idx);
-                        else
-                            SelectTab(idx);
-                        return true;
-                    },
+                    if (isEndlessMode)
+                        SelectEndlessTab(idx);
+                    else
+                        SelectTab(idx);
                 }
             );
         }
@@ -1613,20 +1391,7 @@ public sealed class LeaderboardScreenController : NavigableScene
         // Refresh button (global view only, sits next to last tab).
         int refreshIdx = -1;
         if (_isGlobalView && _refreshBtn != null && !_refreshBtn.ClassListContains("lb--hidden"))
-        {
-            refreshIdx = items.Count;
-            items.Add(
-                new FocusNavigator.FocusItem
-                {
-                    Element = _refreshBtn,
-                    OnActivate = () =>
-                    {
-                        FetchGlobalList();
-                        return true;
-                    },
-                }
-            );
-        }
+            refreshIdx = AddNavItem(items, _refreshBtn, FetchGlobalList);
 
         // -- Sort buttons (local view only) --
         int sortStart = items.Count;
@@ -1639,17 +1404,13 @@ public sealed class LeaderboardScreenController : NavigableScene
                     continue;
                 var sortBtn = _sortButtons[i];
                 int si = i;
-                var capturedSortBtn = sortBtn;
-                items.Add(
-                    new FocusNavigator.FocusItem
+                AddNavItem(
+                    items,
+                    sortBtn,
+                    () =>
                     {
-                        Element = sortBtn,
-                        OnActivate = () =>
-                        {
-                            _focusAfterRebuild = capturedSortBtn;
-                            SelectSort((SortCriterion)si);
-                            return true;
-                        },
+                        _focusAfterRebuild = sortBtn;
+                        SelectSort((SortCriterion)si);
                     }
                 );
                 sortCount++;
@@ -1664,69 +1425,30 @@ public sealed class LeaderboardScreenController : NavigableScene
             var row = child;
             string gameId = row.userData as string;
 
-            // Row entry — Enter navigates right to favorite (not instant replay).
+            // Row entry — Enter navigates right to first inline button.
             int rowIdx = items.Count;
-            items.Add(
-                new FocusNavigator.FocusItem
+            AddNavItem(
+                items,
+                row,
+                () =>
                 {
-                    Element = row,
-                    OnActivate = () =>
-                    {
-                        // Navigate right to the first inline button.
-                        if (rowIdx + 1 < items.Count)
-                            Navigator.SetFocus(rowIdx + 1);
-                        return true;
-                    },
+                    if (rowIdx + 1 < items.Count)
+                        Navigator.SetFocus(rowIdx + 1);
                 }
             );
 
             // Inline buttons: favorite, play, context menu.
-            var favBtn = row.Q(className: "lb-fav-btn") as Button;
-            var playBtn = row.Q(className: "lb-row-btn");
-            // Find all lb-row-btn children for inline nav.
             var rowBtns = row.Query<Button>(className: "lb-row-btn").ToList();
-            int firstBtnIdx = items.Count;
             foreach (var btn in rowBtns)
             {
                 var capturedBtn = btn;
                 string capturedId = gameId;
-                items.Add(
-                    new FocusNavigator.FocusItem
-                    {
-                        Element = capturedBtn,
-                        OnActivate = () =>
-                        {
-                            if (capturedBtn.ClassListContains("lb-fav-btn"))
-                            {
-                                _focusGameIdAfterRebuild = capturedId;
-                                _focusBtnClassAfterRebuild = "lb-fav-btn";
-                                OnToggleFavorite(
-                                    capturedId,
-                                    capturedBtn.Q(className: "lb-fav-icon--on") != null
-                                );
-                            }
-                            else if (capturedBtn.ClassListContains("lb-ctx-trigger"))
-                            {
-                                ShowContextMenu(
-                                    capturedId,
-                                    capturedBtn.parent.Q(className: "lb-fav-icon--on") != null,
-                                    capturedBtn.parent
-                                );
-                            }
-                            else
-                            {
-                                // Play button.
-                                if (_isGlobalView)
-                                    OnPlayGlobalReplay(capturedId);
-                                else
-                                    OnPlayReplay(capturedId);
-                            }
-                            return true;
-                        },
-                    }
+                AddNavItem(
+                    items,
+                    capturedBtn,
+                    () => HandleEntryButtonClick(capturedBtn, capturedId)
                 );
             }
-            int lastBtnIdx = items.Count - 1;
 
             entryCount++;
         }
@@ -1738,20 +1460,11 @@ public sealed class LeaderboardScreenController : NavigableScene
             && _playerPlayBtn != null
             && !_playerPlayBtn.ClassListContains("lb--hidden")
         )
-        {
-            playerPlayIdx = items.Count;
-            items.Add(
-                new FocusNavigator.FocusItem
-                {
-                    Element = _playerPlayBtn,
-                    OnActivate = () =>
-                    {
-                        OnPlayGlobalReplay(_playerGameId);
-                        return true;
-                    },
-                }
+            playerPlayIdx = AddNavItem(
+                items,
+                _playerPlayBtn,
+                () => OnPlayGlobalReplay(_playerGameId)
             );
-        }
 
         _navTabsStart = tabsStart;
         _navSortStart = sortStart;
@@ -2139,96 +1852,6 @@ public sealed class LeaderboardScreenController : NavigableScene
         if (!string.IsNullOrEmpty(serverError) && serverError != "Unknown error")
             return serverError;
         return "Something went wrong. Try again later.";
-    }
-
-    // --- Formatting helpers ---
-
-    private static string FormatTime(double seconds)
-    {
-        if (seconds < 0)
-            seconds = 0;
-        int totalMillis = (int)(seconds * 1000);
-        int hours = totalMillis / 3600000;
-        int mins = (totalMillis % 3600000) / 60000;
-        int secs = (totalMillis % 60000) / 1000;
-        int millis = totalMillis % 1000;
-
-        if (hours > 0)
-            return $"{hours}:{mins:D2}:{secs:D2}.{millis:D3}";
-        if (mins > 0)
-            return $"{mins}:{secs:D2}.{millis:D3}";
-        return $"{secs}.{millis:D3}";
-    }
-
-    /// <summary>
-    /// Compact time format for the All tab — drops millisecond precision.
-    /// Under 1 minute: "45s". Under 1 hour: "12m 34s". Over 1 hour: "1h 23m".
-    /// </summary>
-    private static string FormatCompactTime(double seconds)
-    {
-        if (seconds < 0)
-            seconds = 0;
-        int totalSecs = (int)seconds;
-        if (totalSecs < 60)
-            return $"{totalSecs}s";
-        int mins = totalSecs / 60;
-        int secs = totalSecs % 60;
-        if (mins < 60)
-            return $"{mins}m {secs:D2}s";
-        int hours = mins / 60;
-        mins %= 60;
-        return $"{hours}h {mins:D2}m";
-    }
-
-    private static string FormatRelativeDate(string iso8601)
-    {
-        if (string.IsNullOrEmpty(iso8601))
-            return "";
-
-        DateTime date;
-        if (
-            !DateTime.TryParse(
-                iso8601,
-                null,
-                System.Globalization.DateTimeStyles.RoundtripKind,
-                out date
-            )
-        )
-            return "";
-
-        var span = DateTime.UtcNow - date.ToUniversalTime();
-
-        if (span.TotalMinutes < 1)
-            return "now";
-        if (span.TotalHours < 1)
-            return $"{(int)span.TotalMinutes}m ago";
-        if (span.TotalDays < 1)
-            return $"{(int)span.TotalHours}h ago";
-        if (span.TotalDays < 30)
-            return $"{(int)span.TotalDays}d ago";
-        if (span.TotalDays < 365)
-            return $"{(int)(span.TotalDays / 30)}mo ago";
-
-        return $"{(int)(span.TotalDays / 365)}yr ago";
-    }
-
-    private static string FormatExactDate(string iso8601)
-    {
-        if (string.IsNullOrEmpty(iso8601))
-            return "";
-
-        DateTime date;
-        if (
-            !DateTime.TryParse(
-                iso8601,
-                null,
-                System.Globalization.DateTimeStyles.RoundtripKind,
-                out date
-            )
-        )
-            return "";
-
-        return date.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
     }
 
     private static void ShowElement(VisualElement el, bool show)
