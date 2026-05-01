@@ -19,8 +19,6 @@ using UnityEngine.Networking;
 /// </summary>
 public class ApiClient
 {
-    private const string DefaultBaseUrl = "https://api.arrow-thing.com";
-    private const string LocalBaseUrl = "http://localhost:5000";
     private const string TokenPrefKey = "auth_token";
     private const string RefreshTokenPrefKey = "auth_refresh_token";
     private const string DisplayNamePrefKey = "auth_display_name";
@@ -112,11 +110,7 @@ public class ApiClient
 
     public ApiClient()
     {
-#if UNITY_EDITOR
-        _baseUrl = LocalBaseUrl;
-#else
-        _baseUrl = DefaultBaseUrl;
-#endif
+        _baseUrl = BackendConfig.ApiBaseUrl;
 
 #if UNITY_WEBGL && !UNITY_EDITOR
         // Allow the hosting page to override the API URL — either via a
