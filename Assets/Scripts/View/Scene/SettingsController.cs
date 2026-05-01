@@ -23,9 +23,6 @@ public sealed class SettingsController : MonoBehaviour
     /// Other controllers should skip their own Cancel handling.</summary>
     public static bool JustClosed { get; private set; }
 
-    private const string GitHubUrl = "https://github.com/vicplusplus/arrow-thing";
-    private const string DiscordUrl = "https://discord.gg/FBwTyaWzpE";
-
     private VisualElement _settings;
     private VisualElement _settingsPanel;
     private VisualElement _settingsBackdrop;
@@ -437,7 +434,7 @@ public sealed class SettingsController : MonoBehaviour
                     Element = githubBtn,
                     OnActivate = () =>
                     {
-                        ExternalLinks.Open(GitHubUrl);
+                        ExternalLinks.Open(ExternalLinks.GitHub);
                         return true;
                     },
                 }
@@ -451,7 +448,7 @@ public sealed class SettingsController : MonoBehaviour
                     Element = discordBtn,
                     OnActivate = () =>
                     {
-                        ExternalLinks.Open(DiscordUrl);
+                        ExternalLinks.Open(ExternalLinks.Discord);
                         return true;
                     },
                 }
@@ -798,8 +795,10 @@ public sealed class SettingsController : MonoBehaviour
         };
 
         _settings.Q<Label>("about-version").text = $"v{Application.version} ({GitCommitHash()})";
-        _settings.Q<Button>("about-github-btn").clicked += () => ExternalLinks.Open(GitHubUrl);
-        _settings.Q<Button>("about-discord-btn").clicked += () => ExternalLinks.Open(DiscordUrl);
+        _settings.Q<Button>("about-github-btn").clicked += () =>
+            ExternalLinks.Open(ExternalLinks.GitHub);
+        _settings.Q<Button>("about-discord-btn").clicked += () =>
+            ExternalLinks.Open(ExternalLinks.Discord);
 
         settingsScroll.verticalScroller.valueChanged += _ =>
         {
