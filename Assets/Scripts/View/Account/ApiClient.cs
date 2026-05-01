@@ -35,6 +35,9 @@ public class ApiClient
 
     [DllImport("__Internal")]
     private static extern string ApiUrl_Resolve();
+
+    [DllImport("__Internal")]
+    private static extern string ApiWsUrl_Resolve();
 #else
     private const bool UseCookieAuth = false;
 #endif
@@ -65,6 +68,14 @@ public class ApiClient
     }
 
     private readonly string _baseUrl;
+
+    // WebSocket base URL. Defaults to the scheme-swapped _baseUrl, but on
+    // staging we keep WS pointed at api-staging.arrow-thing.com directly:
+    // Pages Functions reverse-proxy /api/* to make cookies same-origin, but
+    // they don't cleanly proxy WS upgrades, and CoopClient passes the JWT
+    // in the WS query string so cookie scope doesn't matter for the
+    // handshake. Set in the ctor; immutable thereafter.
+    private readonly string _wsBaseUrl;
 
     // Defaulted to "" so WebGL cookie mode (which never writes to Token /
     // RefreshToken) doesn't hand null to Uri.EscapeDataString in the WS
@@ -97,17 +108,7 @@ public class ApiClient
     /// WebSocket-scheme version of the base URL (ws:// or wss://).
     /// Used by CoopClient for lobby connections.
     /// </summary>
-    public string BaseWsUrl
-    {
-        get
-        {
-            if (_baseUrl.StartsWith("https://"))
-                return "wss://" + _baseUrl.Substring("https://".Length);
-            if (_baseUrl.StartsWith("http://"))
-                return "ws://" + _baseUrl.Substring("http://".Length);
-            return _baseUrl;
-        }
-    }
+    public string BaseWsUrl => _wsBaseUrl;
 
     public ApiClient()
     {
@@ -122,11 +123,13 @@ public class ApiClient
         // `?api=<url>` query param or automatically when served from
         // localhost. Lets a local WebGL build talk to a local API without
         // rebuilding.
+        string wsOverride = null;
         try
         {
             var resolved = ApiUrl_Resolve();
             if (!string.IsNullOrEmpty(resolved))
                 _baseUrl = resolved;
+            wsOverride = ApiWsUrl_Resolve();
         }
         catch (Exception e)
         {
@@ -160,6 +163,24 @@ public class ApiClient
 #endif
         DisplayName = PlayerPrefs.GetString(DisplayNamePrefKey, "");
         Email = PlayerPrefs.GetString(EmailPrefKey, "");
+
+        // _wsBaseUrl: on staging the jslib resolves to api-staging directly
+        // (see header comment on _wsBaseUrl). Everywhere else it's just the
+        // scheme-swapped _baseUrl.
+#if UNITY_WEBGL && !UNITY_EDITOR
+        _wsBaseUrl = !string.IsNullOrEmpty(wsOverride) ? wsOverride : SchemeSwapToWs(_baseUrl);
+#else
+        _wsBaseUrl = SchemeSwapToWs(_baseUrl);
+#endif
+    }
+
+    private static string SchemeSwapToWs(string url)
+    {
+        if (url.StartsWith("https://"))
+            return "wss://" + url.Substring("https://".Length);
+        if (url.StartsWith("http://"))
+            return "ws://" + url.Substring("http://".Length);
+        return url;
     }
 
     /// <summary>

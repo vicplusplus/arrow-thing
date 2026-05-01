@@ -112,6 +112,23 @@ public sealed class FocusNavigator
         WasKeyboardActive = false;
     }
 
+    /// <summary>
+    /// Pixels at the top of the parent ScrollView's viewport that are
+    /// visually obstructed by chrome rendered on top (sticky header,
+    /// overlapping toolbar, etc.). <see cref="ScrollToFocused"/> treats the
+    /// effective viewport top as <c>scrollPos + ScrollTopObstruction</c>
+    /// so a focused element scrolled into view from above lands below the
+    /// chrome rather than behind it. Defaults to 0 (no obstruction).
+    /// </summary>
+    public float ScrollTopObstruction { get; set; }
+
+    /// <summary>
+    /// Pixels at the bottom of the parent ScrollView's viewport that are
+    /// visually obstructed by chrome rendered on top (sticky footer,
+    /// player panel, etc.). Symmetric counterpart to <see cref="ScrollTopObstruction"/>.
+    /// </summary>
+    public float ScrollBottomObstruction { get; set; }
+
     /// <summary>Current focused item index. -1 if nothing is focused.</summary>
     public int CurrentIndex => _currentIndex;
 
@@ -542,11 +559,14 @@ public sealed class FocusNavigator
         }
     }
 
-    /// <summary>Scroll the focused element into view if inside a ScrollView.</summary>
     /// <summary>
-    /// Scroll the focused element into view, biased toward the center of the
-    /// viewport rather than the edge. Provides comfortable spacing around the
-    /// focused item.
+    /// Scroll the focused element into view. Scrolls the minimum distance
+    /// needed to keep the element inside the visible band plus a buffer.
+    /// "Visible band" excludes any chrome that the parent's siblings of
+    /// the scroll view occupy — when chrome ends up rendered over the top
+    /// edge of the scroll viewport (flex layout quirks, padding, stacking),
+    /// using <c>worldBound</c> here gives the actual visible area instead
+    /// of the layout-engine area.
     /// </summary>
     public void ScrollToFocused()
     {
@@ -557,34 +577,70 @@ public sealed class FocusNavigator
         if (scroll == null)
             return;
 
-        // Get element position relative to the scroll content.
-        float elTop = el.layout.y;
-        var parent = el.parent;
-        while (parent != null && parent != scroll.contentContainer)
-        {
-            elTop += parent.layout.y;
-            parent = parent.parent;
-        }
-        float elBottom = elTop + el.layout.height;
-
-        float viewHeight = scroll.contentViewport.layout.height;
-        float scrollPos = scroll.verticalScroller.value;
-        float viewTop = scrollPos;
-        float viewBottom = scrollPos + viewHeight;
-
         // Don't scroll if all content fits in the viewport.
         float maxScroll = scroll.verticalScroller.highValue;
         if (maxScroll <= 0)
             return;
 
-        // Scroll to center the element in the viewport.
-        float elCenter = elTop + el.layout.height * 0.5f;
-        float targetScroll = elCenter - viewHeight * 0.5f;
-        targetScroll = Mathf.Clamp(targetScroll, 0, maxScroll);
+        // World-space rects: these reflect what the user actually sees —
+        // including any layout offsets, stacking artifacts, or
+        // non-overlapping chrome above the scroll viewport.
+        var elRect = el.worldBound;
+        var viewRect = scroll.contentViewport.worldBound;
+        if (float.IsNaN(elRect.height) || elRect.height <= 0 || viewRect.height <= 0)
+            return;
 
-        // Only scroll if the element is outside the center 40% of the viewport.
-        float margin = viewHeight * 0.3f;
-        if (elTop < viewTop + margin || elBottom > viewBottom - margin)
+        // The visible band's effective top is the lower of the scroll
+        // viewport's top and the bottom edge of any sibling rendered
+        // before the scroll view in the parent's children — that picks up
+        // chrome (header, mode tabs, sort row) regardless of whether it
+        // formally overlaps in flex coordinates. Manual obstruction values
+        // (ScrollTop/BottomObstruction) further shrink the band for
+        // cases the sibling walk can't see (e.g. floating panels).
+        float visibleTop = viewRect.yMin + ScrollTopObstruction;
+        float visibleBottom = viewRect.yMax - ScrollBottomObstruction;
+        if (scroll.parent != null)
+        {
+            foreach (var sibling in scroll.parent.Children())
+            {
+                if (sibling == scroll)
+                    break;
+                if (sibling.resolvedStyle.display == DisplayStyle.None)
+                    continue;
+                float chromeBottom = sibling.worldBound.yMax;
+                if (chromeBottom > visibleTop)
+                    visibleTop = chromeBottom;
+            }
+        }
+
+        // Buffer keeps a row of context above/below the focused row.
+        float visibleBand = Mathf.Max(visibleBottom - visibleTop, 0f);
+        float buffer = Mathf.Min(elRect.height * 1.5f, visibleBand * 0.15f);
+
+        // Target the minimum scroll change that puts the element fully
+        // inside the visible band with the buffer reserved.
+        float scrollPos = scroll.verticalScroller.value;
+        float targetScroll = scrollPos;
+        if (elRect.yMin < visibleTop + buffer)
+        {
+            // Element is above the visible band's top + buffer. Scroll up:
+            // decrease scrollPos by enough to push the element down to
+            // visibleTop + buffer.
+            targetScroll = scrollPos - (visibleTop + buffer - elRect.yMin);
+        }
+        else if (elRect.yMax > visibleBottom - buffer)
+        {
+            // Element is below the visible band's bottom - buffer. Scroll
+            // down by the symmetric amount.
+            targetScroll = scrollPos + (elRect.yMax - (visibleBottom - buffer));
+        }
+        else
+        {
+            return;
+        }
+
+        targetScroll = Mathf.Clamp(targetScroll, 0, maxScroll);
+        if (Mathf.Abs(targetScroll - scrollPos) > 0.5f)
             scroll.verticalScroller.value = targetScroll;
     }
 
