@@ -18,6 +18,9 @@ public static class ExternalLinks
 {
     private const string BaseRoute = "https://arrow-thing.com";
 
+    public const string GitHub = "https://github.com/vicplusplus/arrow-thing";
+    public const string Discord = "https://discord.gg/FBwTyaWzpE";
+
     /// <summary>
     /// Fired when a URL outside the base route is requested.
     /// The handler should show a confirmation UI and call <c>confirm</c> if the user accepts.
