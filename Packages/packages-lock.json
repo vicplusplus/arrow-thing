@@ -1,5 +1,13 @@
 {
   "dependencies": {
+    "com.arrowthing.domain": {
+      "version": "file:com.arrowthing.domain",
+      "depth": 0,
+      "source": "embedded",
+      "dependencies": {
+        "com.unity.nuget.newtonsoft-json": "3.2.1"
+      }
+    },
     "com.unity.2d.aseprite": {
       "version": "3.0.1",
       "depth": 0,
