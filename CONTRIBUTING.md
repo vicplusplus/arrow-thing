@@ -47,7 +47,7 @@ The pre-commit hook enforces:
 ## Technical Design Document (TDDoc)
 
 - We use "TDD" to mean **Technical Design Document**, not test-driven development.
-- `docs/TechnicalDesign.md` is the source of truth for technical decisions:
+- `docs/TechnicalDesign.md` is the spec for technical decisions:
   - architecture boundaries
   - core class responsibilities
   - key invariants and data flow

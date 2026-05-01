@@ -49,7 +49,7 @@ jobs:
           # ── Rule 1: domain change requires TDD update ─────────────────
           # If a .cs file under the domain package was touched, expect a
           # corresponding edit to docs/TechnicalDesign.md. The TDD is the
-          # source of truth for public contracts; renaming a class /
+          # spec for public contracts; renaming a class /
           # changing a public method without the doc going stale is the
           # exact failure mode this gate exists to catch.
           touched_domain=$(printf '%s\n' "$changed" \

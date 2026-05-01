@@ -307,7 +307,7 @@ Three layers, each with a tight responsibility:
 
 All UI colors are CSS custom properties (USS variables) defined in `ThemeColors.uss` and injected at runtime by `UIThemeApplier`. Individual screen stylesheets reference `var(--...)` only — no literal colour values.
 
-- **`ThemeColors.uss`** — single source of truth for the entire UI palette (~90 variables). Groups: Text (`--text-white/primary/secondary/heading/dim/danger/success/gold/link`), Surfaces (`--bg-screen/overlay/panel/settings/entry/track/item-hover`), Buttons, Inputs, Navigation tabs/toggles/filters, Presets, Accents (blue/green/teal/danger/info/favorite/warning/progress), Toggle/slider controls, Borders, Scrollbars. Swapping this file (via `VisualSettings.themeUIStyleSheet`) changes the entire UI theme.
+- **`ThemeColors.uss`** — defines the entire UI palette (~90 variables). Groups: Text (`--text-white/primary/secondary/heading/dim/danger/success/gold/link`), Surfaces (`--bg-screen/overlay/panel/settings/entry/track/item-hover`), Buttons, Inputs, Navigation tabs/toggles/filters, Presets, Accents (blue/green/teal/danger/info/favorite/warning/progress), Toggle/slider controls, Borders, Scrollbars. Swapping this file (via `VisualSettings.themeUIStyleSheet`) changes the entire UI theme.
 - **`Shared.uss`** — shared component styles used across multiple screens: `screen--hidden`, `screen-title`, modal overlay/box/buttons, `confirm-btn--danger`, back-button, icon-button, settings section header, entry row, scrollbar skin, empty-state label, loading overlay. Each screen's USS imports only screen-specific overrides.
 
 ### Fonts (`Assets/Fonts/`)
@@ -653,7 +653,7 @@ Posts release notes to a Discord webhook. Triggers after a successful WebGL depl
 - 2026-02-28: Adopted split between Unity-independent domain logic and Unity adapter layer.
 - 2026-02-28: Defined `BoardModel` as authoritative source for occupancy and legality checks.
 - 2026-02-28: Defined `BoardGenerator` as reusable source for initial fill and single-arrow generation.
-- 2026-02-28: Standardized this document as the source of truth for architecture and class-structure changes.
+- 2026-02-28: Standardized this document as the spec for architecture and class-structure changes.
 - 2026-03-06: `generation-rewrite` branch refactored away from `BoardModel`/`BoardGenerator` toward minimal model classes (`Cell`, `Arrow`, `Board`) with game logic in static classes (`BoardGeneration`). Model classes are now intentionally minimal and self-contained.
 - 2026-03-13: Occupancy and `IsClearable` moved into `Board`. View layer added: `GameController`, `CameraController`, `BoardView`, `BoardGridRenderer`, `ArrowView`, `InputHandler`, `BoardCoords`. Tests migrated from standalone .NET project to Unity Test Framework (`Assets/Tests/EditMode/`).
 - 2026-03-15: Added start menu (UI Toolkit). `MainMenuController` in `MainMenu` scene, `GameSettings` static class for scene-transition parameter passing, random seed by default with inspector override.
