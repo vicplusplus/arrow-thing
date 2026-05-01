@@ -9,8 +9,11 @@ using UnityEngine;
 /// code change. Falls back to compile-time defaults if the JSON is missing
 /// or malformed so a misdeployed build still boots.
 ///
-/// WebGL builds ignore this and resolve the API URL via the hosting page
-/// (see <c>CookieAuth.jslib</c> + <c>ApiUrl_Resolve</c>).
+/// WebGL builds run the JS resolver in <c>ApiUrlOverride.jslib</c> first;
+/// this config only kicks in when that resolver returns empty (the
+/// production hostname case).
+///
+/// See <c>docs/Networking.md</c> for the full env matrix.
 /// </summary>
 internal static class BackendConfig
 {

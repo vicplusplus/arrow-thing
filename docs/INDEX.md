@@ -28,6 +28,8 @@ How-to guides for setting up the dev environment and running things.
   VPS rotation, deployment flow.
 - [`AndroidTesting.md`](AndroidTesting.md) — Android build + on-device
   testing guide.
+- [`Networking.md`](Networking.md) — API/WS base-URL resolution across
+  the four shipping environments (Editor, local WebGL, staging, prod).
 - [`ReleaseChecklist.md`](ReleaseChecklist.md) — what to verify before
   cutting a release tag.
 
