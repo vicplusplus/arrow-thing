@@ -19,15 +19,22 @@ This document is the implementation-facing counterpart to [`GDD.md`](GDD.md).
 
 ## Architecture Overview
 
-- Domain layer (Unity-independent):
-  - Sources live in the Unity local package at `Packages/com.arrowthing.domain/Runtime/`. This is the single source of truth.
+Three layers, each with a tight responsibility:
+
+- **Domain layer (Unity-independent)** — the game logic core. Board state, arrow data, generation, validation. Both the client and the server depend on it so they evaluate the same rules.
+  - Sources live in the Unity local package at `Packages/com.arrowthing.domain/Runtime/`.
   - Builds standalone via `Domain/ArrowThing.Domain.csproj` (`netstandard2.1`), which the server solution references. Unity sees the same files via the package's `.asmdef` (`noEngineReferences: true`).
-  - Contains board state, arrow data, and generation logic. No `UnityEngine`, no `Unity.*`, no `Microsoft.Extensions.*` — enforced by `.github/workflows/domain-ci.yml`.
+  - No `UnityEngine`, no `Unity.*`, no `Microsoft.Extensions.*` — enforced by `.github/workflows/domain-ci.yml`.
   - Tests use Unity Test Framework / NUnit in `Assets/Tests/EditMode/`.
-- Unity adapter layer (Unity-dependent):
-  - Input handling, rendering, animation, scene wiring, and UI.
-  - Should translate user actions to domain operations and reflect resulting state.
-  - Should avoid owning gameplay rules.
+
+- **Client (Unity)** — the view layer and network client to the server. Input handling, rendering, animation, scene wiring, UI; HTTP + WebSocket calls for accounts, leaderboards, and co-op.
+  - Translates user actions into domain operations and reflects the resulting state.
+  - Does not own gameplay rules — defers to the domain layer for validation, and defers to the server for anything that has to be authoritative across players.
+
+- **Server (ASP.NET Core)** — the enforcer, global store, and facilitator for multiplayer services. Backed by Postgres + Redis, with a separate worker for async replay verification.
+  - References the Domain layer so it validates scores, replays, and co-op moves with the same rules the client used.
+  - Owns the global state the client cannot be trusted with: accounts, leaderboards, replay storage, co-op lobby and session state.
+  - Server source lives under `server/`. Operational details (local bring-up, VPS rotation) live under `server/docs/`; architectural details are in the rest of this document.
 
 ## Core Types and Responsibilities
 
