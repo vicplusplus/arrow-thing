@@ -200,7 +200,14 @@ services:
       - Admin__ApiKey=${STAGING_ADMIN_API_KEY}
       - Redis__ConnectionString=redis-staging:6379
       - Loki__Url=http://loki:3100
-      - Auth__Cookies__Domain=${STAGING_Auth__Cookies__Domain:-.staging.arrow-thing.com}
+      # Host-only cookie (no Domain attribute) so the session is scoped to
+      # whichever host the browser sees. Staging's API is reached via a
+      # same-origin Pages Function reverse-proxy at staging.arrow-thing.com
+      # (see pages-staging/functions/api/[[path]].js), so the browser
+      # accepts a cookie scoped to staging.arrow-thing.com. A Domain of
+      # .staging.arrow-thing.com would not match api-staging.arrow-thing.com
+      # (sibling subdomain) and would be silently rejected.
+      - Auth__Cookies__Domain=${STAGING_Auth__Cookies__Domain:-}
       - Auth__Cookies__Secure=true
       - Cors__AllowedOrigins__0=${STAGING_Cors__AllowedOrigins__0:-https://staging.arrow-thing.com}
     healthcheck:
