@@ -135,6 +135,7 @@ public sealed class LeaderboardScreenController : NavigableScene
     /// every list rebuild.
     /// </summary>
     private LeaderboardEntryRow _entryRow;
+    private LeaderboardGlobalEntryRow _globalEntryRow;
 
     protected override KeybindManager.Context NavContext => KeybindManager.Context.Leaderboard;
 
@@ -237,6 +238,17 @@ public sealed class LeaderboardScreenController : NavigableScene
                 OnToggleFavorite = OnToggleFavorite,
                 OnPlay = OnPlayReplay,
                 OnContextMenu = (id, fav, anchor) => _contextMenu.Show(id, fav, anchor),
+                RegisterNameScroll = RegisterNameScroll,
+            }
+        );
+
+        // Per-row builder for global-leaderboard rows (different shape:
+        // play button only, no favorite/ctx; highlight tints the viewer's
+        // own row).
+        _globalEntryRow = new LeaderboardGlobalEntryRow(
+            new LeaderboardGlobalEntryRow.Callbacks
+            {
+                OnPlay = OnPlayGlobalReplay,
                 RegisterNameScroll = RegisterNameScroll,
             }
         );
@@ -1057,83 +1069,13 @@ public sealed class LeaderboardScreenController : NavigableScene
             string highlightGameId = me?.gameId;
             foreach (var entry in lb.entries)
             {
-                var row = CreateGlobalEntryRow(entry, isAllTab, entry.gameId == highlightGameId);
+                var row = _globalEntryRow.Build(entry, isAllTab, entry.gameId == highlightGameId);
                 _list.Add(row);
             }
         }
 
         RebuildEntryNavigator();
         UpdatePlayerPanel(lb, me, api);
-    }
-
-    private VisualElement CreateGlobalEntryRow(
-        GlobalLeaderboardEntry entry,
-        bool showSize,
-        bool highlight
-    )
-    {
-        var row = new VisualElement();
-        row.AddToClassList("lb-entry");
-        if (highlight)
-            row.AddToClassList("lb-entry--highlight");
-
-        // Medal highlights
-        if (entry.rank == 1)
-            row.AddToClassList("lb-entry--gold");
-        else if (entry.rank == 2)
-            row.AddToClassList("lb-entry--silver");
-        else if (entry.rank == 3)
-            row.AddToClassList("lb-entry--bronze");
-
-        // Rank
-        var rankLabel = new Label($"#{entry.rank}");
-        rankLabel.AddToClassList("lb-rank");
-        if (entry.rank == 1)
-            rankLabel.AddToClassList("lb-rank--gold");
-        else if (entry.rank == 2)
-            rankLabel.AddToClassList("lb-rank--silver");
-        else if (entry.rank == 3)
-            rankLabel.AddToClassList("lb-rank--bronze");
-        row.Add(rankLabel);
-
-        // Size (All tab only)
-        if (showSize)
-        {
-            var sizeLabel = new Label($"{entry.boardWidth}x{entry.boardHeight}");
-            sizeLabel.AddToClassList("lb-size");
-            row.Add(sizeLabel);
-        }
-
-        // Time (compact format on All tab)
-        string timeText = showSize
-            ? LeaderboardFormatters.FormatCompactTime(entry.time)
-            : LeaderboardFormatters.FormatTime(entry.time);
-        var timeLabel = new Label(timeText);
-        timeLabel.AddToClassList("lb-time");
-        if (showSize)
-            timeLabel.AddToClassList("lb-time--compact");
-        row.Add(timeLabel);
-
-        // Display name — wrapped for horizontal auto-scroll on overflow
-        var nameWrapper = new VisualElement();
-        nameWrapper.AddToClassList("lb-name-wrapper");
-        var nameLabel = new Label(entry.displayName ?? "");
-        nameLabel.AddToClassList("lb-name");
-        nameWrapper.Add(nameLabel);
-        row.Add(nameWrapper);
-        RegisterNameScroll(nameWrapper, nameLabel);
-
-        // Play button (replay)
-        string capturedGameId = entry.gameId;
-        var playBtn = new Button(() => OnPlayGlobalReplay(capturedGameId));
-        playBtn.AddToClassList("lb-row-btn");
-        var playIcon = new VisualElement();
-        playIcon.AddToClassList("lb-row-btn__icon");
-        playIcon.AddToClassList("lb-play-icon");
-        playBtn.Add(playIcon);
-        row.Add(playBtn);
-
-        return row;
     }
 
     private void UpdatePlayerPanel(
@@ -1220,7 +1162,9 @@ public sealed class LeaderboardScreenController : NavigableScene
 
         // Server stores top-50 snapshots as gzip-base64 strings.
         // Decompress back to the array before deserializing into ReplayData.
-        var replayJson = DecompressSnapshotIfNeeded(result.Data.replayJson);
+        var replayJson = LeaderboardReplayDecompress.DecompressSnapshotIfNeeded(
+            result.Data.replayJson
+        );
         var replay = Newtonsoft.Json.JsonConvert.DeserializeObject<ReplayData>(replayJson);
         if (replay == null)
         {
@@ -1230,39 +1174,6 @@ public sealed class LeaderboardScreenController : NavigableScene
 
         GameSettings.StartReplay(replay);
         SceneNav.Push("ReplayViewer");
-    }
-
-    /// <summary>
-    /// If the replay JSON has a gzip-base64 boardSnapshot (string), decompress it
-    /// back to the JSON array so Newtonsoft can deserialize into List&lt;List&lt;Cell&gt;&gt;.
-    /// </summary>
-    private static string DecompressSnapshotIfNeeded(string replayJson)
-    {
-        try
-        {
-            var obj = Newtonsoft.Json.Linq.JObject.Parse(replayJson);
-            var snapshot = obj["boardSnapshot"];
-            if (snapshot == null || snapshot.Type != Newtonsoft.Json.Linq.JTokenType.String)
-                return replayJson;
-
-            var base64 = (string)snapshot;
-            var compressed = System.Convert.FromBase64String(base64);
-            using var ms = new System.IO.MemoryStream(compressed);
-            using var gz = new System.IO.Compression.GZipStream(
-                ms,
-                System.IO.Compression.CompressionMode.Decompress
-            );
-            using var reader = new System.IO.StreamReader(gz);
-            var snapshotJson = reader.ReadToEnd();
-
-            obj["boardSnapshot"] = Newtonsoft.Json.Linq.JToken.Parse(snapshotJson);
-            return obj.ToString(Newtonsoft.Json.Formatting.None);
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogWarning($"[LeaderboardScreen] Snapshot decompression failed: {e.Message}");
-            return replayJson;
-        }
     }
 
     // --- Navigation ---
