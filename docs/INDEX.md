@@ -30,20 +30,3 @@ How-to guides for setting up the dev environment and running things.
   testing guide.
 - [`ReleaseChecklist.md`](ReleaseChecklist.md) — what to verify before
   cutting a release tag.
-
-## History
-
-Reference snapshots of design decisions. Not kept current — read for
-the "why" of past choices, not the current state.
-
-*(currently empty — `OnlineRoadmap.md`, `CoopRoadmap.md`,
-`AntiCheatDesign.md`, `GameModeRefactor.md` were deleted once their
-content moved into TechnicalDesign.md or became obsolete.)*
-
-## Active
-
-Living docs for in-progress work. Deleted or promoted to Authoritative
-when the work lands.
-
-*(currently empty — the per-feature `TODO.md` workflow was killed in
-PR #151. Larger features now live as GitHub issues plus linked PRs.)*
