@@ -335,29 +335,113 @@ Single playback view. `ReplayPlayer` advances per-frame; the controller dispatch
 
 ### Main Menu (`MainMenu` Scene)
 
-- **`MainMenuController`** — extends `NavigableScene`. Drives a nested state-machine menu with four states (`Root`, `Play`, `Singleplayer`, `Multiplayer`), each rendered as a `menu-panel` container toggled via `screen--hidden`. Static `_persistedState` survives scene reloads so returning from Game or Leaderboard restores the correct sub-menu.
-  - **Root** — Play (green accent), Settings, Quit (desktop only), GitHub/Discord social links.
-  - **Play** — Singleplayer and Multiplayer buttons side by side. Back button returns to Root.
-  - **Singleplayer** — board-size preset grid (Small/Medium/Large/XLarge/Custom) with responsive layout detection via `GeometryChangedEvent`, custom width/height `SnapSlider` panel, Start and Continue (when save exists) side by side, Leaderboard trophy button (top-right). Restores previous size selection from `GameSettings`.
-  - **Multiplayer** — Co-op button (`SceneNav.Push("CoopHub")`). Back button returns to Play.
-  - Escape/Backspace pops back one level at each state. Nav graphs rebuilt per state via `RebuildNavigator()`.
-- **`SettingsController`** — singleton (`DontDestroyOnLoad`, `RuntimeInitializeOnLoadMethod(AfterSceneLoad)`). Exposes `Open()`, `Close()`, `Toggle()`, `IsOpen`, `JustClosed`. Two-column keyboard navigation: icon sidebar tabs (Account, Gameplay, Keybinds, Data, About) linked Left/Right to content items. Every content item in a section has a Left edge back to its tab. `PreUpdate` hook pauses nav when theme dropdown is open (delegates to `CustomDropdown.UpdateKeyboard`). Saves/restores `FocusNavigator.Active` and `KeybindManager.ActiveContext` across open/close. Rebuilds navigator on account form changes (`AccountManager.FormChanged`). `KeybindSettingsSection` builds rebindable keybind rows as a 2×N grid. Keep-trail-after-clear toggle in Gameplay section.
-- **`GameSettings`** (static class, domain layer) — holds `Width`, `Height`, `MaxArrowLength`, `IsSet`, `IsResuming`, and `ResumeData`. Also holds `PlayerPrefs` key constants and defaults for persisted settings (drag threshold, zoom speed, arrow coloring, display name, input binding overrides, keep-trail-after-clear). `DisplayName` (string, in-memory) is loaded from PlayerPrefs at startup by `LeaderboardManager.AutoCreate` and written by `AccountManager`. `GameController` reads from it when `IsSet` is true. `Apply()` sets board params for a new game; `ResumeFromSave()` flags a deferred resume (save loaded later by `GameController`); `SetResumeData(ReplayData)` populates resume data after loading; `Reset()` clears all. Replay viewer support: `IsReplaying`, `ReplaySource` with `StartReplay(replayData)` / `ClearReplay()` methods. Co-op deep-link support: `PendingLobbyCode` (set by `CoopDeepLink`, consumed by `CoopHubController`) and `ActiveLobbyCode` (set by hub, consumed by `CoopGameController`), each with a `Consume*()` helper that returns and clears in one call. Scene transitions use `SceneNav` instead of `ReturnScene` — the stack handles return navigation automatically.
-- **`CoopColorPalette`** (static, domain layer) — fixed 12-color hex palette for co-op player colors. `HexForGuid(Guid)` returns a deterministic default color hashed from the user id. Shared with the server via identical implementation.
-- **`CoopColorPicker`** (view component) — HSV color picker built in code (no UXML). Three `Slider`s (H/S/V) + hex `TextField` + preview swatch. Debounced `OnCommit(string hex)` event. Keyboard-navigable via `GetFocusItems()`. Embedded in the Account tab of `SettingsController` via `coop-color-slot`.
-- **`CoopDeepLink`** (static, view layer) — reads lobby code from `window.location.search` (WebGL via `.jslib`) or `--lobby=XXXXXX` CLI arg (Desktop). Sets `GameSettings.PendingLobbyCode`. Called once at boot from `MainMenuController.OnEnable`.
-- **`CoopHubController`** — scene entry point for the Co-op Hub scene (`NavigableScene` subclass, `Context.CoopHub`). Default panel is the My Lobbies list; Host and Join open as modal overlays. State machine: `List`, `HostModal`, `JoinModal`, `HostingModal`, `DeleteConfirm`. Uses `ApiClient` for REST, `CoopClient` WebSocket for generation progress watching. Filters (All/Active/Completed), rich lobby rows with status dot, Play/Retry/Delete buttons. Narrow layout (< 768px width) toggles `hub--narrow` class. Deep-link prefill via `GameSettings.ConsumePendingLobbyCode()`.
-- **`GameController` co-op mode** — when `GameSettings.ActiveLobbyCode` is set, `GameController` enters co-op mode instead of generating or resuming. Connects `CoopClient` to the lobby, receives `snapshot` binary frame, decodes via `BinarySnapshot.DecodeFull`, renders the board using the existing `BoardView` + `CameraController` + `InputHandler` infrastructure. Creates a `CoopSession` wrapping the client and the decoded `Board`. Wires `InputHandler.onTapAttempt` to `CoopSession.TrySubmitClear` for optimistic local animation + server round-trip. Subscribes to `CoopSession.RemoteCleared` to animate server-confirmed clears (skipping re-animation on our own accepted tap), `RemoteRejectedDep` to bump-reject and roll back our optimistic animation if it was ours, `LobbyCompleted` to disable input and show a placeholder completion message. Emits a `heartbeat` envelope every 15 s (accumulating delta in `Update`). On `Disconnected`, drives a 1/2/4/8/16/30 s exponential reconnect loop that calls `CoopClient.ReconnectAsync` and re-issues `hello`; `ReturnToModeSelect` disables the loop so back-button exits don't re-establish the socket. Timer, retry, replay recorder, save, and victory are skipped.
-- **`CoopSession`** (view layer) — wraps a `CoopClient` and a local `Board`. Routes incoming wire messages (`cleared`, `rejected_dep`, `rejected_race`, `rejected_rate`, `lobby_completed`, `roster_full`, `roster_patch`) into typed C# events (`RemoteCleared`, `RemoteRejectedDep`, `LocalRejectedRace`, `LocalRejectedRate`, `LobbyCompleted`, `RosterUpdated`). `TrySubmitClear(Cell, Vector3)` checks local state, bumps an internal `_nextClientSeq`, and sends a `clear_attempt` payload. Each event payload carries `IsLocal` so the view layer can suppress duplicate animations when the server accepts our own tap. Applies accepted clears to the local `Board` via `Board.RemoveArrow` to keep local and server state in sync. Maintains `Roster: IReadOnlyDictionary<Guid, CoopPlayer>` updated from incremental `roster_patch` broadcasts; `cleared` payloads carrying `newClearCount`/`color`/`displayName` update the roster eagerly for snappy sidebar response.
-- **`CoopPlayer`** (view layer) — immutable struct representing one roster entry: id, display name, color (parsed from hex), clear count, accumulated solve millis, online/local flags. `With(...)` helper for field overrides.
-- **`CoopPlayerTimer`** (view layer) — per-player solve timer for co-op mode. Starts on the first local accepted clear, ticks only while `Application.isFocused`, emits `timer_update` every 5 s (plus a prompt ~100 ms emit right after each of our own accepted clears so the sidebar updates without waiting a full tick). Constructor accepts a stubbable emit callback + clock provider for EditMode testing.
-- **`CoopSidebar`** (view layer) — live roster panel attached to the HUD root in co-op mode. Shows top 10 by clear count with the own row pinned at top even outside top 10; `Show all (N)` button opens a scrollable modal with every player. Narrow viewports (< 500 px wide) collapse into a player-count pill top-right that opens the modal on tap. Row cells: color dot, display name, MM:SS timer, `#N` clear-count badge; offline rows dim to 45 %. Re-renders on `CoopSession.RosterUpdated`.
-- **`CoopResultsScreen`** (view layer, Phase 8) — full-roster results overlay mounted on `CoopSession.LobbyCompleted` (and by `GameController.CoopCompletedSetup` when reopening a Completed lobby from the hub). Rows sorted by `ClearCount DESC`, ties broken by `AccumulatedMillis ASC`. Top 3 rows medal-tinted; own row highlighted. Buttons: View Replay (fetches v6 via `ApiClient.GetLobbyReplayAsync`, enters Replay scene), Play Again (`SceneNav.Replace("CoopHub")`), Menu (`SceneNav.Replace("MainMenu")`).
-- **`ReplayData` v6** — Phase 8 adds nullable `roster: List<ReplayRosterEntry>` and nullable `playerId: Guid?` on `ReplayEvent`. Both use `NullValueHandling.Ignore` so solo replays stay byte-for-byte compatible with v5 readers. `ReplayVersionPolicy.MinReplayVersion` stays at 4 — the bump isn't a break.
-- **`ReplayViewController` v6 support** — reads `replay.roster` into a playerId→Color map at init. `ExecuteEvent(Clear)` looks up the clearer's color when `playerId` is set and forwards it to `BoardView.ClearArrowAnimated(flashColor)` + `TapIndicatorPool.Spawn(worldPos, color)`, so co-op replays show each clear in the clearer's color. Solo replays (playerId null) skip the lookup entirely.
-- **`CoopClient` reconnect** — `ConnectAsync` stashes `(baseWsUrl, code, token)`. `ReconnectAsync()` tears down the existing socket (desktop `ClientWebSocket.Dispose` or WebGL `CoopWS_Close`) and re-runs `ConnectAsync` with the saved params. Caller is responsible for re-issuing `hello` after `Connected` fires.
-- **`AccountManager`** — manages the account forms embedded in the settings screen. Supports display name editing offline via `EditableLabel` (saved to PlayerPrefs and `GameSettings.DisplayName`). When a server is reachable, also handles login, register, verify code, forgot/reset password, change email, confirm email change, and change password flows. All form fields are `LabeledField` instances. Navigation between forms is managed internally; `MainMenuController` calls `CancelEditing()` on settings close.
-- **`SaveManager`** (static class, view layer) — saves/loads/deletes the in-progress game JSON at `Application.persistentDataPath/savegame.json`. Wraps `Newtonsoft.Json` serialization. `LoadAsync` coroutine runs file I/O and deserialization on a background thread (falls back to synchronous on WebGL). Safe: catches I/O exceptions, logs warnings, auto-deletes on corruption.
+#### `MainMenuController`
+
+- Drives a nested state-machine menu with four panels: Root, Play, Singleplayer, Multiplayer.
+- Static `_persistedState` survives scene reloads so returning from Game or Leaderboard lands in the right sub-menu.
+- Panel contents:
+  - **Root** — Play, Settings, Quit (desktop only), GitHub / Discord links.
+  - **Play** — Singleplayer + Multiplayer.
+  - **Singleplayer** — board-size preset grid, custom width / height sliders, Start, Continue (when a save exists), Leaderboard. Restores last selection from `GameSettings`.
+  - **Multiplayer** — Co-op (`SceneNav.Push("CoopHub")`).
+
+#### `SettingsController`
+
+- Singleton (`DontDestroyOnLoad`, `RuntimeInitializeOnLoadMethod(AfterSceneLoad)`) — opens over any scene as an overlay.
+- Surface: `Open()`, `Close()`, `Toggle()`, `IsOpen`, `JustClosed` (one-frame flag other controllers check to skip their own Cancel handling).
+- Sections: Account, Gameplay, Keybinds, Data, About.
+
+#### `GameSettings` (static, domain layer)
+
+- Carries scene-transition state: board params (`Width`, `Height`, `MaxArrowLength`), resume flags (`IsSet`, `IsResuming`, `ResumeData`), replay viewer params (`IsReplaying`, `ReplaySource`), co-op deep-link / hub handoff (`PendingLobbyCode`, `ActiveLobbyCode`).
+- Holds `PlayerPrefs` key constants and defaults for persisted settings (drag threshold, zoom speed, arrow coloring, display name, keybind overrides, keep-trail-after-clear).
+- Methods: `Apply` (new game), `ResumeFromSave` (deferred resume), `SetResumeData` (after async load), `Reset`, `StartReplay` / `ClearReplay`, `Consume*LobbyCode` (return-and-clear helpers).
+
+#### `CoopColorPalette` (static, domain layer)
+
+- Fixed 12-color hex palette for co-op players. `HexForGuid(Guid)` returns a deterministic default color hashed from the user id. Shared with the server.
+
+#### `CoopColorPicker`
+
+- HSV color picker built in code (no UXML): H / S / V sliders + hex `TextField` + preview swatch. Debounced `OnCommit(string hex)` event.
+- Embedded in the Account tab of `SettingsController` via `coop-color-slot`.
+
+#### `CoopDeepLink` (static)
+
+- Reads a lobby code from `window.location.search` (WebGL via `.jslib`) or `--lobby=XXXXXX` CLI arg (Desktop). Sets `GameSettings.PendingLobbyCode`. Called once at boot.
+
+#### `CoopHubController`
+
+- Scene entry point for the Co-op Hub. Default panel is the My Lobbies list; Host and Join open as modal overlays.
+- Filters (All / Active / Completed), rich lobby rows with status dot, Play / Retry / Delete actions.
+- Uses `ApiClient` for REST and `CoopClient` for WebSocket generation-progress watching.
+- Deep-link prefill via `GameSettings.ConsumePendingLobbyCode()`.
+
+#### `GameController` co-op mode
+
+- When `GameSettings.ActiveLobbyCode` is set, `GameController` enters co-op mode instead of generating or resuming.
+- Connects `CoopClient` to the lobby, decodes the binary `snapshot` frame via `BinarySnapshot.DecodeFull`, and renders through the standard `BoardView` + `CameraController` + `InputHandler` stack.
+- Wraps the client and decoded `Board` in a `CoopSession`. Wires taps to `CoopSession.TrySubmitClear` for optimistic local animation + server round-trip. Subscribes to remote-clear, remote-rejection, lobby-completed, and disconnect events.
+- Emits a `heartbeat` envelope every 15 s. On disconnect, exponential reconnect (1 / 2 / 4 / 8 / 16 / 30 s) via `CoopClient.ReconnectAsync` and re-issued `hello`.
+- Skips timer, retry, replay recorder, save, and victory.
+
+#### `CoopSession`
+
+- Wraps a `CoopClient` and a local `Board`.
+- Translates wire messages (`cleared`, `rejected_dep`, `rejected_race`, `rejected_rate`, `lobby_completed`, `roster_full`, `roster_patch`) into typed C# events (`RemoteCleared`, `RemoteRejectedDep`, `LocalRejectedRace`, `LocalRejectedRate`, `LobbyCompleted`, `RosterUpdated`).
+- `TrySubmitClear(Cell, Vector3)` bumps an internal client seq and sends a `clear_attempt` payload.
+- Each event payload carries `IsLocal` so the view can suppress duplicate animations when the server accepts our own tap.
+- Applies accepted clears to the local `Board` via `Board.RemoveArrow` to keep client and server in sync.
+- Maintains `Roster: IReadOnlyDictionary<Guid, CoopPlayer>`, updated from `roster_patch` broadcasts and eager-updated from `cleared` payloads carrying `newClearCount` / `color` / `displayName`.
+
+#### `CoopPlayer`
+
+- Immutable struct: id, display name, color (parsed from hex), clear count, accumulated solve millis, online / local flags. `With(...)` helper for field overrides.
+
+#### `CoopPlayerTimer`
+
+- Per-player solve timer for co-op. Starts on the first local accepted clear, ticks only while `Application.isFocused`.
+- Emits `timer_update` every 5 s, plus a ~100 ms prompt emit after each of our accepted clears so the sidebar updates without waiting a full tick.
+- Constructor accepts a stubbable emit callback + clock provider for EditMode testing.
+
+#### `CoopSidebar`
+
+- Live roster panel attached to the HUD root in co-op. Shows top 10 by clear count with the local player's row pinned even when outside the top 10.
+- `Show all (N)` button opens a scrollable modal with every player.
+- Narrow viewports (< 500 px) collapse into a player-count pill that opens the modal on tap.
+- Re-renders on `CoopSession.RosterUpdated`.
+
+#### `CoopResultsScreen`
+
+- Full-roster results overlay mounted on `CoopSession.LobbyCompleted` (and by `GameController.CoopCompletedSetup` when reopening a Completed lobby).
+- Rows sorted by `ClearCount DESC`, ties broken by `AccumulatedMillis ASC`. Top 3 medal-tinted; own row highlighted.
+- Buttons: View Replay (fetches v6 via `ApiClient.GetLobbyReplayAsync`, enters Replay scene), Play Again (`SceneNav.Replace("CoopHub")`), Menu (`SceneNav.Replace("MainMenu")`).
+
+#### `ReplayData` v6
+
+- Adds nullable `roster: List<ReplayRosterEntry>` and nullable `playerId: Guid?` on `ReplayEvent`. Both use `NullValueHandling.Ignore`, so solo replays stay byte-for-byte compatible with v5 readers. `MinReplayVersion` stays at 4.
+
+#### `ReplayViewController` v6 support
+
+- Reads `replay.roster` into a `playerId → Color` map at init.
+- `ExecuteEvent(Clear)` looks up the clearer's color when `playerId` is set and forwards it to `BoardView.ClearArrowAnimated(flashColor)` + `TapIndicatorPool.Spawn(worldPos, color)`, so co-op replays show each clear in the clearer's color.
+- Solo replays (playerId null) skip the lookup.
+
+#### `CoopClient` reconnect
+
+- `ConnectAsync` stashes `(baseWsUrl, code, token)`. `ReconnectAsync()` tears down the existing socket and re-runs `ConnectAsync` with the saved params. Caller re-issues `hello` after `Connected` fires.
+
+#### `AccountManager`
+
+- Manages the account forms embedded in the settings screen.
+- Offline display-name editing via `EditableLabel` (saved to `PlayerPrefs` and `GameSettings.DisplayName`).
+- When a server is reachable, also handles: login, register, verify code, forgot / reset password, change email, confirm email change, change password.
+
+#### `SaveManager` (static)
+
+- Saves / loads / deletes the in-progress game JSON at `Application.persistentDataPath/savegame.json`.
+- `LoadAsync` runs file I/O + deserialization on a background thread (synchronous fallback on WebGL).
+- Catches I/O exceptions, logs warnings, auto-deletes on corruption.
 
 ### Scene Wiring
 
