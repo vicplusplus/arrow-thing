@@ -38,8 +38,6 @@ Three layers, each with a tight responsibility:
 
 ## Core Types and Responsibilities
 
-Top-down: gameplay fundamentals first, then a lifecycle overview, then each phase in detail (generation, live gameplay, replays + leaderboards).
-
 ### Gameplay fundamentals
 
 The pieces every mode operates on: the grid, the things on it, and what happens when the player touches them.
