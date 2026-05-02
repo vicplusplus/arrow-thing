@@ -254,6 +254,105 @@ How a finished run becomes a replay, gets verified, and lands on a leaderboard. 
 
 ## View Layer (`Assets/Scripts/View/`)
 
+### Scene flow
+
+Five Unity scenes; `SceneNav` (single-load mode) drives every transition. `SettingsController` is a `DontDestroyOnLoad` overlay, not a scene — it can open over any of them.
+
+```mermaid
+flowchart LR
+    boot([App start]) --> mm[MainMenu]
+    mm -->|Play / Continue| game[Game]
+    mm -->|Leaderboard| lb[Leaderboard]
+    mm -->|Multiplayer → Co-op| ch[CoopHub]
+    ch -->|Play / Resume lobby| game
+    lb -->|Watch replay| rv[ReplayViewer]
+    game -->|Back / Quit| mm
+    game -->|Victory → View leaderboard| lb
+    ch -->|Back| mm
+    lb -->|Back| mm
+    rv -->|Back| lb
+    settings[(SettingsController<br/>overlay)] -.->|opens over any scene| mm
+```
+
+#### MainMenu
+
+State machine across four panels in one scene; `_persistedState` (static) survives scene reloads so returning from Game lands back in the right sub-menu.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Root
+    Root --> Play : Play
+    Root --> Root : Settings (overlay)
+    Root --> [*] : Quit (desktop)
+    Play --> Root : Back / Esc
+    Play --> Singleplayer
+    Play --> Multiplayer
+    Singleplayer --> Play : Back / Esc
+    Singleplayer --> [*] : Start → Game
+    Singleplayer --> [*] : Continue → Game (resume)
+    Singleplayer --> [*] : Leaderboard → Leaderboard
+    Multiplayer --> Play : Back / Esc
+    Multiplayer --> [*] : Co-op → CoopHub
+```
+
+#### Game
+
+`GameController` picks an `IGameMode` implementation based on `GameSettings`, then delegates the loop. Each mode owns its own setup, tap-handling, and exit path.
+
+```mermaid
+flowchart TD
+    enter([Game scene loads]) --> pick{GameController<br/>CreateMode}
+    pick -->|Classic| classicSetup[ClassicMode.Setup]
+    pick -->|Endless| endlessSetup[EndlessMode.Setup]
+    pick -->|Co-op<br/>ActiveLobbyCode set| coopSetup[CoopMode.Setup]
+
+    classicSetup --> cinit{Resuming?}
+    cinit -->|Yes| crestore[Restore board from save]
+    cinit -->|No| cgen[Generate board]
+    crestore --> cplay[Inspection → Solving<br/>ClassicRun]
+    cgen --> cplay
+    cplay -->|All cleared| cwin[VictoryController<br/>submit + record]
+    cplay -->|X / Quit| cleave[Save modal<br/>or leave]
+
+    endlessSetup --> egen[Generate empty board]
+    egen --> eloop[EndlessRun loop<br/>Advance + HandleTap]
+    eloop -->|Topout| etopout[Topout result<br/>submit endless score]
+    eloop -->|Quit| eleave[Leave]
+
+    coopSetup --> cwait[CoopClient connects<br/>receive snapshot]
+    cwait --> cmplay[CoopSession loop<br/>taps + remote events]
+    cmplay -->|LobbyCompleted| cmresult[CoopResultsScreen]
+    cmplay -->|Disconnected| crecon[Reconnect<br/>1/2/4/8/16/30s]
+    crecon --> cmplay
+```
+
+#### CoopHub
+
+List view by default; Host and Join open as modal overlays. State machine drives panel visibility.
+
+```mermaid
+stateDiagram-v2
+    [*] --> List
+    List --> HostModal : Host
+    List --> JoinModal : Join
+    List --> DeleteConfirm : Delete row
+    List --> [*] : Play row → Game
+    HostModal --> List : Cancel
+    HostModal --> HostingModal : Create
+    HostingModal --> [*] : Generated → Game
+    JoinModal --> List : Cancel
+    JoinModal --> [*] : Joined → Game
+    DeleteConfirm --> List : Yes / No
+```
+
+#### Leaderboard
+
+No internal state machine — top tabs (size + Local/Global), sort buttons, and a scrollable entry list. Row click opens a context menu; the play action pushes ReplayViewer.
+
+#### ReplayViewer
+
+Single playback view. `ReplayPlayer` advances per-frame; the controller dispatches clear / reject events to `BoardView`. UI is a controls bar (play/pause, seek, speed, highlight toggle); no sub-states.
+
 ### Main Menu (`MainMenu` Scene)
 
 - **`MainMenuController`** — extends `NavigableScene`. Drives a nested state-machine menu with four states (`Root`, `Play`, `Singleplayer`, `Multiplayer`), each rendered as a `menu-panel` container toggled via `screen--hidden`. Static `_persistedState` survives scene reloads so returning from Game or Leaderboard restores the correct sub-menu.
