@@ -159,7 +159,7 @@ Endless follows the same Run pattern as Classic but adds a sim-time clock, a pus
 
 ##### `EndlessRun` (`sealed class`)
 
-- Pure-C# endless-mode game loop. Owns the entire run lifecycle: sim-time clock, push schedule, garbage meter, commit pipeline, clear handling, score accumulation. Same class drives the live `EndlessModeController` and the future replay verifier — no parallel simulator.
+- Pure-C# endless-mode game loop. Owns the entire run lifecycle: sim-time clock, push schedule, garbage meter, commit pipeline, clear handling, score accumulation. Same class drives the live `EndlessModeController` and the future replay verifier.
 - Constructed with `(Board, spawnSeed, paletteCount, EndlessRun.GenerationSettings)`.
 - Driving APIs:
   - `Advance(float deltaTime)` — caller pushes time; the run fires any push ticks + commits whose sim-time threshold has been crossed.
