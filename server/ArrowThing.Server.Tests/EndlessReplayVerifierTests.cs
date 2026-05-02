@@ -21,7 +21,7 @@ public class EndlessReplayVerifierTests
     private const int DefaultBoardWidth = 10;
     private const int DefaultBoardHeight = 10;
     private const int DefaultPaletteCount = 6;
-    private const int CurrentTuningVersion = EndlessTuning.CurrentVersion;
+    private const int CurrentTuningVersion = EndlessRun.GenerationSettings.CurrentVersion;
 
     /// <summary>
     /// Drives an <see cref="EndlessRun"/> forward in fixed-step ticks until
@@ -40,8 +40,8 @@ public class EndlessReplayVerifierTests
     )
     {
         var board = new Board(width, height);
-        var tuning = EndlessTuning.ForVersion(tuningVersion);
-        var run = new EndlessRun(board, seed, paletteCount, tuning);
+        var settings = EndlessRun.GenerationSettings.ForVersion(tuningVersion);
+        var run = new EndlessRun(board, seed, paletteCount, settings);
 
         // Step the run forward. 0.25 s per tick is comfortably below any
         // push interval at default tuning, so we won't accidentally skip
@@ -96,7 +96,7 @@ public class EndlessReplayVerifierTests
             seed = seed,
             boardWidth = width,
             boardHeight = height,
-            maxArrowLength = tuning.EndlessMaxArrowLength,
+            maxArrowLength = settings.EndlessMaxArrowLength,
             tuningsVersion = tuningVersion,
             clears = run.ClearCount,
             longestCombo = run.LongestCombo,

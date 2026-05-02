@@ -32,9 +32,10 @@ public class EndlessScore
     public int BoardHeight { get; set; }
 
     /// <summary>
-    /// Tuning version this run was recorded under (see <c>EndlessTuning.ForVersion</c>).
-    /// The verifier loads the matching historical tuning so old replays don't
-    /// break when the live tuning evolves.
+    /// Settings version this run was recorded under (see
+    /// <c>EndlessRun.GenerationSettings.ForVersion</c>). The verifier loads the
+    /// matching historical settings so old replays don't break when the live
+    /// settings evolve.
     /// </summary>
     public int TuningsVersion { get; set; }
 

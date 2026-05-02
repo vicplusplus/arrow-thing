@@ -30,8 +30,9 @@ public sealed class EndlessModeController : MonoBehaviour
     /// <summary>
     /// Pause between topout detection and the result screen appearing. Lets
     /// the player see the final saturated board state instead of being
-    /// dropped straight into a modal. View-only; not part of EndlessTuning
-    /// because the server simulator doesn't care.
+    /// dropped straight into a modal. View-only; not part of
+    /// <see cref="EndlessRun.GenerationSettings"/> because the server simulator
+    /// doesn't care.
     /// </summary>
     [SerializeField]
     private float topoutResultDelaySeconds = 2f;
@@ -115,12 +116,14 @@ public sealed class EndlessModeController : MonoBehaviour
         if (_clearsLabel != null)
             _clearsLabel.text = "0";
 
-        // Construct the run. Tuning version is the current one shipped by
+        // Construct the run. Settings version is the current one shipped by
         // the client; replay verifier reads the version from the replay
-        // payload to pick the right historical tuning.
-        var tuning = EndlessTuning.ForVersion(EndlessTuning.CurrentVersion);
+        // payload to pick the right historical settings.
+        var settings = EndlessRun.GenerationSettings.ForVersion(
+            EndlessRun.GenerationSettings.CurrentVersion
+        );
         int paletteCount = _palette?.Count ?? 0;
-        _run = new EndlessRun(board, spawnSeed, paletteCount, tuning);
+        _run = new EndlessRun(board, spawnSeed, paletteCount, settings);
 
         // View reactions to run events.
         _run.PendingSpawned += OnPendingSpawned;
