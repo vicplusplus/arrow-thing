@@ -256,7 +256,7 @@ How a finished run becomes a replay, gets verified, and lands on a leaderboard. 
 
 ### Scene flow
 
-Five Unity scenes; `SceneNav` (single-load mode) drives every transition. `SettingsController` is a `DontDestroyOnLoad` overlay, not a scene — it can open over any of them.
+Five Unity scenes; `SceneNav` (single-load mode) drives every transition. Back-navigation arrows (Esc / back-button → Pop, modal Cancel → close, in-game Quit → MainMenu) are omitted from the diagrams — every scene and modal supports them. `SettingsController` is a `DontDestroyOnLoad` overlay, not a scene; it can open over any of them.
 
 ```mermaid
 flowchart LR
@@ -266,12 +266,7 @@ flowchart LR
     mm -->|Multiplayer → Co-op| ch[CoopHub]
     ch -->|Play / Resume lobby| game
     lb -->|Watch replay| rv[ReplayViewer]
-    game -->|Back / Quit| mm
     game -->|Victory → View leaderboard| lb
-    ch -->|Back| mm
-    lb -->|Back| mm
-    rv -->|Back| lb
-    settings[(SettingsController<br/>overlay)] -.->|opens over any scene| mm
 ```
 
 #### MainMenu
@@ -282,22 +277,18 @@ State machine across four panels in one scene; `_persistedState` (static) surviv
 stateDiagram-v2
     [*] --> Root
     Root --> Play : Play
-    Root --> Root : Settings (overlay)
     Root --> [*] : Quit (desktop)
-    Play --> Root : Back / Esc
     Play --> Singleplayer
     Play --> Multiplayer
-    Singleplayer --> Play : Back / Esc
     Singleplayer --> [*] : Start → Game
     Singleplayer --> [*] : Continue → Game (resume)
     Singleplayer --> [*] : Leaderboard → Leaderboard
-    Multiplayer --> Play : Back / Esc
     Multiplayer --> [*] : Co-op → CoopHub
 ```
 
 #### Game
 
-`GameController` picks an `IGameMode` implementation based on `GameSettings`, then delegates the loop. Each mode owns its own setup, tap-handling, and exit path.
+`GameController` picks an `IGameMode` implementation based on `GameSettings`, then delegates the loop. Each mode owns its own setup, tap-handling, and terminal state.
 
 ```mermaid
 flowchart TD
@@ -312,12 +303,10 @@ flowchart TD
     crestore --> cplay[Inspection → Solving<br/>ClassicRun]
     cgen --> cplay
     cplay -->|All cleared| cwin[VictoryController<br/>submit + record]
-    cplay -->|X / Quit| cleave[Save modal<br/>or leave]
 
     endlessSetup --> egen[Generate empty board]
     egen --> eloop[EndlessRun loop<br/>Advance + HandleTap]
     eloop -->|Topout| etopout[Topout result<br/>submit endless score]
-    eloop -->|Quit| eleave[Leave]
 
     coopSetup --> cwait[CoopClient connects<br/>receive snapshot]
     cwait --> cmplay[CoopSession loop<br/>taps + remote events]
@@ -328,21 +317,17 @@ flowchart TD
 
 #### CoopHub
 
-List view by default; Host and Join open as modal overlays. State machine drives panel visibility.
+List view by default; Host and Join open as modal overlays. Delete-row also opens a confirmation modal (omitted from the diagram).
 
 ```mermaid
 stateDiagram-v2
     [*] --> List
     List --> HostModal : Host
     List --> JoinModal : Join
-    List --> DeleteConfirm : Delete row
     List --> [*] : Play row → Game
-    HostModal --> List : Cancel
     HostModal --> HostingModal : Create
     HostingModal --> [*] : Generated → Game
-    JoinModal --> List : Cancel
     JoinModal --> [*] : Joined → Game
-    DeleteConfirm --> List : Yes / No
 ```
 
 #### Leaderboard
