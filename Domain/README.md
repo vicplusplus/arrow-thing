@@ -6,7 +6,7 @@ Unity-independent domain layer for Arrow Thing. Pure C# game logic
 
 ## Layout
 
-The single source of truth for domain `.cs` files is the Unity local package:
+Domain `.cs` files live in the Unity local package; everything else references them from there:
 
 ```
 Packages/com.arrowthing.domain/
@@ -52,8 +52,8 @@ Unity assembly definitions are folder-scoped: an `.asmdef` cannot include
 sources from outside its own subtree. Putting the sources at the repo-root
 `Domain/` directory and trying to glob them from the asmdef does not work,
 and symlinks were ruled out (Windows CI runners choke on them). Co-locating
-the sources with the asmdef is the only single-source-of-truth layout that
-works without symlinks; the standalone csproj at `Domain/` reaches in.
+the sources with the asmdef is the only no-duplication layout that works
+without symlinks; the standalone csproj at `Domain/` reaches in.
 
 ## Constraints / forbidden references
 

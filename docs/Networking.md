@@ -2,7 +2,7 @@
 
 How the Unity client picks an API base URL and a WebSocket base URL for
 each of the four environments we ship into. Resolution lives in three
-places — this doc is the index, the code is the source of truth.
+places — this doc is the index, the code is what actually runs.
 
 ## Environments
 

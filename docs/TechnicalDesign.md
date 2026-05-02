@@ -19,36 +19,47 @@ This document is the implementation-facing counterpart to [`GDD.md`](GDD.md).
 
 ## Architecture Overview
 
-- Domain layer (Unity-independent):
-  - Sources live in the Unity local package at `Packages/com.arrowthing.domain/Runtime/`. This is the single source of truth.
+Three layers, each with a tight responsibility:
+
+- **Domain layer (Unity-independent)** — the game logic core. Board state, arrow data, generation, validation. Both the client and the server depend on it so they evaluate the same rules.
+  - Sources live in the Unity local package at `Packages/com.arrowthing.domain/Runtime/`.
   - Builds standalone via `Domain/ArrowThing.Domain.csproj` (`netstandard2.1`), which the server solution references. Unity sees the same files via the package's `.asmdef` (`noEngineReferences: true`).
-  - Contains board state, arrow data, and generation logic. No `UnityEngine`, no `Unity.*`, no `Microsoft.Extensions.*` — enforced by `.github/workflows/domain-ci.yml`.
+  - No `UnityEngine`, no `Unity.*`, no `Microsoft.Extensions.*` — enforced by `.github/workflows/domain-ci.yml`.
   - Tests use Unity Test Framework / NUnit in `Assets/Tests/EditMode/`.
-- Unity adapter layer (Unity-dependent):
-  - Input handling, rendering, animation, scene wiring, and UI.
-  - Should translate user actions to domain operations and reflect resulting state.
-  - Should avoid owning gameplay rules.
+
+- **Client (Unity)** — the view layer and network client to the server. Input handling, rendering, animation, scene wiring, UI; HTTP + WebSocket calls for accounts, leaderboards, and co-op.
+  - Translates user actions into domain operations and reflects the resulting state.
+  - Does not own gameplay rules — defers to the domain layer for validation, and defers to the server for anything that has to be authoritative across players.
+
+- **Server (ASP.NET Core)** — the enforcer, global store, and facilitator for multiplayer services. Backed by Postgres + Redis, with a separate worker for async replay verification.
+  - References the Domain layer so it validates scores, replays, and co-op moves with the same rules the client used.
+  - Owns the global state the client cannot be trusted with: accounts, leaderboards, replay storage, co-op lobby and session state.
+  - Server source lives under `server/`. Operational details (local bring-up, VPS rotation) live under `server/docs/`; architectural details are in the rest of this document.
 
 ## Core Types and Responsibilities
 
-### `Cell` (`readonly struct`)
+### Gameplay fundamentals
+
+The pieces every mode operates on: the grid, the things on it, and what happens when the player touches them.
+
+#### `Cell` (`readonly struct`)
 
 - Immutable value type with `X`, `Y`. Y increases upward.
 - Implements `IEquatable<Cell>` for use in `HashSet<Cell>` and `Dictionary` keying.
 
-### `Arrow.Direction` (`enum`)
+#### `Arrow.Direction` (`enum`)
 
 - Values: `Up`, `Right`, `Down`, `Left`.
 - Nested inside `Arrow`. Used for ray traversal and cycle detection.
 
-### `Arrow` (`sealed class`)
+#### `Arrow` (`sealed class`)
 
 - Represents one arrow as an ordered list of contiguous cells.
 - Invariant: at least 2 cells.
 - `HeadCell` is `Cells[0]`. `HeadDirection` is derived from the vector `Cells[0] → Cells[1]` and points **opposite** to that segment.
 - `GetDirectionStep(Direction)` converts a direction to a `(dx, dy)` step for ray traversal.
 
-### `Board` (`sealed class`)
+#### `Board` (`sealed class`)
 
 - Grid dimensions (`Width`, `Height`) and `List<Arrow> Arrows`.
 - Owns `Arrow[,] _occupancy`, a dependency graph (`_dependsOn`, `_dependedOnBy`), and a spatial ray index (per-row/per-column lists of arrow heads grouped by direction), all maintained atomically in `AddArrow`/`RemoveArrow`.
@@ -62,132 +73,55 @@ This document is the implementation-facing counterpart to [`GDD.md`](GDD.md).
 - `AnyArrowWithRayThroughBitset(Cell, ulong[])` — internal query used by cycle detection during generation. Uses the spatial ray index to find arrows whose forward ray crosses a cell, testing membership via O(1) bit-check against a `ulong[]` bitset instead of `HashSet.Contains`.
 - `RestoreArrowsIncremental(IReadOnlyList<Arrow>)` — coroutine for restoring a saved board from a snapshot. Phase 1 places arrows into occupancy and ray index (yielding after each for progress reporting). Phase 2 builds the dependency graph in one forward-ray pass (yielding after each arrow). Much faster than calling `AddArrow` individually because it avoids the per-arrow reverse-dependency scan.
 
-### `GameTimer` (`sealed class`)
+#### `TapResult` (`enum`)
 
-- Two-phase timer: inspection countdown followed by solve timer. Pure C# — no Unity dependency.
-- Phases: `Inspection → Solving → Finished`. Driven by `Tick(double current)` for display updates.
-- `StartSolve(current)` transitions from inspection to solving. `Finish(current)` ends the solve.
-- `Resume(current, priorElapsed)` skips inspection and restores the timer to a previously saved solve-elapsed offset, used when loading a saved game.
-- Display during play uses frame time (`Time.timeAsDouble`). Final precise time uses input-event timestamps (via `InputAction.canceled` callback) to avoid frame-boundary imprecision.
-- Fires `PhaseChanged` event on transitions.
+- Domain-level outcome of a single tap on the board, shared across all modes. Values: `Missed`, `Blocked`, `Cleared`.
+- "First-clear" and "last-clear" are deliberately not part of this vocabulary — they're derivable from the run's own counters (`ClassicRun.ClearedCount` / `IsCompleted`, `EndlessRun.ClearCount`) and announced via `BoardCleared` events. Keeping the result enum small avoids duplicate truth between view-side and run-side bookkeeping.
 
-### `ReplayEvent` (`sealed class`)
+#### `Tap` (`readonly struct`, View)
 
-- One entry in the save/replay event log. Fields vary by event type; unused fields are omitted from JSON.
-- `seq` — monotonically increasing, defines event order (timestamps can tie at e.g. `start_solve + clear`).
-- `type` — string constant from `ReplayEventType` (e.g. `"clear"`, `"session_leave"`, `"topout"`).
-- `posX`, `posY` — float grid coordinates of the tap (1 unit per cell, origin at the board corner). Identical numerically to the legacy world-space coords because `BoardCoords` is 1:1, so older replays read straight through. Recorded for `clear`, `reject`, `miss`. Cell derived inside the run via `Math.Round`.
-- `timestamp` — ISO 8601 UTC string. Present on all events. Classic / coop solve-relative timing is derived by subtracting the `start_solve` timestamp, excluding `session_leave`→`session_rejoin` gaps.
-- `simTime` — float seconds on the run's deterministic clock (v7+). Endless writes this so the replay verifier can reproduce the time-driven loop without wall-clock noise from pauses / focus loss; null on classic / coop events.
-- `playerId` — co-op attribution (v6+). Null on solo replays.
+- Bundles input + outcome of a single tap, surfaced by `InputHandler` to the active game mode via the `OnTap` callback. Fields: `Result` (`TapResult`), `Cell`, `GridPos` (Vector3, identical numerically to world pos because `BoardCoords` is 1:1), `Arrow` (null for `Missed`), `WallTimeSeconds`.
+- The mode generally forwards the tap into its `Run` domain object; `InputHandler` itself does not touch `GameTimer` or `ReplayRecorder`.
 
-### `ReplayEventType` (`static class`)
-
-- String constants for all event types: `session_start`, `session_leave`, `session_rejoin`, `start_solve`, `clear`, `reject`, `miss`, `end_solve`, `topout`.
-- Uses strings (not enum) for human-readable JSON serialization.
-
-### `ReplayData` (`sealed class`)
-
-- Full save/replay record for one game session, regardless of mode (classic, coop, endless).
-- Contains: `version` (replay schema version), `gameId` (UUID), `mode` (`GameMode` discriminator — Classic / Coop / Endless, defaults to Classic for pre-v7 readers), `seed`, board dimensions, `inspectionDuration` (classic), `gameVersion`, `boardSnapshot` (initial arrow configuration; null for endless), `List<ReplayEvent> events`, `finalTime` (-1 = in-progress), endless-only `tuningsVersion` / `clears` / `longestCombo` / `durationSeconds`, co-op `roster`.
-- `version` history: v1 = initial; v2 = `boardSnapshot`; v3 = `gameVersion`; v4 = post-RNG rewrite (replays from <v4 cannot be regenerated deterministically and are rejected by `ReplayVersionPolicy`); v6 = co-op `roster` + `playerId`; v7 = universal-format unification (added `mode`, endless stat fields, per-event `simTime`). Bump on any change to generation, RNG, or verification semantics — never reuse an old value.
-- `boardSnapshot` — each inner list is one arrow's cells in head-to-tail order. Null for endless (board grows from empty during the run, reproduced via `EndlessRun`'s deterministic spawn loop).
-- `ComputedSolveElapsed` — derived property that sums active solve intervals from event timestamps, excluding `session_leave`→`session_rejoin` gaps. Used by classic `GameTimer.Resume`.
-- Serializes to JSON via `Newtonsoft.Json`. Classic saves stored at `Application.persistentDataPath/savegame.json`; endless replays held in memory until topout submission (no resume).
-
-### `ReplayRecorder` (`sealed class`)
-
-- Accumulates `ReplayEvent`s during play, auto-increments `seq`.
-- Single set of tap-recording methods: `RecordClear(posX, posY, simTime?)`, `RecordReject(...)`, `RecordMiss(...)`. Endless passes `simTime`; classic / coop omit it (wall-clock timestamp is sufficient).
-- Constructor overload accepts prior events + `nextSeq` for resuming a saved game.
-- `ToReplayData(...)` returns a snapshot (copy) of all accumulated events as a `ReplayData`.
-- Pure C# — no Unity dependency.
-
-### `ReplayVerifier` (`static class`)
-
-- Verifies a completed replay by regenerating the board from seed, comparing against the snapshot, and simulating all clear events.
-- Algorithm: (1) regenerate board from seed+params, compare to snapshot; (2) walk clear events, resolve cell, check clearable, remove; (3) verify board empty; (4) compute solve time from event timestamps excluding pause gaps.
-- Returns `VerificationResult` with `IsValid`, `Reason`, and `VerifiedTime`.
-- Pure C# — used on both client (domain layer) and server (via shared `ArrowThing.Domain` project).
-
-### `VerificationResult` (`sealed class`)
-
-- Result of replay verification: `IsValid`, `Reason` (null on success), `VerifiedTime`.
-- Factory methods: `Valid(verifiedTime)`, `Invalid(reason)`.
-
-### `ClearResult` (`enum`)
+#### `ClearResult` (`enum`)
 
 - Return type of `BoardView.TryClearArrow`. Values: `Blocked = 0`, `Cleared`, `ClearedFirst`, `ClearedLast`.
 - `Blocked = 0` so all success values are nonzero for easy truthiness-style checks.
 - `ClearedFirst` / `ClearedLast` are view-internal animation flags (drive `BoardView`'s post-pull-out `BoardCleared` callback timing). `InputHandler` collapses them to the smaller `TapResult` vocabulary before passing into the mode.
 
-### `TapResult` (`enum`)
+#### Invariants
 
-- Domain-level outcome of a single tap on the board, shared across all modes. Values: `Missed`, `Blocked`, `Cleared`.
-- "First-clear" and "last-clear" are deliberately not part of this vocabulary — they're derivable from the run's own counters (`ClassicRun.ClearedCount` / `IsCompleted`, `EndlessRun.ClearCount`) and announced via `BoardCleared` events. Keeping the result enum small avoids duplicate truth between view-side and run-side bookkeeping.
+- Cells in an arrow are orthogonally connected.
+- Board occupancy is exclusive (one arrow per cell).
+- An arrow is clearable only when no occupied cell exists on its forward head ray to the board boundary.
+- New arrow placements must not create cyclic clear dependencies.
+- Generation must only emit arrows that satisfy the acyclicity invariant.
 
-### `Tap` (`readonly struct`, View)
+### Run lifecycle
 
-- Bundles input + outcome of a single tap, surfaced by `InputHandler` to the active game mode via the `OnTap` callback. Fields: `Result` (`TapResult`), `Cell`, `GridPos` (Vector3, identical numerically to world pos because `BoardCoords` is 1:1), `Arrow` (null for `Missed`), `WallTimeSeconds`.
-- The mode generally forwards the tap into its `Run` domain object; `InputHandler` itself does not touch `GameTimer` or `ReplayRecorder`.
+A run flows through four phases. Generation produces a `Board`; a `Run` (Classic or Endless) drives moment-to-moment state as the player taps; a `ReplayRecorder` accumulates events; on completion the events become a `ReplayData`, which feeds both the local `LeaderboardStore` and (for global submission) the server-side `ReplayVerifier`.
 
-### `ClassicRun` (`sealed class`)
+```mermaid
+flowchart LR
+    seed([seed + dimensions]) --> gen[BoardGeneration]
+    gen --> board[Board]
+    board --> run{ClassicRun /<br/>EndlessRun}
+    input([player taps]) --> run
+    run -->|HandleTap, Advance| board
+    run --> rec[ReplayRecorder]
+    rec -->|on completion| replay[ReplayData]
+    replay --> local[LeaderboardStore<br/>local]
+    replay -->|HTTP submit| server[Server]
+    server --> verify[ReplayVerifier]
+    verify -->|valid| global[(Global<br/>leaderboard)]
+    replay -.->|playback| player2[ReplayPlayer]
+```
 
-- Pure-C# classic-mode game loop. Owns the fixed-board lifecycle: tap resolution, board mutation on clear, inspection→solve timer transition, replay-event recording, board-cleared (victory) detection. Same class drives both the live game (via the `ClassicMode` view adapter) and the future server-side replay verifier.
-- Constructed with `(Board, ReplayRecorder?, GameTimer?, alreadyCleared?)`. Recorder + timer are nullable so the verifier can run headless.
-- Two driving entries that share a private state-update routine:
-  - `HandleTap(float gridX, float gridY, double wallTime) → TapResult` — verifier-facing. Looks up the arrow at the rounded cell, classifies, mutates board on Cleared, transitions timer, records event.
-  - `RegisterViewTap(TapResult, gridX, gridY, wallTime)` — live-path companion. Trusts the view-already-mutated outcome and applies only the state-update side. Avoids re-mutating an already-mutated board.
-- Events: `InspectionEnded`, `BoardCleared`. Read state: `ClearedCount`, `IsCompleted`, `Board`, `Recorder`, `Timer`.
+The Unity adapter sits on top: it renders the `Board`, forwards player input to the active `Run` via `InputHandler`, and reflects the resulting state. It does not own the rules — it queries the domain for clearability and animates whatever the run reports.
 
-### `EndlessRun` (`sealed class`)
+### Generation
 
-- Pure-C# endless-mode game loop. Owns the entire run lifecycle: sim-time clock, push schedule, garbage meter, commit pipeline, clear handling, score accumulation. Same class drives the live `EndlessModeController` and the future replay verifier — no parallel simulator.
-- Constructed with `(Board, spawnSeed, paletteCount, EndlessRun.GenerationSettings)`.
-- Driving APIs:
-  - `Advance(float deltaTime)` — caller pushes time; the run fires any push ticks + commits whose sim-time threshold has been crossed.
-  - `HandleTap(float gridX, float gridY) → TapResult` — caller passes a grid position; the run rounds to the nearest cell, resolves it against current board state, and returns the result. Verifier compares this to the result on the recorded event.
-- Events: `PendingSpawned`, `PendingCommitted`, `MeterChanged`, `ShortfallChanged`, `ToppedOut`. View subscribes for HUD/render reactions; verifier ignores them.
-- Read state: `ClearCount`, `LongestCombo`, `RunDurationSeconds`, `Board`, `PendingArrows`, `Meter`, `ActiveShortfall`.
-- Determinism contract: identical {board, spawnSeed, paletteCount, settings} + identical {Advance(dt), HandleTap(grid)} sequence produces identical {ClearCount, LongestCombo, RunDurationSeconds, meter trajectory}. Push-tick scheduler uses canonical `_lastPushSimTime + interval` thresholds (not delta-accumulation) so frame jitter on the client doesn't desync the verifier.
-
-### `EndlessRun.GenerationSettings` (nested `readonly struct`)
-
-- Versioned bag of every endless garbage-generation constant in one place: push interval, combo size, board-area scaling, occupancy targets, etc.
-- `EndlessRun.GenerationSettings.V1` is the current shipped settings. `ForVersion(int)` looks up a historical version. `CurrentVersion` is what new replays record.
-- Bump the version (and add a new static field) when changing values in a way that affects replay verification — old replays then verify under their recorded version instead of breaking.
-
-### `LeaderboardEntry` (`sealed class`)
-
-- One entry in the local leaderboard index. Stored in `leaderboard.json` (without replay data).
-- Fields: `gameId` (maps to replay file), `seed`, `boardWidth`, `boardHeight`, `solveTime`, `completedAt` (ISO 8601 UTC), `isFavorite`, `gameVersion`.
-- Constructor from `ReplayData` extracts board params, computes solve time, and captures timestamp and game version.
-
-### `LeaderboardStore` (`sealed class`)
-
-- Pure C# leaderboard storage. Manages entries with per-config (50) and global (500) caps.
-- Favorited entries are exempt from automatic pruning. When a cap is exceeded, the slowest non-favorited entry is pruned and its `gameId` returned for replay file cleanup.
-- `AddEntry`, `GetEntries(w,h)`, `GetAllEntries`, `GetPersonalBest(w,h)`, `GetNeighborEntries(w,h,time,count)`, `SetFavorite`, `RemoveEntry`.
-- `SortBy(entries, SortCriterion)` — static helper; delegates to `LeaderboardComparers.ForCriterion(criterion)` and returns a sorted copy.
-- JSON serialization via `Newtonsoft.Json` (`ToJson`/`FromJson`).
-
-### `LeaderboardComparers` (`static class`)
-
-- Named `IComparer<LeaderboardEntry>` instances backing each `SortCriterion`. Singletons exposed as `Fastest` (solveTime asc, date tiebreak), `Biggest` (area desc → time asc → date), `Favorites` (favorited first → area desc → time asc → date). All three break ties deterministically by `completedAt` (older first) so equal-key pairs order stably.
-- `ForCriterion(SortCriterion)` dispatch returns the matching singleton; throws `ArgumentOutOfRangeException` on unknown values.
-- Comparers are reusable from contexts that don't carry a `SortCriterion` (e.g. controller policy that compares the active comparer reference rather than enum-switching), and are individually unit-tested in `LeaderboardComparersTests`.
-
-### `ReplayPlayer` (`sealed class`)
-
-- Pure C# replay playback engine. Takes `ReplayData`, provides time-based playback with speed control.
-- Filters to timed events (clear/reject), computes relative timestamps excluding pauses.
-- `Advance(deltaTime)` returns fired events. `SeekTo(normalizedTime)` returns `SeekResult` with `EventsToApply` (forward) and `EventsToUndo` (backward) for incremental board state changes.
-- `LeadInSeconds` (0.5s) offsets all event times so early clears are visible. `ExitPaddingSeconds` (1.0s) extends total duration for last arrow animation.
-- `DisplayDuration` = `TotalDuration - ExitPaddingSeconds` — used for UI slider/time labels. `NormalizedTime` and `SeekTo` clamp to `DisplayDuration`.
-- Speed steps: 0.5×, 1×, 2×, 4×. `CycleSpeed()` cycles through them.
-- Tracks `ClearedEventIndices` for backward seek (re-add arrows in reverse order).
-
-### `BoardGeneration` (`static class`)
+#### `BoardGeneration` (`static class`)
 
 - Procedurally fills a `Board` with acyclic arrows.
 - Public entry points: `FillBoardIncremental(...)` (coroutine, yields once per arrow for caller-driven frame budgeting; post-process compaction merges trivial collinear chains; yields `CompactionMarker` then `FinalizationMarker` between phases) and `GenerateArrows(...)`.
@@ -197,49 +131,317 @@ This document is the implementation-facing counterpart to [`GDD.md`](GDD.md).
 - **RNG**: `FillBoardIncremental` accepts an `int seed` and derives all randomness via `PortableRandom` (xorshift32). `System.Random` must not be used in generation or any domain code that requires cross-platform determinism — Mono (Unity) and .NET produce different sequences from the same seed. `System.Random` in domain code is a code smell; `PortableRandom` is the correct choice for any path that affects board layout or replay verification.
 - See [`BoardGeneration.md`](BoardGeneration.md) for full algorithm details.
 
-## Rule and Data Invariants
+### Live gameplay
 
-- Cells in an arrow are orthogonally connected.
-- Board occupancy is exclusive (one arrow per cell).
-- An arrow is clearable only when no occupied cell exists on its forward head ray to the board boundary.
-- New arrow placements must not create cyclic clear dependencies.
-- Generation must only emit arrows that satisfy the acyclicity invariant.
+The classes that own moment-to-moment state during a run. The same `Run` class drives both the live game (via a view adapter under `Modes/`) and the headless server-side verifier — there is no parallel simulator.
 
-## Board Interaction Flow (Intended)
+#### `GameTimer` (`sealed class`)
 
-1. Generate board state in domain (`BoardGeneration` fills a `Board`).
-2. Unity layer renders domain state.
-3. Player selects arrow in Unity layer.
-4. Unity layer queries a domain rules class for clearability and removes the arrow if valid.
-5. Unity layer plays success/failure feedback based on the result.
+- Two-phase timer: inspection countdown followed by solve timer. Pure C# — no Unity dependency.
+- Phases: `Inspection → Solving → Finished`. Driven by `Tick(double current)` for display updates.
+- `StartSolve(current)` transitions from inspection to solving. `Finish(current)` ends the solve.
+- `Resume(current, priorElapsed)` skips inspection and restores the timer to a previously saved solve-elapsed offset, used when loading a saved game.
+- Display during play uses frame time (`Time.timeAsDouble`). Final precise time uses input-event timestamps (via `InputAction.canceled` callback) to avoid frame-boundary imprecision.
+- Fires `PhaseChanged` event on transitions.
+
+#### `ClassicRun` (`sealed class`)
+
+- Pure-C# classic-mode game loop. Owns the fixed-board lifecycle: tap resolution, board mutation on clear, inspection→solve timer transition, replay-event recording, board-cleared (victory) detection. Same class drives both the live game (via the `ClassicMode` view adapter) and the future server-side replay verifier.
+- Constructed with `(Board, ReplayRecorder?, GameTimer?, alreadyCleared?)`. Recorder + timer are nullable so the verifier can run headless.
+- Two driving entries that share a private state-update routine:
+  - `HandleTap(float gridX, float gridY, double wallTime) → TapResult` — verifier-facing. Looks up the arrow at the rounded cell, classifies, mutates board on Cleared, transitions timer, records event.
+  - `RegisterViewTap(TapResult, gridX, gridY, wallTime)` — live-path companion. Trusts the view-already-mutated outcome and applies only the state-update side. Avoids re-mutating an already-mutated board.
+- Events: `InspectionEnded`, `BoardCleared`. Read state: `ClearedCount`, `IsCompleted`, `Board`, `Recorder`, `Timer`.
+
+#### Endless mode
+
+Endless follows the same Run pattern as Classic but adds a sim-time clock, a push schedule that injects new arrows, and tunable constants frozen per replay version so old replays still verify after balance changes.
+
+##### `EndlessRun` (`sealed class`)
+
+- Pure-C# endless-mode game loop. Owns the entire run lifecycle: sim-time clock, push schedule, garbage meter, commit pipeline, clear handling, score accumulation. Same class drives the live `EndlessModeController` and the future replay verifier.
+- Constructed with `(Board, spawnSeed, paletteCount, EndlessRun.GenerationSettings)`.
+- Driving APIs:
+  - `Advance(float deltaTime)` — caller pushes time; the run fires any push ticks + commits whose sim-time threshold has been crossed.
+  - `HandleTap(float gridX, float gridY) → TapResult` — caller passes a grid position; the run rounds to the nearest cell, resolves it against current board state, and returns the result. Verifier compares this to the result on the recorded event.
+- Events: `PendingSpawned`, `PendingCommitted`, `MeterChanged`, `ShortfallChanged`, `ToppedOut`. View subscribes for HUD/render reactions; verifier ignores them.
+- Read state: `ClearCount`, `LongestCombo`, `RunDurationSeconds`, `Board`, `PendingArrows`, `Meter`, `ActiveShortfall`.
+- Determinism contract: identical {board, spawnSeed, paletteCount, settings} + identical {Advance(dt), HandleTap(grid)} sequence produces identical {ClearCount, LongestCombo, RunDurationSeconds, meter trajectory}. Push-tick scheduler uses canonical `_lastPushSimTime + interval` thresholds (not delta-accumulation) so frame jitter on the client doesn't desync the verifier.
+
+##### `EndlessRun.GenerationSettings` (nested `readonly struct`)
+
+- Versioned bag of every endless garbage-generation constant in one place: push interval, combo size, board-area scaling, occupancy targets, etc.
+- `EndlessRun.GenerationSettings.V1` is the current shipped settings. `ForVersion(int)` looks up a historical version. `CurrentVersion` is what new replays record.
+- Bump the version (and add a new static field) when changing values in a way that affects replay verification — old replays then verify under their recorded version instead of breaking.
+
+### Replays, verification, and leaderboards
+
+How a finished run becomes a replay, gets verified, and lands on a leaderboard. Recording happens during the run; verification runs on the server using the same domain code the client used to generate the events.
+
+#### `ReplayEvent` (`sealed class`)
+
+- One entry in the save/replay event log. Fields vary by event type; unused fields are omitted from JSON.
+- `seq` — monotonically increasing, defines event order (timestamps can tie at e.g. `start_solve + clear`).
+- `type` — string constant from `ReplayEventType` (e.g. `"clear"`, `"session_leave"`, `"topout"`).
+- `posX`, `posY` — float grid coordinates of the tap (1 unit per cell, origin at the board corner). Identical numerically to the legacy world-space coords because `BoardCoords` is 1:1, so older replays read straight through. Recorded for `clear`, `reject`, `miss`. Cell derived inside the run via `Math.Round`.
+- `timestamp` — ISO 8601 UTC string. Present on all events. Classic / coop solve-relative timing is derived by subtracting the `start_solve` timestamp, excluding `session_leave`→`session_rejoin` gaps.
+- `simTime` — float seconds on the run's deterministic clock (v7+). Endless writes this so the replay verifier can reproduce the time-driven loop without wall-clock noise from pauses / focus loss; null on classic / coop events.
+- `playerId` — co-op attribution (v6+). Null on solo replays.
+
+#### `ReplayEventType` (`static class`)
+
+- String constants for all event types: `session_start`, `session_leave`, `session_rejoin`, `start_solve`, `clear`, `reject`, `miss`, `end_solve`, `topout`.
+- Uses strings (not enum) for human-readable JSON serialization.
+
+#### `ReplayData` (`sealed class`)
+
+- Full save/replay record for one game session, regardless of mode (classic, coop, endless).
+- Contains: `version` (replay schema version), `gameId` (UUID), `mode` (`GameMode` discriminator — Classic / Coop / Endless, defaults to Classic for pre-v7 readers), `seed`, board dimensions, `inspectionDuration` (classic), `gameVersion`, `boardSnapshot` (initial arrow configuration; null for endless), `List<ReplayEvent> events`, `finalTime` (-1 = in-progress), endless-only `tuningsVersion` / `clears` / `longestCombo` / `durationSeconds`, co-op `roster`.
+- `version` history: v1 = initial; v2 = `boardSnapshot`; v3 = `gameVersion`; v4 = post-RNG rewrite (replays from <v4 cannot be regenerated deterministically and are rejected by `ReplayVersionPolicy`); v6 = co-op `roster` + `playerId`; v7 = universal-format unification (added `mode`, endless stat fields, per-event `simTime`). Bump on any change to generation, RNG, or verification semantics — never reuse an old value.
+- `boardSnapshot` — each inner list is one arrow's cells in head-to-tail order. Null for endless (board grows from empty during the run, reproduced via `EndlessRun`'s deterministic spawn loop).
+- `ComputedSolveElapsed` — derived property that sums active solve intervals from event timestamps, excluding `session_leave`→`session_rejoin` gaps. Used by classic `GameTimer.Resume`.
+- Serializes to JSON via `Newtonsoft.Json`. Classic saves stored at `Application.persistentDataPath/savegame.json`; endless replays held in memory until topout submission (no resume).
+
+#### `ReplayRecorder` (`sealed class`)
+
+- Accumulates `ReplayEvent`s during play, auto-increments `seq`.
+- Single set of tap-recording methods: `RecordClear(posX, posY, simTime?)`, `RecordReject(...)`, `RecordMiss(...)`. Endless passes `simTime`; classic / coop omit it (wall-clock timestamp is sufficient).
+- Constructor overload accepts prior events + `nextSeq` for resuming a saved game.
+- `ToReplayData(...)` returns a snapshot (copy) of all accumulated events as a `ReplayData`.
+- Pure C# — no Unity dependency.
+
+#### `ReplayVerifier` (`static class`)
+
+- Verifies a completed replay by regenerating the board from seed, comparing against the snapshot, and simulating all clear events.
+- Algorithm: (1) regenerate board from seed+params, compare to snapshot; (2) walk clear events, resolve cell, check clearable, remove; (3) verify board empty; (4) compute solve time from event timestamps excluding pause gaps.
+- Returns `VerificationResult` with `IsValid`, `Reason`, and `VerifiedTime`.
+- Pure C# — used on both client (domain layer) and server (via shared `ArrowThing.Domain` project).
+
+#### `VerificationResult` (`sealed class`)
+
+- Result of replay verification: `IsValid`, `Reason` (null on success), `VerifiedTime`.
+- Factory methods: `Valid(verifiedTime)`, `Invalid(reason)`.
+
+#### `ReplayPlayer` (`sealed class`)
+
+- Pure C# replay playback engine. Takes `ReplayData`, provides time-based playback with speed control.
+- Filters to timed events (clear/reject), computes relative timestamps excluding pauses.
+- `Advance(deltaTime)` returns fired events. `SeekTo(normalizedTime)` returns `SeekResult` with `EventsToApply` (forward) and `EventsToUndo` (backward) for incremental board state changes.
+- `LeadInSeconds` (0.5s) offsets all event times so early clears are visible. `ExitPaddingSeconds` (1.0s) extends total duration for last arrow animation.
+- `DisplayDuration` = `TotalDuration - ExitPaddingSeconds` — used for UI slider/time labels. `NormalizedTime` and `SeekTo` clamp to `DisplayDuration`.
+- Speed steps: 0.5×, 1×, 2×, 4×. `CycleSpeed()` cycles through them.
+- Tracks `ClearedEventIndices` for backward seek (re-add arrows in reverse order).
+
+#### `LeaderboardEntry` (`sealed class`)
+
+- One entry in the local leaderboard index. Stored in `leaderboard.json` (without replay data).
+- Fields: `gameId` (maps to replay file), `seed`, `boardWidth`, `boardHeight`, `solveTime`, `completedAt` (ISO 8601 UTC), `isFavorite`, `gameVersion`.
+- Constructor from `ReplayData` extracts board params, computes solve time, and captures timestamp and game version.
+
+#### `LeaderboardStore` (`sealed class`)
+
+- Pure C# leaderboard storage. Manages entries with per-config (50) and global (500) caps.
+- Favorited entries are exempt from automatic pruning. When a cap is exceeded, the slowest non-favorited entry is pruned and its `gameId` returned for replay file cleanup.
+- `AddEntry`, `GetEntries(w,h)`, `GetAllEntries`, `GetPersonalBest(w,h)`, `GetNeighborEntries(w,h,time,count)`, `SetFavorite`, `RemoveEntry`.
+- `SortBy(entries, SortCriterion)` — static helper; delegates to `LeaderboardComparers.ForCriterion(criterion)` and returns a sorted copy.
+- JSON serialization via `Newtonsoft.Json` (`ToJson`/`FromJson`).
+
+#### `LeaderboardComparers` (`static class`)
+
+- Named `IComparer<LeaderboardEntry>` instances backing each `SortCriterion`. Singletons exposed as `Fastest` (solveTime asc, date tiebreak), `Biggest` (area desc → time asc → date), `Favorites` (favorited first → area desc → time asc → date). All three break ties deterministically by `completedAt` (older first) so equal-key pairs order stably.
+- `ForCriterion(SortCriterion)` dispatch returns the matching singleton; throws `ArgumentOutOfRangeException` on unknown values.
+- Comparers are reusable from contexts that don't carry a `SortCriterion` (e.g. controller policy that compares the active comparer reference rather than enum-switching), and are individually unit-tested in `LeaderboardComparersTests`.
 
 ## View Layer (`Assets/Scripts/View/`)
 
+### Scene flow
+
+Five Unity scenes; `SceneNav` (single-load mode) drives every transition. Back-navigation arrows (Esc / back-button → Pop, modal Cancel → close, in-game Quit → MainMenu) are omitted from the diagrams — every scene and modal supports them. `SettingsController` is a `DontDestroyOnLoad` overlay, not a scene; it can open over any of them.
+
+```mermaid
+flowchart LR
+    boot([App start]) --> mm[MainMenu]
+    mm -->|Play / Continue| game[Game]
+    mm -->|Leaderboard| lb[Leaderboard]
+    mm -->|Multiplayer → Co-op| ch[CoopHub]
+    ch -->|Play / Resume lobby| game
+    lb -->|Watch replay| rv[ReplayViewer]
+    game -->|Victory → View leaderboard| lb
+```
+
+#### MainMenu
+
+State machine across four panels in one scene; `_persistedState` (static) survives scene reloads so returning from Game lands back in the right sub-menu.
+
+```mermaid
+stateDiagram-v2
+    Root --> Play : Play
+    Play --> Singleplayer
+    Play --> Multiplayer
+
+```
+
+#### Game
+
+`GameController` picks an `IGameMode` implementation based on `GameSettings`, then delegates the loop. Each mode owns its own setup, tap-handling, and terminal state.
+
+```mermaid
+flowchart TD
+    enter([Game scene loads]) --> pick{GameController<br/>CreateMode}
+    pick -->|Classic| classicSetup[ClassicMode.Setup]
+    pick -->|Endless| endlessSetup[EndlessMode.Setup]
+    pick -->|Co-op<br/>ActiveLobbyCode set| coopSetup[CoopMode.Setup]
+
+    classicSetup --> cinit{Resuming?}
+    cinit -->|Yes| crestore[Restore board from save]
+    cinit -->|No| cgen[Generate board]
+    crestore --> cplay[Inspection → Solving<br/>ClassicRun]
+    cgen --> cplay
+    cplay -->|All cleared| cwin[VictoryController<br/>submit + record]
+
+    endlessSetup --> egen[Generate empty board]
+    egen --> eloop[EndlessRun loop<br/>Advance + HandleTap]
+    eloop -->|Topout| etopout[Topout result<br/>submit endless score]
+
+    coopSetup --> cwait[CoopClient connects<br/>receive snapshot]
+    cwait --> cmplay[CoopSession loop<br/>taps + remote events]
+    cmplay -->|LobbyCompleted| cmresult[CoopResultsScreen]
+    cmplay -->|Disconnected| crecon[Reconnect<br/>1/2/4/8/16/30s]
+    crecon --> cmplay
+```
+
+#### CoopHub
+
+List view by default; Host and Join open as modal overlays. Delete-row also opens a confirmation modal (omitted from the diagram).
+
+```mermaid
+stateDiagram-v2
+    [*] --> List
+    List --> HostModal : Host
+    List --> JoinModal : Join
+    List --> [*] : Play row → Game
+    HostModal --> HostingModal : Create
+    HostingModal --> [*] : Generated → Game
+    JoinModal --> [*] : Joined → Game
+```
+
+#### Leaderboard
+
+No internal state machine — top tabs (size + Local/Global), sort buttons, and a scrollable entry list. Row click opens a context menu; the play action pushes ReplayViewer.
+
+#### ReplayViewer
+
+Single playback view. `ReplayPlayer` advances per-frame; the controller dispatches clear / reject events to `BoardView`. UI is a controls bar (play/pause, seek, speed, highlight toggle); no sub-states.
+
 ### Main Menu (`MainMenu` Scene)
 
-- **`MainMenuController`** — extends `NavigableScene`. Drives a nested state-machine menu with four states (`Root`, `Play`, `Singleplayer`, `Multiplayer`), each rendered as a `menu-panel` container toggled via `screen--hidden`. Static `_persistedState` survives scene reloads so returning from Game or Leaderboard restores the correct sub-menu.
-  - **Root** — Play (green accent), Settings, Quit (desktop only), GitHub/Discord social links.
-  - **Play** — Singleplayer and Multiplayer buttons side by side. Back button returns to Root.
-  - **Singleplayer** — board-size preset grid (Small/Medium/Large/XLarge/Custom) with responsive layout detection via `GeometryChangedEvent`, custom width/height `SnapSlider` panel, Start and Continue (when save exists) side by side, Leaderboard trophy button (top-right). Restores previous size selection from `GameSettings`. Folded from the former `SoloSizeSelectController` (removed).
-  - **Multiplayer** — Co-op button (`SceneNav.Push("CoopHub")`). Back button returns to Play.
-  - Escape/Backspace pops back one level at each state. Nav graphs rebuilt per state via `RebuildNavigator()`.
-- **`SettingsController`** — singleton (`DontDestroyOnLoad`, `RuntimeInitializeOnLoadMethod(AfterSceneLoad)`). Exposes `Open()`, `Close()`, `Toggle()`, `IsOpen`, `JustClosed`. Two-column keyboard navigation: icon sidebar tabs (Account, Gameplay, Keybinds, Data, About) linked Left/Right to content items. Every content item in a section has a Left edge back to its tab. `PreUpdate` hook pauses nav when theme dropdown is open (delegates to `CustomDropdown.UpdateKeyboard`). Saves/restores `FocusNavigator.Active` and `KeybindManager.ActiveContext` across open/close. Rebuilds navigator on account form changes (`AccountManager.FormChanged`). `KeybindSettingsSection` builds rebindable keybind rows as a 2×N grid. Keep-trail-after-clear toggle in Gameplay section.
-- **`GameSettings`** (static class, domain layer) — holds `Width`, `Height`, `MaxArrowLength`, `IsSet`, `IsResuming`, and `ResumeData`. Also holds `PlayerPrefs` key constants and defaults for persisted settings (drag threshold, zoom speed, arrow coloring, display name, input binding overrides, keep-trail-after-clear). `DisplayName` (string, in-memory) is loaded from PlayerPrefs at startup by `LeaderboardManager.AutoCreate` and written by `AccountManager`. `GameController` reads from it when `IsSet` is true. `Apply()` sets board params for a new game; `ResumeFromSave()` flags a deferred resume (save loaded later by `GameController`); `SetResumeData(ReplayData)` populates resume data after loading; `Reset()` clears all. Replay viewer support: `IsReplaying`, `ReplaySource` with `StartReplay(replayData)` / `ClearReplay()` methods. Co-op deep-link support: `PendingLobbyCode` (set by `CoopDeepLink`, consumed by `CoopHubController`) and `ActiveLobbyCode` (set by hub, consumed by `CoopGameController`), each with a `Consume*()` helper that returns and clears in one call. Scene transitions use `SceneNav` instead of `ReturnScene` — the stack handles return navigation automatically.
-- **`CoopColorPalette`** (static, domain layer) — fixed 12-color hex palette for co-op player colors. `HexForGuid(Guid)` returns a deterministic default color hashed from the user id. Shared with the server via identical implementation.
-- **`CoopColorPicker`** (view component) — HSV color picker built in code (no UXML). Three `Slider`s (H/S/V) + hex `TextField` + preview swatch. Debounced `OnCommit(string hex)` event. Keyboard-navigable via `GetFocusItems()`. Embedded in the Account tab of `SettingsController` via `coop-color-slot`.
-- **`CoopDeepLink`** (static, view layer) — reads lobby code from `window.location.search` (WebGL via `.jslib`) or `--lobby=XXXXXX` CLI arg (Desktop). Sets `GameSettings.PendingLobbyCode`. Called once at boot from `MainMenuController.OnEnable`.
-- **`CoopHubController`** — scene entry point for the Co-op Hub scene (`NavigableScene` subclass, `Context.CoopHub`). Default panel is the My Lobbies list; Host and Join open as modal overlays. State machine: `List`, `HostModal`, `JoinModal`, `HostingModal`, `DeleteConfirm`. Uses `ApiClient` for REST, `CoopClient` WebSocket for generation progress watching. Filters (All/Active/Completed), rich lobby rows with status dot, Play/Retry/Delete buttons. Narrow layout (< 768px width) toggles `hub--narrow` class. Deep-link prefill via `GameSettings.ConsumePendingLobbyCode()`.
-- **`GameController` co-op mode** — when `GameSettings.ActiveLobbyCode` is set, `GameController` enters co-op mode instead of generating or resuming. Connects `CoopClient` to the lobby, receives `snapshot` binary frame, decodes via `BinarySnapshot.DecodeFull`, renders the board using the existing `BoardView` + `CameraController` + `InputHandler` infrastructure. Creates a `CoopSession` wrapping the client and the decoded `Board`. Wires `InputHandler.onTapAttempt` to `CoopSession.TrySubmitClear` for optimistic local animation + server round-trip. Subscribes to `CoopSession.RemoteCleared` to animate server-confirmed clears (skipping re-animation on our own accepted tap), `RemoteRejectedDep` to bump-reject and roll back our optimistic animation if it was ours, `LobbyCompleted` to disable input and show a placeholder completion message. Emits a `heartbeat` envelope every 15 s (accumulating delta in `Update`). On `Disconnected`, drives a 1/2/4/8/16/30 s exponential reconnect loop that calls `CoopClient.ReconnectAsync` and re-issues `hello`; `ReturnToModeSelect` disables the loop so back-button exits don't re-establish the socket. Timer, retry, replay recorder, save, and victory are skipped.
-- **`CoopSession`** (view layer) — wraps a `CoopClient` and a local `Board`. Routes incoming wire messages (`cleared`, `rejected_dep`, `rejected_race`, `rejected_rate`, `lobby_completed`, `roster_full`, `roster_patch`) into typed C# events (`RemoteCleared`, `RemoteRejectedDep`, `LocalRejectedRace`, `LocalRejectedRate`, `LobbyCompleted`, `RosterUpdated`). `TrySubmitClear(Cell, Vector3)` checks local state, bumps an internal `_nextClientSeq`, and sends a `clear_attempt` payload. Each event payload carries `IsLocal` so the view layer can suppress duplicate animations when the server accepts our own tap. Applies accepted clears to the local `Board` via `Board.RemoveArrow` to keep local and server state in sync. Maintains `Roster: IReadOnlyDictionary<Guid, CoopPlayer>` updated from incremental `roster_patch` broadcasts; `cleared` payloads carrying `newClearCount`/`color`/`displayName` update the roster eagerly for snappy sidebar response.
-- **`CoopPlayer`** (view layer) — immutable struct representing one roster entry: id, display name, color (parsed from hex), clear count, accumulated solve millis, online/local flags. `With(...)` helper for field overrides.
-- **`CoopPlayerTimer`** (view layer) — per-player solve timer for co-op mode. Starts on the first local accepted clear, ticks only while `Application.isFocused`, emits `timer_update` every 5 s (plus a prompt ~100 ms emit right after each of our own accepted clears so the sidebar updates without waiting a full tick). Constructor accepts a stubbable emit callback + clock provider for EditMode testing.
-- **`CoopSidebar`** (view layer) — live roster panel attached to the HUD root in co-op mode. Shows top 10 by clear count with the own row pinned at top even outside top 10; `Show all (N)` button opens a scrollable modal with every player. Narrow viewports (< 500 px wide) collapse into a player-count pill top-right that opens the modal on tap. Row cells: color dot, display name, MM:SS timer, `#N` clear-count badge; offline rows dim to 45 %. Re-renders on `CoopSession.RosterUpdated`.
-- **`CoopResultsScreen`** (view layer, Phase 8) — full-roster results overlay mounted on `CoopSession.LobbyCompleted` (and by `GameController.CoopCompletedSetup` when reopening a Completed lobby from the hub). Rows sorted by `ClearCount DESC`, ties broken by `AccumulatedMillis ASC`. Top 3 rows medal-tinted; own row highlighted. Buttons: View Replay (fetches v6 via `ApiClient.GetLobbyReplayAsync`, enters Replay scene), Play Again (`SceneNav.Replace("CoopHub")`), Menu (`SceneNav.Replace("MainMenu")`).
-- **`ReplayData` v6** — Phase 8 adds nullable `roster: List<ReplayRosterEntry>` and nullable `playerId: Guid?` on `ReplayEvent`. Both use `NullValueHandling.Ignore` so solo replays stay byte-for-byte compatible with v5 readers. `ReplayVersionPolicy.MinReplayVersion` stays at 4 — the bump isn't a break.
-- **`ReplayViewController` v6 support** — reads `replay.roster` into a playerId→Color map at init. `ExecuteEvent(Clear)` looks up the clearer's color when `playerId` is set and forwards it to `BoardView.ClearArrowAnimated(flashColor)` + `TapIndicatorPool.Spawn(worldPos, color)`, so co-op replays show each clear in the clearer's color. Solo replays (playerId null) skip the lookup entirely.
-- **`CoopClient` reconnect** — `ConnectAsync` stashes `(baseWsUrl, code, token)`. `ReconnectAsync()` tears down the existing socket (desktop `ClientWebSocket.Dispose` or WebGL `CoopWS_Close`) and re-runs `ConnectAsync` with the saved params. Caller is responsible for re-issuing `hello` after `Connected` fires.
-- **`AccountManager`** — manages the account forms embedded in the settings screen. Supports display name editing offline via `EditableLabel` (saved to PlayerPrefs and `GameSettings.DisplayName`). When a server is reachable, also handles login, register, verify code, forgot/reset password, change email, confirm email change, and change password flows. All form fields are `LabeledField` instances. Navigation between forms is managed internally; `MainMenuController` calls `CancelEditing()` on settings close.
-- **`SaveManager`** (static class, view layer) — saves/loads/deletes the in-progress game JSON at `Application.persistentDataPath/savegame.json`. Wraps `Newtonsoft.Json` serialization. `LoadAsync` coroutine runs file I/O and deserialization on a background thread (falls back to synchronous on WebGL). Safe: catches I/O exceptions, logs warnings, auto-deletes on corruption.
+#### `MainMenuController`
+
+- Drives a nested state-machine menu with four panels: Root, Play, Singleplayer, Multiplayer.
+- Static `_persistedState` survives scene reloads so returning from Game or Leaderboard lands in the right sub-menu.
+- Panel contents:
+  - **Root** — Play, Settings, Quit (desktop only), GitHub / Discord links.
+  - **Play** — Singleplayer + Multiplayer.
+  - **Singleplayer** — board-size preset grid, custom width / height sliders, Start, Continue (when a save exists), Leaderboard. Restores last selection from `GameSettings`.
+  - **Multiplayer** — Co-op (`SceneNav.Push("CoopHub")`).
+
+#### `SettingsController`
+
+- Singleton (`DontDestroyOnLoad`, `RuntimeInitializeOnLoadMethod(AfterSceneLoad)`) — opens over any scene as an overlay.
+- Surface: `Open()`, `Close()`, `Toggle()`, `IsOpen`, `JustClosed` (one-frame flag other controllers check to skip their own Cancel handling).
+- Sections: Account, Gameplay, Keybinds, Data, About.
+
+#### `GameSettings` (static, domain layer)
+
+- Carries scene-transition state: board params (`Width`, `Height`, `MaxArrowLength`), resume flags (`IsSet`, `IsResuming`, `ResumeData`), replay viewer params (`IsReplaying`, `ReplaySource`), co-op deep-link / hub handoff (`PendingLobbyCode`, `ActiveLobbyCode`).
+- Holds `PlayerPrefs` key constants and defaults for persisted settings (drag threshold, zoom speed, arrow coloring, display name, keybind overrides, keep-trail-after-clear).
+- Methods: `Apply` (new game), `ResumeFromSave` (deferred resume), `SetResumeData` (after async load), `Reset`, `StartReplay` / `ClearReplay`, `Consume*LobbyCode` (return-and-clear helpers).
+
+#### `CoopColorPalette` (static, domain layer)
+
+- Fixed 12-color hex palette for co-op players. `HexForGuid(Guid)` returns a deterministic default color hashed from the user id. Shared with the server.
+
+#### `CoopColorPicker`
+
+- HSV color picker built in code (no UXML): H / S / V sliders + hex `TextField` + preview swatch. Debounced `OnCommit(string hex)` event.
+- Embedded in the Account tab of `SettingsController` via `coop-color-slot`.
+
+#### `CoopDeepLink` (static)
+
+- Reads a lobby code from `window.location.search` (WebGL via `.jslib`) or `--lobby=XXXXXX` CLI arg (Desktop). Sets `GameSettings.PendingLobbyCode`. Called once at boot.
+
+#### `CoopHubController`
+
+- Scene entry point for the Co-op Hub. Default panel is the My Lobbies list; Host and Join open as modal overlays.
+- Filters (All / Active / Completed), rich lobby rows with status dot, Play / Retry / Delete actions.
+- Uses `ApiClient` for REST and `CoopClient` for WebSocket generation-progress watching.
+- Deep-link prefill via `GameSettings.ConsumePendingLobbyCode()`.
+
+#### `GameController` co-op mode
+
+- When `GameSettings.ActiveLobbyCode` is set, `GameController` enters co-op mode instead of generating or resuming.
+- Connects `CoopClient` to the lobby, decodes the binary `snapshot` frame via `BinarySnapshot.DecodeFull`, and renders through the standard `BoardView` + `CameraController` + `InputHandler` stack.
+- Wraps the client and decoded `Board` in a `CoopSession`. Wires taps to `CoopSession.TrySubmitClear` for optimistic local animation + server round-trip. Subscribes to remote-clear, remote-rejection, lobby-completed, and disconnect events.
+- Emits a `heartbeat` envelope every 15 s. On disconnect, exponential reconnect (1 / 2 / 4 / 8 / 16 / 30 s) via `CoopClient.ReconnectAsync` and re-issued `hello`.
+- Skips timer, retry, replay recorder, save, and victory.
+
+#### `CoopSession`
+
+- Wraps a `CoopClient` and a local `Board`.
+- Translates wire messages (`cleared`, `rejected_dep`, `rejected_race`, `rejected_rate`, `lobby_completed`, `roster_full`, `roster_patch`) into typed C# events (`RemoteCleared`, `RemoteRejectedDep`, `LocalRejectedRace`, `LocalRejectedRate`, `LobbyCompleted`, `RosterUpdated`).
+- `TrySubmitClear(Cell, Vector3)` bumps an internal client seq and sends a `clear_attempt` payload.
+- Each event payload carries `IsLocal` so the view can suppress duplicate animations when the server accepts our own tap.
+- Applies accepted clears to the local `Board` via `Board.RemoveArrow` to keep client and server in sync.
+- Maintains `Roster: IReadOnlyDictionary<Guid, CoopPlayer>`, updated from `roster_patch` broadcasts and eager-updated from `cleared` payloads carrying `newClearCount` / `color` / `displayName`.
+
+#### `CoopPlayer`
+
+- Immutable struct: id, display name, color (parsed from hex), clear count, accumulated solve millis, online / local flags. `With(...)` helper for field overrides.
+
+#### `CoopPlayerTimer`
+
+- Per-player solve timer for co-op. Starts on the first local accepted clear, ticks only while `Application.isFocused`.
+- Emits `timer_update` every 5 s, plus a ~100 ms prompt emit after each of our accepted clears so the sidebar updates without waiting a full tick.
+- Constructor accepts a stubbable emit callback + clock provider for EditMode testing.
+
+#### `CoopSidebar`
+
+- Live roster panel attached to the HUD root in co-op. Shows top 10 by clear count with the local player's row pinned even when outside the top 10.
+- `Show all (N)` button opens a scrollable modal with every player.
+- Narrow viewports (< 500 px) collapse into a player-count pill that opens the modal on tap.
+- Re-renders on `CoopSession.RosterUpdated`.
+
+#### `CoopResultsScreen`
+
+- Full-roster results overlay mounted on `CoopSession.LobbyCompleted` (and by `GameController.CoopCompletedSetup` when reopening a Completed lobby).
+- Rows sorted by `ClearCount DESC`, ties broken by `AccumulatedMillis ASC`. Top 3 medal-tinted; own row highlighted.
+- Buttons: View Replay (fetches v6 via `ApiClient.GetLobbyReplayAsync`, enters Replay scene), Play Again (`SceneNav.Replace("CoopHub")`), Menu (`SceneNav.Replace("MainMenu")`).
+
+#### `ReplayData` v6
+
+- Adds nullable `roster: List<ReplayRosterEntry>` and nullable `playerId: Guid?` on `ReplayEvent`. Both use `NullValueHandling.Ignore`, so solo replays stay byte-for-byte compatible with v5 readers. `MinReplayVersion` stays at 4.
+
+#### `ReplayViewController` v6 support
+
+- Reads `replay.roster` into a `playerId → Color` map at init.
+- `ExecuteEvent(Clear)` looks up the clearer's color when `playerId` is set and forwards it to `BoardView.ClearArrowAnimated(flashColor)` + `TapIndicatorPool.Spawn(worldPos, color)`, so co-op replays show each clear in the clearer's color.
+- Solo replays (playerId null) skip the lookup.
+
+#### `CoopClient` reconnect
+
+- `ConnectAsync` stashes `(baseWsUrl, code, token)`. `ReconnectAsync()` tears down the existing socket and re-runs `ConnectAsync` with the saved params. Caller re-issues `hello` after `Connected` fires.
+
+#### `AccountManager`
+
+- Manages the account forms embedded in the settings screen.
+- Offline display-name editing via `EditableLabel` (saved to `PlayerPrefs` and `GameSettings.DisplayName`).
+- When a server is reachable, also handles: login, register, verify code, forgot / reset password, change email, confirm email change, change password.
+
+#### `SaveManager` (static)
+
+- Saves / loads / deletes the in-progress game JSON at `Application.persistentDataPath/savegame.json`.
+- `LoadAsync` runs file I/O + deserialization on a background thread (synchronous fallback on WebGL).
+- Catches I/O exceptions, logs warnings, auto-deletes on corruption.
 
 ### Scene Wiring
 
@@ -253,7 +455,7 @@ This document is the implementation-facing counterpart to [`GDD.md`](GDD.md).
 - **`LeaderboardScreenController`** — scene entry point for the Leaderboard scene. Manages 5 size tabs (Small/Medium/Large/XLarge/All), 3 sort buttons (Fastest/Biggest/Favorites), Local/Global scope toggle, scrollable entry list with context menu (delete, favorite toggle, replay launch — favorite and play are inline on wide screens, overflow to context menu on narrow/compact screens), and auto-scroll from victory screen via `GameSettings.LeaderboardFocusGameId`. Tab labels switch to abbreviated form (S/M/L/XL/All) on narrow viewports via `GeometryChangedEvent` to prevent the refresh button from clipping. On the All tab, Fastest is hidden (small boards always win) and Biggest is shown; on size tabs, the reverse. "Biggest" sort secondary tiebreaker: area → time → date. Top-3 entries in current sort receive gold/silver/bronze medal tints (suppressed in Favorites sort). Context menu flips above the row when it would overflow the bottom. Drag-to-scroll on content area. Context menu auto-dismisses on scroll. Global tab fetches top-50 entries and player entry from the server in parallel; stale results discarded if user switches away from Global view before response arrives. Player panel below the list shows rank context ("Your best: #N of T"), clickable login link (opens Settings), or descriptive error messages per HTTP status. Refresh button re-fetches. Global replays launch via `ApiClient.GetReplayAsync`. Compact mode (`lb-screen--compact`) activates below 500px panel width, hiding inline favorite/play buttons (available via context menu). Entry row icon buttons share a `.lb-row-btn` base class. Per-row UI construction is delegated to `LeaderboardEntryRow` (local view) and `LeaderboardGlobalEntryRow` (global view), the right-click / kebab menu to `LeaderboardContextMenu`, focus-nav graph wiring to `LeaderboardNavLinks`, time / date string formatting to `LeaderboardFormatters`, and gzip-base64 snapshot expansion on the global replay path to `LeaderboardReplayDecompress` (all under `Assets/Scripts/View/Scene/Leaderboard/`).
 - **`LeaderboardEntryRow`** (`Assets/Scripts/View/Scene/Leaderboard/`) — per-row VisualElement builder. Construction takes a `Callbacks` bundle (`IsFavoritesSort`, `OnToggleFavorite`, `OnPlay`, `OnContextMenu`, `RegisterNameScroll`) so the row can delegate user interaction back to the controller without depending on its instance state. `Build(rank, entry, showSize, Medals)` returns the assembled row VisualElement; `Medals` is a small struct holding the gold/silver/bronze HashSet sets for the current render pass.
 - **`LeaderboardContextMenu`** (`Assets/Scripts/View/Scene/Leaderboard/`) — the floating right-click / kebab menu sub-component. Owns the menu element, its delete-confirmation modal, the popup keyboard nav, and all per-action handlers. Construction takes a `Callbacks` bundle (`IsCompact`, `IsFavorite`, `OnToggleFavorite`, `OnPlay`, `OnDeleteConfirmed`); the controller drives the actual mutations (manager calls + post-rebuild refocus) on the `OnDeleteConfirmed` callback. Surface: `Show(gameId, isFavorite, anchorRow)`, `Dismiss()`, `IsOpen`, `IsKeyboardNavActive`, `UpdateKeyboardNav()`, `ContainsWorldPoint(pos)`. Position-flips above the row when it would overflow the bottom. `IsFavorite` lookup is re-read at delete-decision time so a favorite-toggle while the menu is open isn't acted on with stale state.
-- **`LeaderboardNavLinks`** (`Assets/Scripts/View/Scene/Leaderboard/`) — stateless helper that wires the leaderboard's entire `FocusNavigator` graph after items have been added. `Apply(nav, items, Sections)` consumes a `Sections` bag of section start/end indices (header, mode tabs, size tabs, refresh, sort, entries, player panel) and sets up every `LinkBidi`/`Link`/`LinkBreak` edge — the top-row horizontal chain, the size-tab Up→active-mode-tab + Down→sort/entries fan-out, the entry-row × button-column grid, and the player-panel breakpoint links. Pulled out of `RebuildEntryNavigator` so the controller's "build items" phase and the "wire links" phase live in separately readable units. Focus restoration after rebuild stays on the controller (it inspects post-rebuild state).
+- **`LeaderboardNavLinks`** (`Assets/Scripts/View/Scene/Leaderboard/`) — stateless helper that wires the leaderboard's entire `FocusNavigator` graph after items have been added. `Apply(nav, items, Sections)` consumes a `Sections` bag of section start/end indices (header, mode tabs, size tabs, refresh, sort, entries, player panel) and sets up every `LinkBidi`/`Link`/`LinkBreak` edge — the top-row horizontal chain, the size-tab Up→active-mode-tab + Down→sort/entries fan-out, the entry-row × button-column grid, and the player-panel breakpoint links. Splitting "build items" and "wire links" into separate units keeps each phase independently readable. Focus restoration after rebuild stays on the controller (it inspects post-rebuild state).
 - **`LeaderboardFormatters`** (`Assets/Scripts/View/Scene/Leaderboard/`) — static string helpers shared by the leaderboard scene and its row builder. `FormatTime` (h:mm:ss.fff / m:ss.fff / s.fff), `FormatCompactTime` (drops millis on All tab), `FormatRelativeDate` ("now", "5m ago", …, "1yr ago" relative to UTC now), `FormatExactDate` (local-time tooltip stamp).
 - **`LeaderboardGlobalEntryRow`** (`Assets/Scripts/View/Scene/Leaderboard/`) — per-row VisualElement builder for the global leaderboard view. Parallel to `LeaderboardEntryRow` but a different shape: only a play button (no favorite or context-menu trigger) and the highlight tint marks the viewer's own entry rather than a favorite. Construction takes a `Callbacks` bundle (`OnPlay`, `RegisterNameScroll`); `Build(GlobalLeaderboardEntry, showSize, highlight)` returns the row VisualElement. `showSize` adds the size column and uses compact time format on the cross-config All tab.
 - **`LeaderboardReplayDecompress`** (`Assets/Scripts/View/Scene/Leaderboard/`) — static helper that expands a gzip-base64 `boardSnapshot` field back into its nested-array form before `Newtonsoft.Json` deserializes a `ReplayData`. The server compresses the snapshot for top-50 rows; client deserializers expect the array shape. `DecompressSnapshotIfNeeded(string replayJson)` is a pure string transform — fail-soft: on any parse / decompression error, returns the original JSON unchanged and logs a warning so the downstream `ReplayData` deserialize surfaces the real error.
@@ -293,14 +495,14 @@ This document is the implementation-facing counterpart to [`GDD.md`](GDD.md).
 - **`SnapSlider`** — reusable UI Toolkit slider row: custom track+handle, value label, +/- step buttons, and an optional lock button (pill layout). The lock toggles snap-to-grid mode: when locked, drag snaps in `snapStep` increments; +/- always step by `smallStep`. Track/handle are manually driven (pointer capture) instead of Unity's built-in `Slider`, for reliable drag behavior. Used by `MainMenuController` for custom board-size pickers (snap-to-10, with lock) and for settings sliders (no lock, continuous).
 - **`ConfirmModal`** — reusable UI Toolkit wrapper for a confirm/cancel modal element. Constructor takes the root `VisualElement` of the modal plus title, confirm label, cancel label, and optional subtitle/isDanger flag. Exposes `Show()`, `Hide()`, `Confirmed`, `Cancelled` events. All modals in the project (quit, clear scores, external link, logout, cancel generation, leave game) use this class.
 - **`EditableLabel`** — inline-edit UI component: shows a Label with an edit icon button; clicking switches to a TextField with save/cancel icons. Used for the display name field in the settings account section.
-- **`LabeledField`** — labeled `TextField` wrapper with a bold label above the input. Used to standardize form fields in `AccountManager` (email, password, code, etc.), replacing ad-hoc query-and-wire patterns.
+- **`LabeledField`** — labeled `TextField` wrapper with a bold label above the input. Used to standardize form fields in `AccountManager` (email, password, code, etc.).
 - **`ExternalLinks`** — static class with a `LinkRequested` event and `Open(url)` method. On WebGL, raises the event instead of opening the URL directly; `SettingsController` subscribes to `LinkRequested` and shows a confirmation modal before navigating. On other platforms, calls `Application.OpenURL` immediately.
 
 ### UI Stylesheets (`Assets/UI/`)
 
 All UI colors are CSS custom properties (USS variables) defined in `ThemeColors.uss` and injected at runtime by `UIThemeApplier`. Individual screen stylesheets reference `var(--...)` only — no literal colour values.
 
-- **`ThemeColors.uss`** — single source of truth for the entire UI palette (~90 variables). Groups: Text (`--text-white/primary/secondary/heading/dim/danger/success/gold/link`), Surfaces (`--bg-screen/overlay/panel/settings/entry/track/item-hover`), Buttons, Inputs, Navigation tabs/toggles/filters, Presets, Accents (blue/green/teal/danger/info/favorite/warning/progress), Toggle/slider controls, Borders, Scrollbars. Swapping this file (via `VisualSettings.themeUIStyleSheet`) changes the entire UI theme.
+- **`ThemeColors.uss`** — defines the entire UI palette (~90 variables). Groups: Text (`--text-white/primary/secondary/heading/dim/danger/success/gold/link`), Surfaces (`--bg-screen/overlay/panel/settings/entry/track/item-hover`), Buttons, Inputs, Navigation tabs/toggles/filters, Presets, Accents (blue/green/teal/danger/info/favorite/warning/progress), Toggle/slider controls, Borders, Scrollbars. Swapping this file (via `VisualSettings.themeUIStyleSheet`) changes the entire UI theme.
 - **`Shared.uss`** — shared component styles used across multiple screens: `screen--hidden`, `screen-title`, modal overlay/box/buttons, `confirm-btn--danger`, back-button, icon-button, settings section header, entry row, scrollbar skin, empty-state label, loading overlay. Each screen's USS imports only screen-specific overrides.
 
 ### Fonts (`Assets/Fonts/`)
@@ -583,7 +785,7 @@ UI layout tests verify that all UI elements are visible and not clipped across m
 - PanelSettings is saved/restored in SetUp/TearDown to avoid polluting other tests.
 - **`NavigationCoverageTests`** — state-based navigation coverage validation. Each scene declares its possible UI states (e.g., loading, playing, modal-open). Each state specifies which buttons should be navigable (keyboard-reachable) and which are visible but behind a modal overlay (background). Per-state tests verify: (1) every navigable button is visible, (2) no uncovered visible button exists. Per-scene tests verify every named Button in the UXML is navigable in at least one state. Adding a button to UXML without wiring it into a state declaration fails the test.
 - **`CSSResolutionTests`** — smoke tests verifying CSS hidden classes (`screen--hidden`, `modal--hidden`, `lb--hidden`, `victory--hidden`) resolve to `display: none` in each UXML document that uses them. Also tests responsive CSS selectors: leaderboard compact mode hides inline fav/play buttons when `lb-screen--compact` is applied, and documents the compact threshold (root width < 500px) across standard aspect ratios.
-- **`SceneNavStackTests`** (EditMode) — unit tests for `SceneNavStack`, the pure stack logic extracted from `SceneNav`. Models every real user flow through the scene graph (Play, Continue, Quick Reset, Victory → Menu, Victory → Leaderboard → Back, nested Replay paths) and verifies the correct scene is returned on each Pop. Includes regression tests documenting previously fixed stack bugs.
+- **`SceneNavStackTests`** (EditMode) — unit tests for `SceneNavStack`, the pure stack logic that backs `SceneNav`. Models every real user flow through the scene graph (Play, Continue, Quick Reset, Victory → Menu, Victory → Leaderboard → Back, nested Replay paths) and verifies the correct scene is returned on each Pop.
 
 ## CI/CD
 
@@ -646,7 +848,7 @@ Posts release notes to a Discord webhook. Triggers after a successful WebGL depl
 - 2026-02-28: Adopted split between Unity-independent domain logic and Unity adapter layer.
 - 2026-02-28: Defined `BoardModel` as authoritative source for occupancy and legality checks.
 - 2026-02-28: Defined `BoardGenerator` as reusable source for initial fill and single-arrow generation.
-- 2026-02-28: Standardized this document as the source of truth for architecture and class-structure changes.
+- 2026-02-28: Standardized this document as the spec for architecture and class-structure changes.
 - 2026-03-06: `generation-rewrite` branch refactored away from `BoardModel`/`BoardGenerator` toward minimal model classes (`Cell`, `Arrow`, `Board`) with game logic in static classes (`BoardGeneration`). Model classes are now intentionally minimal and self-contained.
 - 2026-03-13: Occupancy and `IsClearable` moved into `Board`. View layer added: `GameController`, `CameraController`, `BoardView`, `BoardGridRenderer`, `ArrowView`, `InputHandler`, `BoardCoords`. Tests migrated from standalone .NET project to Unity Test Framework (`Assets/Tests/EditMode/`).
 - 2026-03-15: Added start menu (UI Toolkit). `MainMenuController` in `MainMenu` scene, `GameSettings` static class for scene-transition parameter passing, random seed by default with inspector override.

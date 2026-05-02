@@ -13,7 +13,7 @@ These are kept current with the code. If the code disagrees with one of
 these, the doc is the bug.
 
 - [`TechnicalDesign.md`](TechnicalDesign.md) — architecture, class
-  structure, public contracts. Source of truth for technical decisions.
+  structure, public contracts. The spec for technical decisions.
 - [`GDD.md`](GDD.md) — game design intent and player-facing behavior.
 - [`BoardGeneration.md`](BoardGeneration.md) — generator algorithm,
   dependency graph, cycle detection, loading-progress heuristic.

@@ -62,7 +62,7 @@ Git configuration (`.gitattributes`, `.gitignore`, git hooks) is based on [NYU G
 
 ## Repository Layout
 
-- `Packages/com.arrowthing.domain/Runtime/` - Core board/arrow domain logic (Unity-independent, single source of truth)
+- `Packages/com.arrowthing.domain/Runtime/` - Core board/arrow domain logic (Unity-independent; canonical sources, the server references them from here)
 - `Domain/ArrowThing.Domain.csproj` - Standalone .NET project that wraps the domain sources for the server and CI
 - `Assets/Scripts/View` - Unity rendering, input, UI
 - `Assets/Tests/EditMode` - Unit tests (Unity Test Framework)
