@@ -65,8 +65,8 @@ public static class EndlessReplayVerifier
             return EndlessVerificationResult.Invalid("Replay missing tuningsVersion.");
 
         var board = new Board(replay.boardWidth, replay.boardHeight);
-        var tuning = EndlessTuning.ForVersion(tuningVersion);
-        var run = new EndlessRun(board, replay.seed, paletteCount, tuning);
+        var settings = EndlessRun.GenerationSettings.ForVersion(tuningVersion);
+        var run = new EndlessRun(board, replay.seed, paletteCount, settings);
 
         float lastSimTime = 0f;
         bool sawTopout = false;

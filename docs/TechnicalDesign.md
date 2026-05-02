@@ -143,19 +143,19 @@ This document is the implementation-facing counterpart to [`GDD.md`](GDD.md).
 ### `EndlessRun` (`sealed class`)
 
 - Pure-C# endless-mode game loop. Owns the entire run lifecycle: sim-time clock, push schedule, garbage meter, commit pipeline, clear handling, score accumulation. Same class drives the live `EndlessModeController` and the future replay verifier — no parallel simulator.
-- Constructed with `(Board, spawnSeed, paletteCount, EndlessTuning)`.
+- Constructed with `(Board, spawnSeed, paletteCount, EndlessRun.GenerationSettings)`.
 - Driving APIs:
   - `Advance(float deltaTime)` — caller pushes time; the run fires any push ticks + commits whose sim-time threshold has been crossed.
   - `HandleTap(float gridX, float gridY) → TapResult` — caller passes a grid position; the run rounds to the nearest cell, resolves it against current board state, and returns the result. Verifier compares this to the result on the recorded event.
 - Events: `PendingSpawned`, `PendingCommitted`, `MeterChanged`, `ShortfallChanged`, `ToppedOut`. View subscribes for HUD/render reactions; verifier ignores them.
 - Read state: `ClearCount`, `LongestCombo`, `RunDurationSeconds`, `Board`, `PendingArrows`, `Meter`, `ActiveShortfall`.
-- Determinism contract: identical {board, spawnSeed, paletteCount, tuning} + identical {Advance(dt), HandleTap(grid)} sequence produces identical {ClearCount, LongestCombo, RunDurationSeconds, meter trajectory}. Push-tick scheduler uses canonical `_lastPushSimTime + interval` thresholds (not delta-accumulation) so frame jitter on the client doesn't desync the verifier.
+- Determinism contract: identical {board, spawnSeed, paletteCount, settings} + identical {Advance(dt), HandleTap(grid)} sequence produces identical {ClearCount, LongestCombo, RunDurationSeconds, meter trajectory}. Push-tick scheduler uses canonical `_lastPushSimTime + interval` thresholds (not delta-accumulation) so frame jitter on the client doesn't desync the verifier.
 
-### `EndlessTuning` (`readonly struct`)
+### `EndlessRun.GenerationSettings` (nested `readonly struct`)
 
-- Versioned bag of every endless game-loop constant in one place: push interval, combo size, board-area scaling, occupancy targets, etc.
-- `EndlessTuning.V1` is the current shipped tuning. `ForVersion(int)` looks up a historical version. `CurrentVersion` is what new replays record.
-- Bump the version (and add a new static field) when changing tuning in a way that affects replay verification — old replays then verify under their recorded tuning instead of breaking.
+- Versioned bag of every endless garbage-generation constant in one place: push interval, combo size, board-area scaling, occupancy targets, etc.
+- `EndlessRun.GenerationSettings.V1` is the current shipped settings. `ForVersion(int)` looks up a historical version. `CurrentVersion` is what new replays record.
+- Bump the version (and add a new static field) when changing values in a way that affects replay verification — old replays then verify under their recorded version instead of breaking.
 
 ### `LeaderboardEntry` (`sealed class`)
 

@@ -41,16 +41,16 @@ public readonly struct EndlessMeterEntry
 /// </list>
 ///
 /// <para>Determinism contract: identical {board, spawnSeed, paletteCount,
-/// tuning} + identical sequence of {Advance(dt), HandleTap(cell)} calls
+/// settings} + identical sequence of {Advance(dt), HandleTap(cell)} calls
 /// produces identical {ClearCount, LongestCombo, RunDurationSeconds} and
 /// the same internal meter / shortfall trajectory. The push-tick scheduler
 /// uses canonical sim-time thresholds (<see cref="_lastPushSimTime"/> + interval),
 /// not delta-accumulation, so frame jitter on the client doesn't desync
 /// the verifier.</para>
 /// </summary>
-public sealed class EndlessRun
+public sealed partial class EndlessRun
 {
-    private readonly EndlessTuning _tuning;
+    private readonly GenerationSettings _settings;
     private readonly int _paletteCount;
     private readonly EndlessBoardSession _board;
     private readonly PortableRandom _colorRng;
@@ -113,13 +113,13 @@ public sealed class EndlessRun
 
     // ---- Construction -----------------------------------------------------
 
-    public EndlessRun(Board board, int spawnSeed, int paletteCount, EndlessTuning tuning)
+    public EndlessRun(Board board, int spawnSeed, int paletteCount, GenerationSettings settings)
     {
         if (board == null)
             throw new ArgumentNullException(nameof(board));
-        _tuning = tuning;
+        _settings = settings;
         _paletteCount = paletteCount;
-        _board = new EndlessBoardSession(board, tuning.EndlessMaxArrowLength, spawnSeed);
+        _board = new EndlessBoardSession(board, settings.EndlessMaxArrowLength, spawnSeed);
 
         // Color-pick RNG, seeded independently from the spawn RNG so adding
         // / removing color picks doesn't perturb spawn outcomes.
@@ -158,7 +158,7 @@ public sealed class EndlessRun
         if (
             _currentCombo > 0
             && _lastClearTime > 0f
-            && _simTime - _lastClearTime > _tuning.ComboTimerSeconds
+            && _simTime - _lastClearTime > _settings.ComboTimerSeconds
         )
             _currentCombo = 0;
 
@@ -302,11 +302,11 @@ public sealed class EndlessRun
     private bool TrySpawnOnePending(float commitAt, out int weight)
     {
         weight = 0;
-        var pending = _board.TrySpawnPending(commitAt, _tuning.SpawnCandidates, ScoreCandidate);
+        var pending = _board.TrySpawnPending(commitAt, _settings.SpawnCandidates, ScoreCandidate);
         if (pending == null)
             return false;
 
-        weight = _tuning.WeightPerArrow + pending.PerpForwardDeps * _tuning.WeightPerPerpDep;
+        weight = _settings.WeightPerArrow + pending.PerpForwardDeps * _settings.WeightPerPerpDep;
         if (weight < 1)
             weight = 1;
 
@@ -316,10 +316,10 @@ public sealed class EndlessRun
 
     private int ScoreCandidate(int cellCount, int perpDeps)
     {
-        int lenDiff = cellCount - _tuning.ScoreIdealLength;
+        int lenDiff = cellCount - _settings.ScoreIdealLength;
         if (lenDiff < 0)
             lenDiff = -lenDiff;
-        return perpDeps * _tuning.ScorePerpDepBonus - lenDiff * _tuning.ScoreLengthPenalty;
+        return perpDeps * _settings.ScorePerpDepBonus - lenDiff * _settings.ScoreLengthPenalty;
     }
 
     private EndlessMeterEntry NewComboEntry()
@@ -346,22 +346,22 @@ public sealed class EndlessRun
         int boardCells = Board.Width * Board.Height;
         float occupancy = OccupancyRatio();
         float adaptive = 0f;
-        if (occupancy < _tuning.TargetOccupancy && _tuning.TargetOccupancy > 0f)
+        if (occupancy < _settings.TargetOccupancy && _settings.TargetOccupancy > 0f)
         {
-            float t = occupancy / _tuning.TargetOccupancy;
+            float t = occupancy / _settings.TargetOccupancy;
             // System.Math.Cos returns double; cast to float. Matches
             // UnityEngine.Mathf.Cos which is also float (and itself wraps Math.Cos).
             adaptive =
                 (float)Math.Cos(t * Math.PI * 0.5)
-                * _tuning.OccupancyAdaptivePctOfBoard
+                * _settings.OccupancyAdaptivePctOfBoard
                 * boardCells;
         }
         int size = (int)
             Math.Round(
-                _tuning.ComboBasePctOfBoard * boardCells + adaptive,
+                _settings.ComboBasePctOfBoard * boardCells + adaptive,
                 MidpointRounding.AwayFromZero
             );
-        int maxSize = Math.Max(1, (int)Math.Ceiling(_tuning.MaxComboPctOfBoard * boardCells));
+        int maxSize = Math.Max(1, (int)Math.Ceiling(_settings.MaxComboPctOfBoard * boardCells));
         if (size > maxSize)
             size = maxSize;
         if (size < 1)
@@ -383,7 +383,7 @@ public sealed class EndlessRun
     private int ScaledClearsForFirstTier()
     {
         int boardCells = Board.Width * Board.Height;
-        int scaled = (int)Math.Round(_tuning.ClearsForFirstTierAt100Cells * boardCells / 100.0);
+        int scaled = (int)Math.Round(_settings.ClearsForFirstTierAt100Cells * boardCells / 100.0);
         return Math.Max(1, scaled);
     }
 
@@ -393,22 +393,22 @@ public sealed class EndlessRun
         if (ClearCount < firstTier)
             return 0;
         float ratio = ClearCount / (float)firstTier;
-        return (int)Math.Floor(Math.Pow(ratio, _tuning.DifficultyTierPower));
+        return (int)Math.Floor(Math.Pow(ratio, _settings.DifficultyTierPower));
     }
 
     private float CurrentPushIntervalSeconds()
     {
         float interval =
-            _tuning.PushIntervalAtStartSeconds
-            - ComputeDifficultyTier() * _tuning.PushIntervalStepDownPerTier;
-        return interval < _tuning.PushIntervalMinSeconds
-            ? _tuning.PushIntervalMinSeconds
+            _settings.PushIntervalAtStartSeconds
+            - ComputeDifficultyTier() * _settings.PushIntervalStepDownPerTier;
+        return interval < _settings.PushIntervalMinSeconds
+            ? _settings.PushIntervalMinSeconds
             : interval;
     }
 
     private float CurrentPreviewDurationSeconds()
     {
-        return CurrentPushIntervalSeconds() * _tuning.PreviewDurationFractionOfPush;
+        return CurrentPushIntervalSeconds() * _settings.PreviewDurationFractionOfPush;
     }
 
     private void EndRun()

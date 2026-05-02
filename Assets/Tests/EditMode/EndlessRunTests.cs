@@ -16,7 +16,7 @@ public class EndlessRunTests
     private static EndlessRun MakeRun(int seed = 42, int size = 10, int paletteCount = 6)
     {
         var board = new Board(size, size);
-        return new EndlessRun(board, seed, paletteCount, EndlessTuning.V1);
+        return new EndlessRun(board, seed, paletteCount, EndlessRun.GenerationSettings.V1);
     }
 
     [Test]
